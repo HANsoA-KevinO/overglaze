@@ -198,7 +198,14 @@ __declspec(noinline) void only_valid_now_copies(){
     {auto fx=std::make_unique<Fixture>();auto& f=*fx;fresh(f);f.emit(volatile_call(f,true,true));f.bindings.present_boundary();
      need(f.run(f.eval()).rejection==Rejection::resource,"Pinned profile: a Present still ends a copied legacy tag's association");
      // The pinned profile counts it, copies apart.
-     need(f.bindings.stats().present_expiries==1&&f.bindings.stats().present_expiries_copies==1,"Pinned profile: the Present that expired a fresh copy is counted");}
+     need(f.bindings.stats().present_expiries==1&&f.bindings.stats().present_expiries_copies==1,"Pinned profile: the Present that met a fresh copy is counted");}
+    // ...but the copies themselves are ours: a Present between the guide tags
+    // and Evaluate (2077 with DLSS-G) ends only the game's own output tag.
+    {auto fx=std::make_unique<Fixture>();auto& f=*fx;fresh(f);f.emit(volatile_call(f,true,true));f.bindings.present_boundary();
+     {auto g=f.global();g.inputs=decode_tags(f.v,f.tags.data(),1);f.emit(g);}
+     const auto r=f.run(f.eval());
+     need(r.ready()&&r.binding.resources[1].native==depth_copy&&r.binding.resources[2].native==motion_copy,
+          "Pinned profile: the copies survive a Present and bind with the re-tagged output");}
     {auto fx=std::make_unique<Fixture>();auto& f=*fx;fresh(f);f.emit(f.global());f.bindings.present_boundary();
      need(f.run(f.eval()).rejection==Rejection::resource&&f.bindings.stats().present_expiries==1&&f.bindings.stats().present_expiries_copies==0,
           "Pinned profile: a Present that expired fresh durable tags is counted, not as a copy");

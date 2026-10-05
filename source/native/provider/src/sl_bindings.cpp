@@ -142,8 +142,15 @@ void Bindings::sync() noexcept {
         if(l!=seen_loss_)clear_cache();
         else {bool fresh=false,copy=false;for(const auto& g:globals_){fresh|=g.fresh;copy|=g.fresh&&g.tag.lab_copy;}
             for(const auto& f:frame_tags_)for(const auto& g:f.resources)fresh|=g.fresh;if(fresh)++present_expiries_;
-            // Pinned: the Present ends them. Counted, copies apart.
-            if(!self_configure_){if(copy)++present_expiries_copies_;expire_resources();}}
+            // Pinned: the Present ends the game's own tags. A Lab copy taken
+            // at the tag call is ours, so no Present ends it: with DLSS-G
+            // (Cyberpunk 2077) the pacing thread presents between the depth/
+            // motion tags and Evaluate, and expiring the copies there skipped
+            // the frame (40 in one session, mostly while adjusting the panel).
+            // Counted, copies apart. Each Evaluate still consumes them.
+            if(!self_configure_){if(copy)++present_expiries_copies_;
+                for(auto& g:globals_)if(!g.tag.lab_copy)g.fresh=false;
+                for(auto& f:frame_tags_)for(auto& g:f.resources)g.fresh=false;}}
         if(pending_call_){
             // A Present ends the validity of GLOBAL tags. It does not end the
             // validity of a tag passed inline with THIS Evaluate and declared

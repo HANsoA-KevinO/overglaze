@@ -40,7 +40,7 @@ class WorkbenchAdapter final:public slboundary::Sink {
     }
     mutable std::atomic<std::uint64_t> lock_waits_{0};
     std::atomic<bool> stopped_{false},multiple_chains_{false};
-    std::atomic<std::uint64_t> chain_{0},previous_chain_{0},presents_since_switch_{0},presents_{0},epoch_{0},lost_{0};
+    std::atomic<std::uint64_t> chain_{0},previous_chain_{0},presents_since_switch_{0},presents_{0},epoch_{0},hard_epoch_{0},lost_{0};
     std::array<std::atomic<std::uint64_t>,4> calls_{};
     rr::Watch* options_=nullptr; // Set before attaching; process-pinned owner.
     rr::Watch* sr_options_=nullptr; // SR setter watch; only when SR is a target
@@ -183,8 +183,8 @@ public:
     // thread's open ePresentStart decides the frame the Present is declared for
     // (slboundary::Bindings::present_boundary_of_frame).
     void present(std::uint64_t swapchain) noexcept;
-    void invalidate() noexcept {++epoch_;bindings_.hard_boundary();}
-    void stop() noexcept {stopped_=true;copies_.stop();++epoch_;bindings_.hard_boundary();}
+    void invalidate() noexcept {++epoch_;++hard_epoch_;bindings_.hard_boundary();}
+    void stop() noexcept {stopped_=true;copies_.stop();++epoch_;++hard_epoch_;bindings_.hard_boundary();}
     // Host worker, every poll, both tracks: whether the NR runtime (or an armed
     // research capture) would use an admitted frame now. Only then are
     // eOnlyValidNow input tags copied; otherwise they stay refused by name.

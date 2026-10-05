@@ -202,7 +202,10 @@ void WorkbenchAdapter::returned(const slboundary::Call& c) noexcept {
     // tag record above keep seeing what the game itself passed.
     std::optional<slboundary::Call> copied;
     const bool substituted=inspect_resources_&&c.api==slboundary::Api::tags&&copies_.tag_returned(c,bindings_,native_interface_.load(),copied);
-    const auto before=epoch_.load();const auto r=bindings_.returned(substituted?*copied:c);
+    // epoch_ (every unspared Present) only reports whether the published
+    // candidate is current; a call in flight is ended by a hard boundary
+    // alone (invalidate, stop), as in Bindings::sync.
+    const auto before=epoch_.load(),before_hard=hard_epoch_.load();const auto r=bindings_.returned(substituted?*copied:c);
     if(c.api==slboundary::Api::tags)note_tag_call(c);
     if(c.api==slboundary::Api::evaluate && c.feature==sl::kFeatureDLSS)note_upscaler_call(c);
     if(c.api!=slboundary::Api::evaluate || !bindings_.target(c.feature))return;
@@ -242,7 +245,7 @@ void WorkbenchAdapter::returned(const slboundary::Call& c) noexcept {
         if(v.options.valid() && (!pending_options_watch_ || !pending_options_watch_->unchanged(v.options)))v.options.issue=rr::Issue::changed;}
     if(pending_options_call_==c.id)pending_options_call_=0;
     std::uint32_t adapter_invalidations=0;
-    if(before!=epoch_.load())adapter_invalidations|=slboundary::invalidation_adapter_epoch;
+    if(before_hard!=hard_epoch_.load())adapter_invalidations|=slboundary::invalidation_adapter_epoch;
     if(chains_ambiguous())adapter_invalidations|=slboundary::invalidation_multiple_swapchains;
     if(!coverage_complete)adapter_invalidations|=slboundary::invalidation_adapter_coverage;
     v.invalidations=r.invalidations|adapter_invalidations;v.presents_during_call=r.presents_during_call;
@@ -265,7 +268,7 @@ void WorkbenchAdapter::returned(const slboundary::Call& c) noexcept {
         // Self-configuring, missing constants are one skipped frame, not the
         // rebuild-and-stay-OFF bypass: the next frame usually has them.
         if(v.reason==slboundary::Rejection::constants&&r.rejection==v.reason&&coverage_complete&&!self_configured_&&
-           before==epoch_.load()&&!multiple_chains_&&!c.parent&&!conflicting(c)&&c.result==sl::Result::eOk)
+           before_hard==hard_epoch_.load()&&!multiple_chains_&&!c.parent&&!conflicting(c)&&c.result==sl::Result::eOk)
             why.disposition=RejectedDisposition::constants_missing_before_nr;
         // Nothing of ours was recorded for this call, so whatever the cause
         // (concurrent SL call, token/tag cache cleared, lost coverage, a failed
@@ -488,7 +491,7 @@ json WorkbenchAdapter::snapshot() {
             // Only once a game declared something OnlyValidNow: the fixed bound is shared.
             if(st.copies_bound[1]||st.copies_bound[2])out["copies_bound"]={{"depth",st.copies_bound[1]},{"motion",st.copies_bound[2]}};
             if(!last_volatile.is_null())out["last_only_valid_now_refusal"]=last_volatile;
-            if(st.present_expiries_copies)out["present_expiries_of_lab_copies"]=st.present_expiries_copies;
+            if(st.present_expiries_copies)out["present_spared_lab_copies"]=st.present_expiries_copies;
             // The game's own frame for each Present (latency markers), always shown
             // once it said anything: a spared Present would otherwise skip a frame.
             out["present_expiries_spared_previous_frame"]=st.present_expiries_spared_previous_frame;

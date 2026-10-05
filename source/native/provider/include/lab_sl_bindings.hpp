@@ -112,8 +112,8 @@ struct BindingStats {
     std::array<std::uint64_t,5> overlap_with{};// token, constants, tags, evaluate, unknown
     // present_expiries: pinned profile, Presents that expired fresh tags;
     // self-configuring, Presents that arrived while tags were fresh (tolerated).
-    // present_expiries_copies: of those, Presents that expired a fresh Lab copy
-    // (pinned only; self-configuring a Present ends no tag).
+    // present_expiries_copies: of those, Presents that met a fresh Lab copy and
+    // left it fresh (pinned only; a copy is ours, no Present ends it).
     std::uint64_t benign_token_overlaps=0,concurrency_clears=0,present_expiries=0,present_expiries_copies=0,global_tag_calls=0,frame_tag_calls=0;
     std::uint32_t resource_roles=0,resource_causes=0;
     // Tag calls discarded whole: setter failed, real overlap, a call-level
