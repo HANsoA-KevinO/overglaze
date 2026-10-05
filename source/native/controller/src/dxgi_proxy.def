@@ -1,0 +1,29 @@
+; SPDX-FileCopyrightText: 2026 HANsoA-KevinO
+; SPDX-License-Identifier: MIT
+; The root proxy's export table: every DXGI entry the system copy has, at the
+; same ordinals, plus two Lab entries the host reads. No host entry point is
+; exported here -- the host is a separate DLL in the payload subdirectory.
+LIBRARY dxgi
+EXPORTS
+    ApplyCompatResolutionQuirking=LabForward0 @1
+    CompatString=LabForward1 @2
+    CompatValue=LabForward2 @3
+    CreateDXGIFactory=LabCreateDXGIFactory @10
+    CreateDXGIFactory1=LabCreateDXGIFactory1 @11
+    CreateDXGIFactory2=LabCreateDXGIFactory2 @12
+    DXGID3D10CreateDevice=LabForward6 @13
+    DXGID3D10CreateLayeredDevice=LabForward7 @14
+    DXGID3D10GetLayeredDeviceSize=LabForward8 @15
+    DXGID3D10RegisterLayers=LabForward9 @16
+    DXGIDeclareAdapterRemovalSupport=LabForward10 @17
+    DXGIDisableVBlankVirtualization=LabForward11 @18
+    DXGIDumpJournal=LabForward12 @4
+    DXGIGetDebugInterface1=LabForward13 @19
+    DXGIReportAdapterConfiguration=LabForward14 @20
+    PIXBeginCapture=LabForward15 @5
+    PIXEndCapture=LabForward16 @6
+    PIXGetCaptureState=LabForward17 @7
+    SetAppCompatStringPointer=LabSetAppCompatStringPointer @8
+    UpdateHMDEmulationStatus=LabForward19 @9
+    LabDXGIProxyMarker
+    LabDXGIProxyStatus

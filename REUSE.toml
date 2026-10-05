@@ -1,0 +1,36 @@
+version = 1
+
+# Every code file carries its own SPDX header. These annotations cover the files
+# that cannot: documentation, data and licence texts.
+
+[[annotations]]
+path = [
+    "README.md", "README.zh-CN.md", "CHANGELOG.md", "CONTRIBUTING.md", "POLICY.md",
+    "SECURITY.md", "SUPPORTED_GAMES.md", "docs/**", ".gitignore", "REUSE.toml",
+    "source/native/OWNERSHIP.json", "source/native/runtime/host/SOURCE.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 HANsoA-KevinO"
+SPDX-License-Identifier = "MIT"
+
+# THIRD_PARTY_NOTICES.md reproduces the notices of the components it lists, so it
+# carries their licences as well as the project's own.
+[[annotations]]
+path = "THIRD_PARTY_NOTICES.md"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 HANsoA-KevinO"
+SPDX-License-Identifier = "MIT AND BSD-2-Clause AND BSD-3-Clause AND Apache-2.0"
+
+# The ReShade licence text that covers runtime/host/binding_state.hpp.
+[[annotations]]
+path = "source/native/runtime/host/LICENSE-ReShade.txt"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2014 Patrick Mours"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+# The MIT notice of the ACES fit adapted in viewer/include/lab_aces_view.hpp.
+[[annotations]]
+path = "source/third_party/BakingLab-LICENSE.txt"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2016 MJP"
+SPDX-License-Identifier = "MIT"

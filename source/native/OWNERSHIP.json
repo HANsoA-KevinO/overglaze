@@ -1,0 +1,907 @@
+{
+ "schema": "overglaze-track-ownership-v1",
+ "tracks": {
+  "core": {
+   "owner": "shared",
+   "allowed": [
+    "core"
+   ]
+  },
+  "runtime": {
+   "owner": "shared",
+   "allowed": [
+    "core",
+    "runtime"
+   ]
+  },
+  "provider": {
+   "owner": "shared",
+   "allowed": [
+    "core",
+    "runtime",
+    "provider"
+   ]
+  },
+  "viewer": {
+   "owner": "controller",
+   "allowed": [
+    "core",
+    "viewer"
+   ]
+  },
+  "controller": {
+   "owner": "controller",
+   "allowed": [
+    "core",
+    "runtime",
+    "provider",
+    "viewer",
+    "controller"
+   ]
+  }
+ },
+ "rules": [
+  "A file's track is its directory; every file under core, runtime, provider, viewer and controller has an entry here.",
+  "A translation unit may #include only headers of tracks listed in allowed[its track]; pending_seams are the only exceptions, each with its closing condition, and each must still be a real violation.",
+  "No target defined in core/runtime/provider/viewer/controller may link a library or list a source outside its allowed tracks; controller/viewer targets never reach controller_ban.",
+  "core, runtime and provider (owner=shared) are linked by every host; change them only with every configured build directory green."
+ ],
+ "controller_ban": {
+  "libraries": [
+   "lab_observer",
+   "lab_research_provider",
+   "lab_storage",
+   "lab_exception_watch",
+   "lab_access_probe",
+   "lab_post_inspect",
+   "lab_post_resources",
+   "lab_frame_capture",
+   "lab_display_pair",
+   "lab_dx12_host",
+   "lab_feature_trace",
+   "lab_object_identity",
+   "lab_descriptor_catalog",
+   "lab_shader_tools",
+   "lab_overlay_research",
+   "lab_nr_scene",
+   "lab_nr_surface_route",
+   "lab_nr_kernel_route",
+   "lab_command_slots_objects",
+   "lab_tag_mirror",
+   "lab_chain_capture",
+   "lab_chain_export"
+  ],
+  "sources": [
+   "exception_watch.cpp",
+   "exception_journal.cpp",
+   "queue_probe.cpp",
+   "command_probe.cpp",
+   "present_probe.cpp",
+   "resource_creation.cpp",
+   "post_inspect.cpp",
+   "access_probe.cpp",
+   "frame_capture.cpp",
+   "display_pair.cpp",
+   "rr_inner.cpp",
+   "sl_restore.cpp",
+   "standalone_host.cpp",
+   "tag_mirror.cpp",
+   "tag_capture.cpp",
+   "present_series.cpp",
+   "chain_capture.cpp",
+   "chain_manifest.cpp",
+   "chain_export.cpp",
+   "chain_export_main.cpp"
+  ],
+  "objects": []
+ },
+ "noicf_targets": [
+  "lab_controller_harness",
+  "lab_dual_tag_hook_tests",
+  "lab_frame_tag_hook_tests",
+  "lab_hook_bank_tests",
+  "lab_latency_markers_tests",
+  "lab_ngx_admission_tests",
+  "lab_public_admission_tests",
+  "lab_sl_boundary_tests",
+  "lab_sl_concurrency_tests",
+  "lab_volatile_copy_tests",
+  "lab_workbench_adapter_tests"
+ ],
+ "pending_seams": [],
+ "parked_targets": {},
+ "publish": {
+  "controller": {
+   "controller/dxgi.dll": "plugin/dxgi.dll",
+   "controller/overglaze_nvngx.dll": "plugin/overglaze_nvngx.dll",
+   "overglaze_viewer.exe": "overglaze_viewer.exe",
+   "overglazectl.exe": "overglazectl.exe",
+   "overglaze_games.exe": "overglaze_games.exe",
+   "overglaze_export_sdr.exe": "tools/overglaze_export_sdr.exe",
+   "overglaze_capture_stats.exe": "tools/overglaze_capture_stats.exe",
+   "overglaze_check_view_reconstruction.exe": "tools/overglaze_check_view_reconstruction.exe",
+   "lab_installation_tests.exe": "tools/overglaze_install_check.exe"
+  }
+ },
+ "python_tests": {
+  "controller": [
+   "test_build_launcher.py",
+   "test_controller_link_closure.py",
+   "test_game_preflight.py",
+   "test_game_reason_codes.py",
+   "test_live_abi_header.py",
+   "test_out_of_game_paths.py",
+   "test_track_boundaries.py"
+  ]
+ },
+ "files": {
+  "core/src/control.cpp": {
+   "track": "core"
+  },
+  "core/src/installation.cpp": {
+   "track": "core"
+  },
+  "core/src/manual_capture.cpp": {
+   "track": "core"
+  },
+  "core/src/nr_preparation.cpp": {
+   "track": "core"
+  },
+  "core/src/pipe.cpp": {
+   "track": "core"
+  },
+  "core/src/platform.cpp": {
+   "track": "core"
+  },
+  "core/src/startup_failure.cpp": {
+   "track": "core"
+  },
+  "core/include/lab_binding_boundary.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_binding_boundary_json.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_binding_probe.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_control.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_device_identity.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_event_pool.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_fixture_origin.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_game_profile.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_hook_bank.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_installation.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_identity.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_local_path.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_model_versions.hpp": {
+   "track": "core"
+  },
+  "core/src/local_path.cpp": {
+   "track": "core"
+  },
+  "core/include/lab_manual_capture.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_nr_mode.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_nr_panel.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_nr_settings.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_pipe.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_platform.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_preconvert_reference.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_rejected_call.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_serial_access.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_startup_failure.hpp": {
+   "track": "core"
+  },
+  "core/include/lab_windows_path.hpp": {
+   "track": "core"
+  },
+  "core/tests/access_probe_control_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/binding_boundary_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/binding_probe_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/capture_delivery_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/core_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/display_control_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/event_pool_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/fixture_origin_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/hook_bank_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/installation_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/manual_capture_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/nr_lifecycle_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/nr_mode_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/nr_panel_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/nr_preparation_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/nr_settings_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/pair_control_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/pipe_transport_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/post_inspect_control_tests.cpp": {
+   "track": "core"
+  },
+  "core/tests/preconvert_reference_tests.cpp": {
+   "track": "core"
+  },
+  "runtime/src/color_codec.cpp": {
+   "track": "runtime"
+  },
+  "runtime/src/color_handoff.cpp": {
+   "track": "runtime"
+  },
+  "runtime/src/depth_codec.cpp": {
+   "track": "runtime"
+  },
+  "runtime/src/motion_codec.cpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_motion_codec.hpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/region_crop_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/src/exposure_meter.cpp": {
+   "track": "runtime"
+  },
+  "runtime/src/insertion_bindings.cpp": {
+   "track": "runtime"
+  },
+  "runtime/src/insertion_slots.cpp": {
+   "track": "runtime"
+  },
+  "runtime/src/live_submission.cpp": {
+   "track": "runtime"
+  },
+  "runtime/src/native_resume.cpp": {
+   "track": "runtime"
+  },
+  "runtime/src/prepost_ratio_codec.cpp": {
+   "track": "runtime"
+  },
+  "runtime/src/nr_live.cpp": {
+   "track": "runtime"
+  },
+  "runtime/src/resume_slots.cpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_live_frame_prescreen.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_color_codec.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_color_handoff.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_color_shader.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_completion_timeline.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_compute_bindings.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_depth_codec.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_depth_projection.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_exposure_control.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_exposure_meter.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_feature_api.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_frame_retirement.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_hdr_fixture.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_insertion_bindings.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_insertion_slots.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_live_submission.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_native_resume.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_prepost_ratio_codec.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_prepost_ratio_shader.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_nr_color_profile.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_nr_color_profile_report.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_nr_frame.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_nr_live_api.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_nr_pipeline.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_nr_session.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_resume_slots.hpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/binding_heap_state_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/completion_timeline_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/compute_bindings_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/embedded_control_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/exposure_control_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/exposure_meter_harness.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/hdr_fixture_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/live_submission_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/native_resume_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/prepost_guard_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/nr_color_profile_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/nr_compute_only_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/nr_session_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/host/binding_state.hpp": {
+   "track": "runtime"
+  },
+  "runtime/host/indirect_layout.hpp": {
+   "track": "runtime"
+  },
+  "runtime/host/LICENSE-ReShade.txt": {
+   "track": "runtime"
+  },
+  "runtime/host/SOURCE.md": {
+   "track": "runtime"
+  },
+  "provider/src/rr_options.cpp": {
+   "track": "provider"
+  },
+  "provider/src/sl_bindings.cpp": {
+   "track": "provider"
+  },
+  "provider/src/sl_boundary.cpp": {
+   "track": "provider"
+  },
+  "provider/src/sl_resource_lease.cpp": {
+   "track": "provider"
+  },
+  "provider/src/streamline.cpp": {
+   "track": "provider"
+  },
+  "provider/src/workbench_adapter.cpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_rr_options.hpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_sl_bindings.hpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_sl_boundary.hpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_sl_guide_contract.hpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_sl_nr_route.hpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_sl_resource_lease.hpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_streamline.hpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_workbench_adapter.hpp": {
+   "track": "provider"
+  },
+  "provider/tests/depth_projection_tests.cpp": {
+   "track": "provider"
+  },
+  "provider/tests/dual_tag_hook_tests.cpp": {
+   "track": "provider"
+  },
+  "provider/tests/frame_tag_hook_tests.cpp": {
+   "track": "provider"
+  },
+  "provider/tests/public_admission_tests.cpp": {
+   "track": "provider"
+  },
+  "provider/tests/rr_options_tests.cpp": {
+   "track": "provider"
+  },
+  "provider/tests/sl_bindings_tests.cpp": {
+   "track": "provider"
+  },
+  "provider/tests/sl_boundary_tests.cpp": {
+   "track": "provider"
+  },
+  "provider/tests/sl_concurrency_tests.cpp": {
+   "track": "provider"
+  },
+  "provider/tests/sl_resource_lease_tests.cpp": {
+   "track": "provider"
+  },
+  "provider/tests/sl_route_tests.cpp": {
+   "track": "provider"
+  },
+  "provider/tests/workbench_adapter_tests.cpp": {
+   "track": "provider"
+  },
+  "viewer/src/capture_library.cpp": {
+   "track": "viewer"
+  },
+  "viewer/src/capture_stats.cpp": {
+   "track": "viewer"
+  },
+  "viewer/src/check_view_reconstruction.cpp": {
+   "track": "viewer"
+  },
+  "viewer/src/export_sdr.cpp": {
+   "track": "viewer"
+  },
+  "viewer/src/pair_preview.cpp": {
+   "track": "viewer"
+  },
+  "viewer/src/preview_export.cpp": {
+   "track": "viewer"
+  },
+  "viewer/src/ui_preferences.cpp": {
+   "track": "viewer"
+  },
+  "viewer/include/lab_aces_view.hpp": {
+   "track": "viewer"
+  },
+  "viewer/include/lab_capture_library.hpp": {
+   "track": "viewer"
+  },
+  "viewer/include/lab_color_contract.hpp": {
+   "track": "viewer"
+  },
+  "viewer/include/lab_display_selection.hpp": {
+   "track": "viewer"
+  },
+  "viewer/include/lab_display_white.hpp": {
+   "track": "viewer"
+  },
+  "viewer/include/lab_pair_preview.hpp": {
+   "track": "viewer"
+  },
+  "viewer/include/lab_png_color_tags.hpp": {
+   "track": "viewer"
+  },
+  "viewer/include/lab_preview_export.hpp": {
+   "track": "viewer"
+  },
+  "viewer/include/lab_ui_preferences.hpp": {
+   "track": "viewer"
+  },
+  "viewer/include/lab_viewer_color.hpp": {
+   "track": "viewer"
+  },
+  "viewer/include/lab_viewer_shader.hpp": {
+   "track": "viewer"
+  },
+  "viewer/tests/capture_library_tests.cpp": {
+   "track": "viewer"
+  },
+  "viewer/tests/color_contract_tests.cpp": {
+   "track": "viewer"
+  },
+  "viewer/tests/ui_preferences_tests.cpp": {
+   "track": "viewer"
+  },
+  "controller/src/console.cpp": {
+   "track": "controller"
+  },
+  "controller/src/console_ui.cpp": {
+   "track": "controller"
+  },
+  "controller/src/ctl.cpp": {
+   "track": "controller"
+  },
+  "controller/src/dxgi_forward.asm": {
+   "track": "controller"
+  },
+  "controller/src/game_manager.cpp": {
+   "track": "controller"
+  },
+  "controller/src/game_manager_ui.cpp": {
+   "track": "controller"
+  },
+  "controller/src/games_cli.cpp": {
+   "track": "controller"
+  },
+  "controller/src/host.cpp": {
+   "track": "controller"
+  },
+  "controller/src/input_block.cpp": {
+   "track": "controller"
+  },
+  "controller/src/overlay.cpp": {
+   "track": "controller"
+  },
+  "controller/src/viewer.cpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_console_ui.hpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_game_manager.hpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_game_manager_ui.hpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_input_block.hpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_launch_arguments.hpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_overlay.hpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_overlay_shader.hpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_standalone.hpp": {
+   "track": "controller"
+  },
+  "controller/tests/display_shader_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/dxgi_forward_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/game_manager_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/input_block_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/overlay_harness.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/startup_tests.cpp": {
+   "track": "controller"
+  },
+  "runtime/src/indirect_observer.cpp": {
+   "track": "runtime"
+  },
+  "runtime/src/indirect_observer_slots.cpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_indirect_observer.hpp": {
+   "track": "runtime"
+  },
+  "core/tests/control_publish_bounds_tests.cpp": {
+   "track": "core"
+  },
+  "runtime/include/lab_nr_parameters.hpp": {
+   "track": "runtime"
+  },
+  "runtime/src/nr_live_core.hpp": {
+   "track": "runtime"
+  },
+  "runtime/src/nr_live_extension.hpp": {
+   "track": "runtime"
+  },
+  "runtime/src/nr_live_extension_none.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/live_abi_tests.cpp": {
+   "track": "runtime"
+  },
+  "provider/include/lab_sl_admission_sink.hpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_research_observer.hpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_sl_frame_provider.hpp": {
+   "track": "provider"
+  },
+  "provider/src/sl_frame_provider.cpp": {
+   "track": "provider"
+  },
+  "runtime/include/lab_frame_receiver.hpp": {
+   "track": "runtime"
+  },
+  "provider/tests/sl_frame_provider_tests.cpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_sl_host_contract.hpp": {
+   "track": "provider"
+  },
+  "provider/src/sl_host_contract.cpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_workbench_extension.hpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_sl_observer.hpp": {
+   "track": "provider"
+  },
+  "provider/tests/public_export_tests.cpp": {
+   "track": "provider"
+  },
+  "runtime/include/lab_live_status_sink.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_controller_live_sink.hpp": {
+   "track": "runtime"
+  },
+  "runtime/include/lab_live_runtime_client.hpp": {
+   "track": "runtime"
+  },
+  "runtime/src/live_runtime_client.cpp": {
+   "track": "runtime"
+  },
+  "controller/src/controller_host.cpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_controller_fixture.hpp": {
+   "track": "controller"
+  },
+  "controller/tests/controller_harness.cpp": {
+   "track": "controller"
+  },
+  "runtime/tests/live_runtime_client_tests.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/mock_live_bridge.cpp": {
+   "track": "runtime"
+  },
+  "controller/src/late_discovery.cpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_late_discovery.hpp": {
+   "track": "controller"
+  },
+  "controller/src/late_slots.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/late_discovery_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_present_queue_witness.hpp": {
+   "track": "controller"
+  },
+  "controller/src/present_queue_witness.cpp": {
+   "track": "controller"
+  },
+  "controller/src/launcher.cpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_launch_command.hpp": {
+   "track": "controller"
+  },
+  "controller/tests/launch_command_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/proxy_on_insert_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/present_queue_witness_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/src/controller_loader.cpp": {
+   "track": "controller"
+  },
+  "controller/src/attach.cpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_attach.hpp": {
+   "track": "controller"
+  },
+  "controller/src/dxgi_proxy.cpp": {
+   "track": "controller"
+  },
+  "controller/src/dxgi_proxy.def": {
+   "track": "controller"
+  },
+  "controller/src/ngx_observer.cpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_ngx_observer.hpp": {
+   "track": "controller"
+  },
+  "core/include/lab_module_search.hpp": {
+   "track": "core"
+  },
+  "controller/tests/ngx_observer_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_ngx_frame.hpp": {
+   "track": "controller"
+  },
+  "controller/tests/ngx_frame_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/ngx_admission_tests.cpp": {
+   "track": "controller"
+  },
+  "runtime/tests/depth_codec_tests.cpp": {
+   "track": "runtime"
+  },
+  "core/include/lab_package_identity.hpp": {
+   "track": "core"
+  },
+  "core/src/package_identity.cpp": {
+   "track": "core"
+  },
+  "core/tests/package_identity_tests.cpp": {
+   "track": "core"
+  },
+  "provider/include/lab_latency_markers.hpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_latency_marker_types.hpp": {
+   "track": "provider"
+  },
+  "provider/src/latency_markers.cpp": {
+   "track": "provider"
+  },
+  "provider/tests/latency_markers_tests.cpp": {
+   "track": "provider"
+  },
+  "provider/include/lab_sl_volatile_copy.hpp": {
+   "track": "provider"
+  },
+  "provider/src/sl_volatile_copy.cpp": {
+   "track": "provider"
+  },
+  "provider/tests/volatile_copy_tests.cpp": {
+   "track": "provider"
+  },
+  "controller/include/lab_late_panel.hpp": {
+   "track": "controller"
+  },
+  "controller/src/late_panel.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/late_panel_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_root_locator.hpp": {
+   "track": "controller"
+  },
+  "controller/src/root_locator.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/root_locator_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_brand.hpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_game_reasons.hpp": {
+   "track": "controller"
+  },
+  "controller/src/game_reasons.cpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_game_presentation.hpp": {
+   "track": "controller"
+  },
+  "controller/src/game_presentation.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/game_status_tests.cpp": {
+   "track": "controller"
+  },
+  "runtime/tests/color_test_gpu.hpp": {
+   "track": "runtime"
+  }
+ }
+}

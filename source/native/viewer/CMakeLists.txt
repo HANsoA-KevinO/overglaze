@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2026 HANsoA-KevinO
+# SPDX-License-Identifier: MIT
+# viewer: offline capture browsing, display mapping/export tools and the UI
+# preferences store shared with the in-game panel. Allowed dependencies: core, viewer.
+set_property(DIRECTORY PROPERTY LABELS "viewer;controller")
+
+add_library(lab_viewer_includes INTERFACE)
+target_include_directories(lab_viewer_includes INTERFACE include)
+target_link_libraries(lab_viewer_includes INTERFACE lab_core)
+
+add_library(lab_pair_preview STATIC src/pair_preview.cpp)
+target_link_libraries(lab_pair_preview PUBLIC lab_viewer_includes lab_core)
+add_library(lab_capture_library STATIC src/capture_library.cpp)
+target_link_libraries(lab_capture_library PUBLIC lab_viewer_includes lab_core)
+add_library(lab_preview_export STATIC src/preview_export.cpp)
+target_link_libraries(lab_preview_export PUBLIC lab_capture_library windowscodecs ole32)
+add_library(lab_ui_preferences STATIC src/ui_preferences.cpp)
+target_link_libraries(lab_ui_preferences PUBLIC lab_viewer_includes lab_core)
+
+add_executable(overglaze_export_sdr src/export_sdr.cpp)
+target_link_libraries(overglaze_export_sdr PRIVATE lab_preview_export)
+add_executable(overglaze_capture_stats src/capture_stats.cpp)
+target_link_libraries(overglaze_capture_stats PRIVATE lab_capture_library)
+add_test(NAME native_capture_numeric_ranges COMMAND overglaze_capture_stats --test)
+add_executable(overglaze_check_view_reconstruction src/check_view_reconstruction.cpp)
+target_link_libraries(overglaze_check_view_reconstruction PRIVATE lab_capture_library)
+
+add_executable(lab_capture_library_tests tests/capture_library_tests.cpp)
+target_link_libraries(lab_capture_library_tests PRIVATE lab_capture_library lab_preview_export)
+add_test(NAME native_capture_library COMMAND lab_capture_library_tests)
+add_executable(lab_color_contract_tests tests/color_contract_tests.cpp)
+target_link_libraries(lab_color_contract_tests PRIVATE lab_capture_library lab_preview_export)
+add_test(NAME native_color_contract COMMAND lab_color_contract_tests)
+add_executable(lab_ui_preferences_tests tests/ui_preferences_tests.cpp)
+target_link_libraries(lab_ui_preferences_tests PRIVATE lab_ui_preferences)
+add_test(NAME native_ui_preferences COMMAND lab_ui_preferences_tests)

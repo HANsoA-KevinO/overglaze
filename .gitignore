@@ -1,0 +1,16 @@
+# The private export tool's marker (it recognises its own output by it).
+/.overglaze-export.json
+# Build output and local data never belong in the repository.
+/build/
+/build-*/
+/deps/
+/data/
+/app/
+# Machine-local defaults for Enter-Environment.ps1.
+/source/powershell/Enter-Environment.local.ps1
+# NVIDIA and game binaries are never committed (see POLICY.md).
+*.dll
+*.exe
+*.pdb
+__pycache__/
+*.pyc
