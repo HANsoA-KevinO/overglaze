@@ -49,7 +49,7 @@ if ($ToolchainRoot) {
 }
 
 # Import the x64 MSVC/Windows SDK environment into this PowerShell process.
-$vsCommand = "`"$vsDevCmd`" -no_logo -arch=x64 -host_arch=x64 >nul && set"
+$vsCommand = "`"$vsDevCmd`" -no_logo -arch=x64 -host_arch=x64 >nul 2>nul && set"   # VsDevCmd notes on stderr (e.g. no vswhere beside a standalone toolchain) are not errors
 $importedNames = [System.Collections.Generic.HashSet[string]]::new(
     [System.StringComparer]::OrdinalIgnoreCase
 )
