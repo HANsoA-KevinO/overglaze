@@ -15,7 +15,8 @@ public:
     std::size_t count()const{return rows_.size();}
     std::string error()const{return error_;}
 private:
-    struct Result {std::vector<games::Status> rows;games::Discovery found;bool discovering=false;std::string message;
+    friend struct GameManagerPageTestAccess;
+    struct Result {std::vector<games::Status> rows;games::Discovery found;bool discovering=false;std::string message,selection;
         games::StorageUsage storage;bool has_storage=false;};
     // The running operation's latest stage, written by the worker's progress
     // callback and read by draw().
@@ -24,9 +25,10 @@ private:
     std::shared_ptr<Live> live_=std::make_shared<Live>();
     std::vector<games::Status> rows_;games::Discovery found_;
     games::StorageUsage storage_; // read-only usage count, shown under 安装细节
-    std::string selected_,error_,notice_;char path_[4096]{};
-    bool show_add_=false,approved_=false;int candidate_=0;
-    std::string pending_,operation_;
+    std::string selected_,error_,notice_;char path_[4096]{},search_[256]{};
+    bool show_add_=false,approved_=false;int candidate_=0,filter_=0;
+    // Keep the confirmation target stable even if the library selection changes.
+    std::string pending_,pending_title_,pending_path_,operation_;
     void mark(const char*);
     void refresh(bool import_known=false);
     void act(const std::string& action,const std::string& id);

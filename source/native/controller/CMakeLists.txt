@@ -75,8 +75,26 @@ add_executable(lab_game_manager_tests tests/game_manager_tests.cpp)
 target_link_libraries(lab_game_manager_tests PRIVATE lab_game_manager)
 add_test(NAME native_game_manager COMMAND lab_game_manager_tests)
 set_tests_properties(native_game_manager PROPERTIES TIMEOUT 45)
+add_executable(lab_game_manager_ui_tests tests/game_manager_ui_tests.cpp src/game_manager_ui.cpp)
+target_link_libraries(lab_game_manager_ui_tests PRIVATE lab_game_manager lab_imgui shell32)
+add_test(NAME native_game_manager_ui COMMAND lab_game_manager_ui_tests)
+set_tests_properties(native_game_manager_ui PROPERTIES TIMEOUT 45)
 
 add_executable(overglaze_viewer WIN32 src/viewer.cpp src/game_manager_ui.cpp)
+if(LAB_BUILD_PYTHON)
+  set(OVERGLAZE_ICON_PATH "${CMAKE_CURRENT_BINARY_DIR}/overglaze.ico")
+  set(OVERGLAZE_RESOURCE_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/resources/resource.h")
+  add_custom_command(OUTPUT "${OVERGLAZE_ICON_PATH}"
+    COMMAND "${LAB_BUILD_PYTHON}" -B "${PROJECT_SOURCE_DIR}/python/generate_brand_icon.py"
+      --source "${PROJECT_SOURCE_DIR}/../assets/branding/overglaze.svg" --output "${OVERGLAZE_ICON_PATH}"
+    DEPENDS "${PROJECT_SOURCE_DIR}/python/generate_brand_icon.py" "${PROJECT_SOURCE_DIR}/../assets/branding/overglaze.svg"
+    VERBATIM)
+  configure_file(resources/application.rc.in "${CMAKE_CURRENT_BINARY_DIR}/application.rc" @ONLY)
+  set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/application.rc" PROPERTIES OBJECT_DEPENDS "${OVERGLAZE_ICON_PATH}")
+  target_sources(overglaze_viewer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/application.rc" "${OVERGLAZE_ICON_PATH}")
+else()
+  message(FATAL_ERROR "Python is required to generate the Overglaze application icon")
+endif()
 target_link_libraries(overglaze_viewer PRIVATE lab_controller_includes lab_game_manager lab_capture_library lab_preview_export lab_ui_preferences lab_imgui d3dcompiler dwmapi shell32)
 add_test(NAME native_capture_viewer_smoke COMMAND overglaze_viewer --smoke-test)
 set_tests_properties(native_capture_viewer_smoke PROPERTIES TIMEOUT 40)

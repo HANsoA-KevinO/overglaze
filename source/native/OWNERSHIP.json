@@ -885,6 +885,9 @@
   "controller/include/lab_brand.hpp": {
    "track": "controller"
   },
+  "controller/include/lab_product_ui.hpp": {
+   "track": "controller"
+  },
   "controller/include/lab_game_reasons.hpp": {
    "track": "controller"
   },
@@ -898,6 +901,9 @@
    "track": "controller"
   },
   "controller/tests/game_status_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/game_manager_ui_tests.cpp": {
    "track": "controller"
   },
   "runtime/tests/color_test_gpu.hpp": {

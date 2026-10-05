@@ -10,6 +10,7 @@
 #include "lab_display_white.hpp"
 #include "lab_game_manager_ui.hpp"
 #include "lab_brand.hpp"
+#include "lab_product_ui.hpp"
 #include "lab_root_locator.hpp"
 #include <imgui.h>
 #include <imgui_impl_win32.h>
@@ -128,6 +129,7 @@ struct View {
     char filter[128]{};std::string error,selected,detail,preference_error;std::uint64_t interactions=0;lab::json controls=lab::json::object();
     bool test_folder_dispatch=false,prefer_interface=false,prefer_processing=false;std::filesystem::path last_folder;
     bool games_page=false,manager_allowed=true;std::unique_ptr<lab::GameManagerPage> manager;
+    bool about=false;std::string about_error;std::future<lab::games::ModelStatus> model_job;lab::games::ModelStatus model;bool model_checked=false;
     Renderer::Draw ui{&gpu,0,0},a{&gpu,1,1},b{&gpu,1,2},delta{&gpu,2,1};
     lab::ViewerPreferences preferences()const{lab::ViewerPreferences p;p.display=gpu.display;p.processing=gpu.processing_enabled;p.nearest=gpu.pixel_nearest;p.library=library_visible;p.hdr=hdr_preferred;p.view=difference?2u:wipe?1u:0u;p.wipe=wipe_position;return p;}
     void restore(const lab::ViewerPreferences& p){const auto ui_white=gpu.display.ui_white_nits;gpu.display=p.display;gpu.processing_enabled=p.processing;gpu.display.ui_white_nits=ui_white;gpu.pixel_nearest=p.nearest;library_visible=p.library;hdr_preferred=p.hdr;difference=p.view==2;wipe=p.view==1;wipe_position=p.wipe;}
@@ -139,6 +141,7 @@ struct View {
     }catch(const std::exception& e){error=std::string("打开所在文件夹失败：")+e.what();}}
     void open(const std::filesystem::path& file){if(loading.valid())return;error.clear();loading=std::async(std::launch::async,[file]{return std::make_shared<lab::RawCapture>(file);});}
     void poll(){using namespace std::chrono_literals;
+        if(model_job.valid()&&model_job.wait_for(0ms)==std::future_status::ready){try{model=model_job.get();model_checked=true;}catch(const std::exception& e){model={};model.error=e.what();model_checked=true;}}
         if(scanning.valid()&&scanning.wait_for(0ms)==std::future_status::ready){try{catalog=scanning.get();}catch(const std::exception& e){error=e.what();}}
         if(exporting.valid()&&exporting.wait_for(0ms)==std::future_status::ready){try{last_export=exporting.get();}catch(const std::exception& e){error=e.what();}}
         if(loading.valid()&&loading.wait_for(0ms)==std::future_status::ready){try{auto next=loading.get();for(unsigned i=0;i<next->stage_count();++i)need(next->color_contract(i).known(),"颜色解释缺失或未知：不自动套用显示曲线；原始记录仍保留在采集库。");
@@ -214,15 +217,48 @@ struct View {
         // Begin() already emits a window background, so binding a color shader
         // only afterwards misses it. Run before every window draw list instead.
         ImGui::GetBackgroundDrawList()->AddCallback(Renderer::callback,&ui);
-        ImGui::Begin("Capture viewer",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoMove);ImGui::GetWindowDrawList()->AddCallback(Renderer::callback,&ui);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,0);
+        ImGui::Begin("Capture viewer",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoMove);ImGui::PopStyleVar();ImGui::GetWindowDrawList()->AddCallback(Renderer::callback,&ui);
         const float dpi=ImGui::GetStyle().FontScaleDpi;
-        ImGui::TextColored({.463f,.725f,0,1},"%s",lab::brand::kViewerHeader);ImGui::SameLine(225*dpi);
-        if(ImGui::Button(games_page?"游戏管理 · 已选":"游戏管理"))games_page=true;mark("page.games");ImGui::SameLine();
-        if(ImGui::Button(!games_page?"采集浏览 · 已选":"采集浏览"))games_page=false;mark("page.captures");
-        if(games_page){ImGui::Separator();if(manager_allowed){if(!manager)manager=std::make_unique<lab::GameManagerPage>(library_root().parent_path());manager->draw(window,dpi);}else ImGui::TextDisabled("采集回归模式：不读写游戏管理登记。");ImGui::End();return;}
-        ImGui::SameLine(ImGui::GetWindowWidth()-260*dpi);
-        if(ImGui::Button(library_visible?"收起采集库":"展开采集库")){library_visible=!library_visible;++interactions;}mark("library.toggle");ImGui::SameLine();
-        if(ImGui::Button("刷新"))scan();ImGui::Separator();
+        lab::product::wordmark(dpi);ImGui::SameLine(340*dpi);
+        if(lab::product::navigation("游戏库",games_page,{116*dpi,42*dpi}))games_page=true;mark("page.games");ImGui::SameLine(0,6*dpi);
+        if(lab::product::navigation("采集浏览",!games_page,{116*dpi,42*dpi}))games_page=false;mark("page.captures");
+        ImGui::SameLine(ImGui::GetWindowWidth()-154*dpi);
+        if(ImGui::Button("设置与关于",{126*dpi,40*dpi})){about=true;about_error.clear();ImGui::OpenPopup("设置与关于##product");
+            if(!model_job.valid()&&manager_allowed){const auto root=library_root().parent_path();model_job=std::async(std::launch::async,[root]{return lab::games::Manager(root).model_status();});}}
+        mark("app.about");
+        ImGui::SetNextWindowPos({io.DisplaySize.x*.5f,io.DisplaySize.y*.5f},ImGuiCond_Appearing,{.5f,.5f});
+        ImGui::SetNextWindowSize({620*dpi,0},ImGuiCond_Appearing);
+        if(ImGui::BeginPopupModal("设置与关于##product",&about,ImGuiWindowFlags_AlwaysAutoResize)){
+            lab::product::wordmark(dpi);ImGui::Spacing();ImGui::TextDisabled("0.2.0 Preview 1  /  WINDOWS · DX12");ImGui::Spacing();
+            ImGui::TextWrapped("在已渲染的画面之上，再画一层。管理游戏接入，在游戏内调节 NR，在这里查看保存的画面。");
+            ImGui::Spacing();ImGui::SeparatorText("模型与安装");
+            ImGui::TextColored(model_checked&&model.known&&model.error.empty()?lab::product::accent:lab::product::amber,"%s",model_job.valid()?"正在校验本地模型…":model_checked?(!model.error.empty()?"模型校验未通过":model.known?"模型已识别":model.present?"模型版本未识别":"尚未配置模型"):"模型状态尚未检查");
+            ImGui::TextWrapped("模型由你自行准备，放入 app/models/nvngx_dlssnr.dll。程序不包含、不下载模型，未通过校验不能安装。");
+            if(!model.error.empty())ImGui::TextWrapped("%s",model.error.c_str());
+            if(!model.label.empty())ImGui::TextDisabled("%s",model.label.c_str());
+            auto show_folder=[&](const std::filesystem::path& path){about_error.clear();if(reinterpret_cast<INT_PTR>(ShellExecuteW(window,L"explore",path.c_str(),nullptr,nullptr,SW_SHOWNORMAL))<=32)about_error="无法打开本地目录："+lab::utf8(path.wstring());};
+            if(ImGui::Button("打开程序目录"))show_folder(library_root().parent_path()/L"app");ImGui::SameLine();
+            if(ImGui::Button("打开数据目录"))show_folder(library_root());ImGui::SameLine();
+            ImGui::BeginDisabled(model_job.valid()||!manager_allowed);if(ImGui::Button("重新校验")){const auto root=library_root().parent_path();model_job=std::async(std::launch::async,[root]{return lab::games::Manager(root).model_status();});}ImGui::EndDisabled();
+            if(!about_error.empty()){ImGui::PushStyleColor(ImGuiCol_Text,lab::product::amber);ImGui::TextWrapped("%s",about_error.c_str());ImGui::PopStyleColor();}
+            if(ImGui::CollapsingHeader("当前程序与存储位置")){
+                const auto root=lab::utf8(library_root().parent_path().wstring());
+                ImGui::TextWrapped("程序：%s",lab::utf8(lab::root::self_executable().wstring()).c_str());
+                ImGui::TextWrapped("数据：%s",lab::utf8(library_root().wstring()).c_str());
+                ImGui::TextWrapped("每份便携程序使用自己的目录，不会自动合并其他版本的游戏列表、模型或采集记录。");
+                if(ImGui::SmallButton("复制根目录路径"))ImGui::SetClipboardText(root.c_str());}
+            ImGui::Spacing();ImGui::SeparatorText("使用边界");ImGui::TextWrapped("仅限离线单人、无反作弊环境。启动时 NR 默认关闭；添加路径只做检查，安装前另行确认。安装完成不代表已通过实机画质验证。");
+            ImGui::TextWrapped("本应用不联网，无遥测。不是 NVIDIA 产品，与 NVIDIA 及游戏开发商无关联或认可。");
+            ImGui::Spacing();ImGui::TextDisabled("原创代码 MIT · 第三方许可见随包 LICENSES 与 THIRD_PARTY_NOTICES.md");
+            if(ImGui::Button("关闭",{100*dpi,36*dpi}))ImGui::CloseCurrentPopup();mark("app.about.close");ImGui::EndPopup();}
+        ImGui::Dummy({0,12*dpi});ImGui::Separator();ImGui::Dummy({0,8*dpi});
+        if(games_page){if(manager_allowed){if(!manager)manager=std::make_unique<lab::GameManagerPage>(library_root().parent_path());manager->draw(window,dpi);}else ImGui::TextDisabled("采集回归模式：不读写游戏管理登记。");ImGui::End();return;}
+        ImGui::PushFont(nullptr,26);ImGui::TextUnformatted("采集浏览");ImGui::PopFont();
+        ImGui::SameLine(ImGui::GetWindowWidth()-252*dpi);
+        if(ImGui::Button(library_visible?"收起记录":"展开记录",{118*dpi,36*dpi})){library_visible=!library_visible;++interactions;}mark("library.toggle");ImGui::SameLine();
+        if(ImGui::Button("刷新",{76*dpi,36*dpi}))scan();
+        ImGui::TextDisabled("原始数据只读 · 观看换算不改变游戏与 NR 输入");ImGui::Spacing();
         if(library_visible){ImGui::BeginChild("Library",{260*dpi,0},ImGuiChildFlags_Borders);ImGui::GetWindowDrawList()->AddCallback(Renderer::callback,&ui);
             ImGui::SetNextItemWidth(-1);ImGui::InputTextWithHint("##filter","筛选运行 / 采集编号",filter,sizeof(filter));
             ImGui::TextDisabled("%zu 份记录 · 打开时校验原件",catalog.entries.size());if(scanning.valid())ImGui::TextDisabled("读取目录中…");
@@ -242,11 +278,17 @@ struct View {
         if(!preference_error.empty())ImGui::TextColored({1,.6f,.3f,1},"显示设置无法保存：%s",preference_error.c_str());
         if(!last_export.empty()){ImGui::TextColored({.65f,.8f,.4f,1},"SDR PNG 导出完成 · 原始数据未改写");ImGui::SameLine();
             if(ImGui::SmallButton("打开导出目录"))ShellExecuteW(window,L"open",last_export.c_str(),nullptr,nullptr,SW_SHOWNORMAL);}
-        if(!raw){ImGui::Spacing();ImGui::TextUnformatted("从采集库打开一份记录");ImGui::TextWrapped("这里只浏览已有数据，不连接或控制游戏，原始 FP16 数据不做改写。插件安装与卸载在顶部「游戏管理」；NR 调节和手动采集在游戏内面板。");ImGui::EndChild();ImGui::End();return;}
+        if(!raw){ImGui::Dummy({0,65*dpi});const float width=ImGui::GetContentRegionAvail().x;const float inset=std::max(24.f*dpi,(width-510*dpi)*.5f);
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX()+inset);ImGui::BeginGroup();lab::product::mark(ImGui::GetWindowDrawList(),ImGui::GetCursorScreenPos(),64*dpi);ImGui::Dummy({64*dpi,88*dpi});
+            ImGui::PushFont(nullptr,26);ImGui::TextUnformatted(catalog.entries.empty()?"让每一次对比，都有原图可查。":"选择一份记录，开始对比。");ImGui::PopFont();ImGui::Spacing();
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+490*dpi);ImGui::TextColored(lab::product::muted,"%s",catalog.entries.empty()?"目前还没有采集记录。保存的兼容采集包会出现在左侧；这里不自动抓图，也不会为了生成预览修改原始数据。":"从左侧打开记录，可同步缩放、分割对照和导出 SDR。观看设置只作用于显示分支，不回写原件。");ImGui::PopTextWrapPos();
+            ImGui::Spacing();if(ImGui::Button("打开采集目录",{150*dpi,40*dpi})){
+                if(!test_folder_dispatch&&reinterpret_cast<INT_PTR>(ShellExecuteW(window,L"explore",library_root().c_str(),nullptr,nullptr,SW_SHOWNORMAL))<=32)error="Windows 无法打开采集目录";}
+            ImGui::EndGroup();ImGui::EndChild();ImGui::End();return;}
         const bool display_pair=raw->display_pair();
         ImGui::Text("%s   /   帧 %llu · 调用 %llu",display_pair?"显示诊断 · 候选区间配对":"同调用对照",raw->manifest().value("frame",0ULL),raw->manifest().value("call",0ULL));
         ImGui::SameLine();if(ImGui::SmallButton("打开所在文件夹##current"))folder(raw->path());mark("folder.current");
-        ImGui::TextDisabled("只读观看分支 · 显示设置不发送给游戏或 NR · 导出 PNG 与配方另存，原件不变");
+        ImGui::TextDisabled("同一组原件，两侧同步观看。导出为单独的派生文件。");
         ImGui::BeginDisabled(display_pair);if(ImGui::Button("NR 输入 / 输出"))set_pair(1,2);mark("pair.nr");ImGui::SameLine();if(ImGui::Button("NR 前后工作图"))set_pair(0,3);mark("pair.hdr");ImGui::EndDisabled();
         ImGui::SameLine();ImGui::BeginDisabled(display_pair);if(ImGui::Checkbox("原始数值差分",&difference)){if(difference)wipe=false;++interactions;}mark("difference");ImGui::EndDisabled();
         ImGui::SameLine();if(ImGui::Checkbox("分割对照",&wipe)){if(wipe)difference=false;++interactions;}mark("wipe");
@@ -316,15 +358,20 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
         need(!view_check||(!source.empty()&&!ui_test),"View check requires a source and no UI test");
         need(!ui_test||!source.empty(),"UI test needs a bounded synthetic capture");
         if(!report.empty())need(report.is_absolute()&&!std::filesystem::exists(report),"Report requires a new absolute path");
-        ImGui_ImplWin32_EnableDpiAwareness();WNDCLASSW wc{};wc.hInstance=instance;wc.lpfnWndProc=procedure;wc.lpszClassName=L"OverglazeCaptureViewer";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);need(RegisterClassW(&wc)!=0,"Register viewer");
+        ImGui_ImplWin32_EnableDpiAwareness();WNDCLASSEXW wc{sizeof(wc)};wc.hInstance=instance;wc.lpfnWndProc=procedure;wc.lpszClassName=L"OverglazeCaptureViewer";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
+        wc.hIcon=static_cast<HICON>(LoadImageW(instance,MAKEINTRESOURCEW(101),IMAGE_ICON,GetSystemMetrics(SM_CXICON),GetSystemMetrics(SM_CYICON),LR_SHARED));
+        wc.hIconSm=static_cast<HICON>(LoadImageW(instance,MAKEINTRESOURCEW(101),IMAGE_ICON,GetSystemMetrics(SM_CXSMICON),GetSystemMetrics(SM_CYSMICON),LR_SHARED));
+        need(wc.hIcon&&wc.hIconSm,"Load application icons");need(RegisterClassExW(&wc)!=0,"Register viewer");
         const auto dpi=GetDpiForSystem();const auto monitor=MonitorFromPoint({0,0},MONITOR_DEFAULTTOPRIMARY);MONITORINFO monitor_info{sizeof(monitor_info)};GetMonitorInfoW(monitor,&monitor_info);
         const int width=std::min<int>(MulDiv(1580,dpi,96),monitor_info.rcWork.right-monitor_info.rcWork.left-60),height=std::min<int>(MulDiv(980,dpi,96),monitor_info.rcWork.bottom-monitor_info.rcWork.top-60);
         HWND window=CreateWindowW(wc.lpszClassName,lab::brand::kViewerWindowTitle,WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,width,height,nullptr,nullptr,instance,nullptr);need(window!=nullptr,"Create viewer");
         BOOL dark=TRUE;DwmSetWindowAttribute(window,20,&dark,sizeof(dark));Renderer gpu(window);ImGui::CreateContext();auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.LogFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
-        auto* font=io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/msyh.ttc",17,nullptr,io.Fonts->GetGlyphRangesChineseSimplifiedCommon());if(font)io.FontDefault=font;else io.Fonts->AddFontDefault();
-        ImGui::StyleColorsDark();auto& style=ImGui::GetStyle();style.WindowPadding={22,20};style.ItemSpacing={12,10};style.FramePadding={10,8};style.FrameRounding=4;style.WindowBorderSize=0;style.ChildBorderSize=0;
-        style.Colors[ImGuiCol_HeaderHovered]={.23f,.30f,.13f,1};style.Colors[ImGuiCol_HeaderActive]={.28f,.36f,.16f,1};style.Colors[ImGuiCol_FrameBgHovered]={.20f,.24f,.18f,1};style.Colors[ImGuiCol_FrameBgActive]={.23f,.29f,.17f,1};
-        style.Colors[ImGuiCol_WindowBg]={.05f,.061f,.07f,1};style.Colors[ImGuiCol_ChildBg]={.05f,.061f,.07f,1};style.Colors[ImGuiCol_FrameBg]={.12f,.14f,.16f,1};style.Colors[ImGuiCol_Button]={.12f,.15f,.17f,1};style.Colors[ImGuiCol_ButtonHovered]={.2f,.26f,.28f,1};style.Colors[ImGuiCol_Header]={.18f,.24f,.10f,1};style.Colors[ImGuiCol_CheckMark]=style.Colors[ImGuiCol_SliderGrab]={.463f,.725f,0,1};const auto base=style;
+        wchar_t windows[MAX_PATH]{};GetWindowsDirectoryW(windows,MAX_PATH);
+        const auto font_file=std::filesystem::path(windows)/L"Fonts"/L"msyh.ttc";
+        ImVector<ImWchar> glyphs;ImFontGlyphRangesBuilder builder;builder.AddRanges(io.Fonts->GetGlyphRangesChineseSimplifiedCommon());builder.AddText("釉光");builder.BuildRanges(&glyphs);
+        auto* font=std::filesystem::exists(font_file)?io.Fonts->AddFontFromFileTTF(lab::utf8(font_file.wstring()).c_str(),16,nullptr,glyphs.Data):nullptr;
+        if(font)io.FontDefault=font;else io.Fonts->AddFontDefault();
+        lab::product::apply_theme();auto& style=ImGui::GetStyle();const auto base=style;
         ImGui_ImplWin32_Init(window);ImGui_ImplDX11_Init(gpu.device.Get(),gpu.context.Get());View view{window,gpu};
         // The viewer opens on the game manager page. Opening a
         // capture (--pair) or asking for --captures starts on the capture

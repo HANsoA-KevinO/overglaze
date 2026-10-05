@@ -7,6 +7,7 @@
 #include "lab_overlay.hpp"
 #include "lab_overlay_shader.hpp"
 #include "lab_nr_panel.hpp"
+#include "lab_product_ui.hpp"
 #include "lab_ui_preferences.hpp"
 #include <imgui.h>
 #include <imgui_impl_dx12.h>
@@ -32,6 +33,25 @@ ImGuiKey key(WPARAM k){if(k>='A'&&k<='Z')return ImGuiKey(ImGuiKey_A+k-'A');if(k>
     case VK_ESCAPE:return ImGuiKey_Escape;case VK_SPACE:return ImGuiKey_Space;case VK_BACK:return ImGuiKey_Backspace;
     case VK_DELETE:return ImGuiKey_Delete;case VK_HOME:return ImGuiKey_Home;case VK_END:return ImGuiKey_End;
     case VK_CONTROL:return ImGuiMod_Ctrl;case VK_SHIFT:return ImGuiMod_Shift;case VK_MENU:return ImGuiMod_Alt;default:return ImGuiKey_None;}}
+using product::accent;
+using product::muted;
+constexpr ImVec4 warning{.91f,.70f,.43f,1};
+bool panel_toggle(const char* id,bool& value,float scale){
+    const ImVec2 size{48*scale,26*scale};
+    const auto origin=ImGui::GetCursorScreenPos();
+    const bool pressed=ImGui::InvisibleButton(id,size,ImGuiButtonFlags_EnableNav);
+    if(pressed)value=!value;
+    auto* draw=ImGui::GetWindowDrawList();
+    const bool hovered=ImGui::IsItemHovered();
+    const ImVec4 fill=value?accent:ImVec4(hovered?.26f:.20f,hovered?.30f:.24f,hovered?.31f:.25f,1);
+    draw->AddRectFilled(origin,{origin.x+size.x,origin.y+size.y},ImGui::GetColorU32(fill),size.y*.5f);
+    const float radius=9*scale;
+    draw->AddCircleFilled({origin.x+(value?size.x-13*scale:13*scale),origin.y+size.y*.5f},radius,
+        ImGui::GetColorU32(value?ImVec4(.10f,.15f,.10f,1):ImVec4(.79f,.82f,.79f,1)),24);
+    if(ImGui::IsItemFocused())draw->AddRect({origin.x-3*scale,origin.y-3*scale},
+        {origin.x+size.x+3*scale,origin.y+size.y+3*scale},ImGui::GetColorU32(accent),size.y*.5f,0,scale);
+    return pressed;
+}
 }
 struct GameOverlay::Impl {
     Controller& control;mutable std::recursive_mutex mutex;std::mutex input_mutex;
@@ -136,14 +156,9 @@ struct GameOverlay::Impl {
         case WM_CHAR:if(m.w>0&&m.w<0x10000)io.AddInputCharacterUTF16(static_cast<ImWchar16>(m.w));break;
         default:break;}}
     }
-    void style(){ImGui::StyleColorsDark();auto& s=ImGui::GetStyle();s.WindowRounding=12;s.FrameRounding=5;s.GrabRounding=8;
-        s.WindowPadding={26,24};s.FramePadding={12,10};s.ItemSpacing={12,14};s.WindowBorderSize=1;s.FrameBorderSize=0;
-        s.Colors[ImGuiCol_WindowBg]={.055f,.067f,.077f,.98f};s.Colors[ImGuiCol_Border]={.2f,.23f,.25f,.7f};
-        s.Colors[ImGuiCol_Text]={.92f,.94f,.95f,1};s.Colors[ImGuiCol_TextDisabled]={.49f,.54f,.57f,1};
-        s.Colors[ImGuiCol_FrameBg]={.125f,.15f,.17f,1};s.Colors[ImGuiCol_FrameBgHovered]={.18f,.22f,.24f,1};
-        s.Colors[ImGuiCol_FrameBgActive]={.22f,.27f,.29f,1};s.Colors[ImGuiCol_SliderGrab]={.463f,.725f,0,1};s.Colors[ImGuiCol_SliderGrabActive]={.58f,.85f,.06f,1};
-        s.Colors[ImGuiCol_Button]={.13f,.16f,.18f,1};s.Colors[ImGuiCol_ButtonHovered]={.2f,.25f,.27f,1};s.Colors[ImGuiCol_ButtonActive]={.26f,.32f,.34f,1};
-        s.Colors[ImGuiCol_CheckMark]={.463f,.725f,0,1};s.Colors[ImGuiCol_Header]={.17f,.23f,.13f,1};}
+    void style(){ImGui::GetStyle()=ImGuiStyle();product::apply_theme();auto& s=ImGui::GetStyle();
+        s.WindowPadding={22,20};s.FramePadding={10,6};s.ItemSpacing={10,8};s.WindowBorderSize=1;
+        s.Colors[ImGuiCol_WindowBg].w=.985f;}
     void mark(const char* name){const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();controls[name]={a.x,a.y,b.x-a.x,b.y-a.y};}
     // Before the first admitted frame the live context is not ready, so the
     // backend drops every rejection reason (LabNrLiveReject records only while
@@ -333,37 +348,47 @@ struct GameOverlay::Impl {
     }
     void draw_panel(const json& status){
         auto& io=ImGui::GetIO();const float dpi=std::clamp(GetDpiForWindow(window)/96.f,1.f,2.5f);
-        ImGui::GetStyle().FontScaleDpi=dpi;
-        const float panel_width=std::min(520.f*dpi,io.DisplaySize.x-32);
-        ImGui::SetNextWindowPos({36*dpi,36*dpi},ImGuiCond_FirstUseEver);
+        style();ImGui::GetStyle().ScaleAllSizes(dpi);ImGui::GetStyle().FontScaleDpi=dpi;
+        ImGui::PushFont(font,16);
+        const float panel_width=std::min(440.f*dpi,io.DisplaySize.x-32);
+        ImGui::SetNextWindowPos({24*dpi,24*dpi},ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize({panel_width,0},ImGuiCond_Always);
         ImGui::SetNextWindowSizeConstraints({std::min(340.f,io.DisplaySize.x-32),0},{io.DisplaySize.x-16,io.DisplaySize.y-32});
         bool open=true;ImGui::Begin("Overglaze##panel",&open,ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoSavedSettings);
-        ImGui::PushFont(font,18);ImGui::TextColored({.463f,.725f,0,1},"釉光 · Overglaze");ImGui::SameLine();ImGui::TextUnformatted("  /  NR 实时控制");ImGui::PopFont();
-        ImGui::SameLine(ImGui::GetWindowWidth()-75);if(ImGui::SmallButton("收起"))visibility(false);mark("close");
+        product::wordmark(dpi);
+        ImGui::SameLine(ImGui::GetWindowWidth()-ImGui::GetStyle().WindowPadding.x-44*dpi);
+        if(ImGui::SmallButton("收起"))visibility(false);mark("close");
         const char* key_name=hotkey==VK_F7?"F7":hotkey==VK_F8?"F8":hotkey==VK_F9?"F9":"Insert";
-#ifdef LAB_OVERLAY_RESEARCH
-        ImGui::TextDisabled("%s 展开 / 收起 · 采集默认关闭",key_name);ImGui::Separator();
-#else
-        ImGui::TextDisabled("%s 展开 / 收起 · 本版不采集原始数据",key_name);ImGui::Separator();
-#endif
+        ImGui::Spacing();
         const auto panel=nr_panel(status,true,false,"@embedded",false);bool on=nr::executes(panel.requested);
-        ImGui::BeginDisabled(!panel.can_toggle);if(ImGui::Checkbox("启用 Neural Rendering",&on))dispatch("SetNrMode",{{"mode",on?"on":"off"}});mark("nr_toggle");ImGui::EndDisabled();
         const auto nr=status.value("nr_runtime",json());
-        const char* observed=panel.failed?"NR 已停止 · 本次开启未通过安全检查":panel.observed=="on"?"正在计算并使用 NR 输出":panel.observed=="compute-only"?"仅计算 NR · 不写回游戏画面（仍有开销）":panel.observed=="off"?"未执行 NR":"等待实际帧回执";
-        ImGui::TextColored(on?ImVec4(.60f,.8f,.3f,1):ImVec4(.55f,.60f,.63f,1),"%s",observed);
+        const char* state=panel.failed?"STOPPED":panel.observed=="on"?"ON":panel.observed=="compute-only"?"COMPUTE":panel.observed=="off"?"OFF":"WAIT";
+        const char* observed=panel.failed?"本次开启未通过安全检查":panel.observed=="on"?"正在使用 NR 输出":panel.observed=="compute-only"?"仅计算 · 不写回游戏":panel.observed=="off"?"未执行 NR":"等待实际帧回执";
+        const char* requested_mode=panel.requested=="on"?"ON":panel.requested=="compute-only"?"COMPUTE":panel.requested=="off"?"OFF":"未知";
+        const ImVec4 state_color=panel.failed?warning:panel.observed=="on"?accent:muted;
+        // Fixed-height status keeps the main controls in place while requested
+        // and observed modes change independently. A request is never an ON receipt.
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2{16*dpi,13*dpi});
+        ImGui::BeginChild("nr_status",{0,114*dpi},ImGuiChildFlags_AlwaysUseWindowPadding,ImGuiWindowFlags_NoScrollbar);
+        ImGui::AlignTextToFramePadding();product::eyebrow("NEURAL RENDERING");
+        ImGui::SameLine(ImGui::GetWindowWidth()-ImGui::GetStyle().WindowPadding.x-48*dpi);
+        ImGui::BeginDisabled(!panel.can_toggle);
+        if(panel_toggle("启用 Neural Rendering",on,dpi))dispatch("SetNrMode",{{"mode",on?"on":"off"}});
+        mark("nr_toggle");ImGui::EndDisabled();
+        ImGui::SetItemTooltip("请求开启 / 关闭 NR。下方状态以实际帧回执为准。");
+        ImGui::PushFont(font,25);ImGui::TextColored(state_color,"%s",state);ImGui::PopFont();
+        ImGui::SameLine(0,12*dpi);ImGui::TextUnformatted(observed);
+        ImGui::TextDisabled("请求 %s  ·  每次启动默认关闭",requested_mode);
+        ImGui::EndChild();ImGui::PopStyleVar();
         if(panel.failed&&!panel.error.empty())ImGui::TextWrapped("%s",panel.error.c_str());
-        if(panel.preparing||panel.rebuilding){ImGui::TextWrapped("正在等待可用帧 / 安全准备。无需重新启动游戏。");waiting_diagnosis(status);}
-        if(nr.is_object()&&(nr.value("skipped_frames",0ULL)>0||nr.value("discarded_recordings",0ULL)>0)){const auto rejected=nr.value("rejected_call",json());const auto streak=nr.value("consecutive_skips",0u);
-            if(streak)ImGui::TextColored({1,.69f,.2f,1},"NR 已请求但连续 %u 帧未插入：%s",streak,rejected.is_object()?rejected.value("reason",std::string("-")).c_str():"-");
-            else {ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                ImGui::TextWrapped("累计跳过 %llu 帧未插入、帧序中断 %llu 次、游戏丢弃 %llu 帧（均已重置历史）· 最近：%s",nr.value("skipped_frames",0ULL),nr.value("history_gaps",0ULL),nr.value("discarded_recordings",0ULL),rejected.is_object()?rejected.value("reason",std::string("-")).c_str():"-");
-                ImGui::PopStyleColor();}}
+        if(panel.preparing||panel.rebuilding)ImGui::TextWrapped("正在等待可用帧 / 安全准备。无需重新启动游戏。");
+        if(nr.is_object()&&nr.value("consecutive_skips",0u))
+            ImGui::TextColored(warning,"连续 %u 帧未插入 · 原因见下方诊断",nr.value("consecutive_skips",0u));
         if(panel.other_owner)ImGui::TextWrapped("外部工具已显式接管；这里暂为只读。归还后恢复游戏内控制。");
         const auto requested=status.value("nr_settings_request",json());
         if(requested.is_object()&&(!settings_loaded||(!settings_dirty&&!ImGui::IsAnyItemActive()&&requested.value("revision",0ULL)!=settings_revision))){
             const auto v=requested.at("values");tone=v.value("tone",1.f);structure=v.value("structure",1.f);exposure_stops=v.value("exposure_stops",0.f);exposure_auto=v.value("exposure_auto",0u)!=0;compare_split=v.value("compare_split",0u)!=0;model_style=v.value("style",0);skin=v.value("skin",1.f);automask=v.value("automask",0u)!=0;settings_loaded=true;settings_revision=requested.value("revision",0ULL);}
-        ImGui::Spacing();ImGui::TextDisabled("MODEL CONTROLS");
+        ImGui::Spacing();product::eyebrow("外观  /  APPEARANCE");
         const bool writable=!panel.other_owner&&!panel.failed;bool released=false;
         // Restore the last requested controls once per process as a staged
         // request (OFF allowed). The ON gate itself is never restored.
@@ -373,43 +398,52 @@ struct GameOverlay::Impl {
         ImGui::BeginDisabled(!writable);
         const float style_width=(ImGui::GetContentRegionAvail().x-ImGui::GetStyle().ItemSpacing.x*2)/3;
         for(int i=0;i<3;++i){if(i)ImGui::SameLine();const char* labels[]{"Style 0","Style 1","Style 2"};
-            if(model_style==i)ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(.22f,.32f,.08f,1));
-            const bool selected=ImGui::Button(labels[i],{style_width,0});mark(labels[i]);
-            if(model_style==i)ImGui::PopStyleColor();if(selected&&model_style!=i){model_style=i;settings_dirty=true;released=true;}}
-        ImGui::TextDisabled("三档已验证 · 尚未对应官方 A / B / C");
+            const bool selected=product::action(labels[i],{style_width,34*dpi},model_style==i);mark(labels[i]);
+            ImGui::SetItemTooltip("模型 Style %d；尚未对应官方 A / B / C。",i);
+            if(selected&&model_style!=i){model_style=i;settings_dirty=true;released=true;}}
+        ImGui::Spacing();
+        const float label_x=ImGui::GetCursorPosX()+92*dpi;
         // 0..2 since Live ABI22 (the model has no hard cap; RenoDX uses 1.85/2.00).
-        ImGui::SetNextItemWidth(-1);if(ImGui::SliderFloat("##tone",&tone,0,nr::Settings::max_tone_structure,"Tone       %.2f",ImGuiSliderFlags_AlwaysClamp))settings_dirty=true;
-        mark("tone");released|=ImGui::IsItemDeactivatedAfterEdit();ImGui::SetNextItemWidth(-1);
-        if(ImGui::SliderFloat("##structure",&structure,0,nr::Settings::max_tone_structure,"Structure  %.2f",ImGuiSliderFlags_AlwaysClamp))settings_dirty=true;
+        ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("Tone");ImGui::SameLine(label_x);ImGui::SetNextItemWidth(-1);
+        if(ImGui::SliderFloat("##tone",&tone,0,nr::Settings::max_tone_structure,"%.2f",ImGuiSliderFlags_AlwaysClamp))settings_dirty=true;
+        mark("tone");released|=ImGui::IsItemDeactivatedAfterEdit();ImGui::SetItemTooltip("局部色调强度 · 默认 1.00");
+        ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("Structure");ImGui::SameLine(label_x);ImGui::SetNextItemWidth(-1);
+        if(ImGui::SliderFloat("##structure",&structure,0,nr::Settings::max_tone_structure,"%.2f",ImGuiSliderFlags_AlwaysClamp))settings_dirty=true;
         mark("structure");released|=ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SetItemTooltip("局部结构强度 · 默认 1.00；0 不等于关闭 NR。");
         // Skin (DLSSNR.SkinStructureStrength) only acts with the automatic mask
         // on, so moving it turns AutoMask on; the mask can be switched off again.
-        // One row: the panel is already near a 800 px surface's height.
-        if(ImGui::Checkbox("AutoMask",&automask)){settings_dirty=true;released=true;}mark("automask");
-        ImGui::SetItemTooltip("自动识别皮肤区域。Skin 只在它开启时生效。");
-        ImGui::SameLine();ImGui::SetNextItemWidth(-1);
-        if(ImGui::SliderFloat("##skin",&skin,0,nr::Settings::max_skin,automask?"Skin  %.2f":"Skin  %.2f（未生效）",ImGuiSliderFlags_AlwaysClamp)){settings_dirty=true;automask=true;}
+        ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("Skin");ImGui::SameLine(label_x);ImGui::SetNextItemWidth(-1);
+        if(ImGui::SliderFloat("##skin",&skin,0,nr::Settings::max_skin,automask?"%.2f":"%.2f · 未生效",ImGuiSliderFlags_AlwaysClamp)){settings_dirty=true;automask=true;}
         mark("skin");released|=ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SetItemTooltip("皮肤区域的 Structure 强度：0＝几乎不改皮肤，1＝默认。拖动会自动打开 AutoMask。");
-        ImGui::Spacing();ImGui::TextDisabled("INPUT EXPOSURE");ImGui::SameLine();
-        if(ImGui::Checkbox("自动测光（画面均值→中灰，滑条为偏移）",&exposure_auto)){settings_dirty=true;released=true;}mark("exposure_auto");
+        ImGui::SetCursorPosX(label_x);if(ImGui::Checkbox("AutoMask",&automask)){settings_dirty=true;released=true;}mark("automask");
+        ImGui::SameLine();ImGui::TextDisabled("皮肤区域识别");
+        ImGui::SetItemTooltip("Skin 只在 AutoMask 开启时生效；拖动 Skin 会自动打开它。");
+        ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
+        ImGui::AlignTextToFramePadding();product::eyebrow("输入曝光");
+        ImGui::SameLine(ImGui::GetWindowContentRegionMax().x-128*dpi);
+        if(ImGui::Checkbox("自动测光",&exposure_auto)){settings_dirty=true;released=true;}mark("exposure_auto");
+        ImGui::SetItemTooltip("画面均值映射到中灰；开启后滑条调整自动测光的 EV 偏移。属于宿主颜色准备，不是模型参数。");
         ImGui::SetNextItemWidth(-1);
         if(ImGui::SliderFloat("##exposure",&exposure_stops,nr::Settings::min_exposure_stops,nr::Settings::max_exposure_stops,exposure_auto?"EV 偏移   %+.1f":"Exposure  %+.1f EV",ImGuiSliderFlags_AlwaysClamp))settings_dirty=true;
         mark("exposure");released|=ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SetItemTooltip("送入 NR 前的宿主曝光；回填时会除回。不改变游戏的曝光设置。");
+        ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
+        ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("分屏对照");
+        ImGui::SameLine(ImGui::GetWindowContentRegionMax().x-48*dpi);
+        if(panel_toggle("对比分屏：左半原图 / 右半 NR",compare_split,dpi)){settings_dirty=true;released=true;}mark("compare_split");
+#ifdef LAB_OVERLAY_RESEARCH
+        ImGui::SetItemTooltip("仅诊断视图；开启时不允许采集。");
+#else
+        ImGui::SetItemTooltip("仅诊断视图；不作为画质验收依据。");
+#endif
+        ImGui::TextDisabled("左侧原图  /  右侧 NR");
         ImGui::EndDisabled();
         if(settings_dirty&&writable&&(released||GetTickCount64()-last_settings>=100)){
             dispatch("SetNrSettings",{{"tone",tone},{"structure",structure},{"style",model_style},{"exposure_stops",exposure_stops},{"exposure_auto",exposure_auto?1:0},{"compare_split",compare_split?1:0},
                 {"skin",skin},{"automask",automask?1:0}});last_settings=GetTickCount64();settings_dirty=false;}
-        if(!on)ImGui::TextDisabled("当前编辑为待应用值；下一次 NR 开启时提交。");
-        if(nr.is_object()){const auto s=nr.value("settings",json::object());const auto v=s.value("observed",json());
-            if(s.value("read_mask",0u)==3&&s.value("style_read",false)&&v.is_object()){
-                ImGui::TextDisabled("DLL 已读取 %.2f / %.2f / Style %u  ·  宿主曝光 %+.1f EV%s  ·  帧 %llu",v.value("tone",0.f),v.value("structure",0.f),v.value("style",0u),s.value("applied_exposure_stops",v.value("exposure_stops",0.f)),v.value("exposure_auto",0u)?"（自动）":"",s.value("frame",0ULL));
-                // Unread optional controls mirror the request; only *_read says the DLL read them.
-                const bool skin_read=s.value("skin_read",false),mask_read=s.value("automask_read",false);
-                char skin_text[16]="未读";if(skin_read)std::snprintf(skin_text,sizeof skin_text,"%.2f",v.value("skin",0.f));
-                if(skin_read||mask_read)ImGui::TextDisabled("DLL 已读取 Skin %s  ·  AutoMask %s",skin_text,mask_read?(v.value("automask",0u)?"开":"关"):"未读");
-                else ImGui::TextDisabled("Skin / AutoMask：本代 Evaluate 未读取");}
-            else ImGui::TextDisabled("实际参数：尚无本代 Evaluate 读取回执");}
+        if(!on)ImGui::TextDisabled("关闭时可调整参数 · 下次开启后应用");
 #ifdef LAB_OVERLAY_RESEARCH
         ImGui::Spacing();ImGui::Separator();ImGui::TextDisabled("CAPTURE");
         const auto pair=status.value("frame_pair",json());const std::string phase=pair.is_object()?pair.value("state",""):"";
@@ -433,14 +467,30 @@ struct GameOverlay::Impl {
         // No raw-data capture in the controller panel; frame_pair is a research record.
         const bool busy=false;
 #endif
-        if(ImGui::CollapsingHeader("显示与诊断")){
-            ImGui::BeginDisabled(!writable);
-            if(ImGui::Checkbox("对比分屏：左半原图 / 右半 NR",&compare_split)){settings_dirty=true;released=true;}mark("compare_split");
-#ifdef LAB_OVERLAY_RESEARCH
-            ImGui::EndDisabled();ImGui::TextDisabled("仅诊断视图；开启时不允许采集。");
-#else
-            ImGui::EndDisabled();ImGui::TextDisabled("仅诊断视图；不作为画质验收依据。");
-#endif
+        ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
+        const bool diagnostics=ImGui::CollapsingHeader("高级与诊断");mark("diagnostics");
+        if(diagnostics){
+            ImGui::PushTextWrapPos(0);
+            product::eyebrow("实际状态 / OBSERVED");
+            ImGui::TextDisabled("请求：%s · 实际：%s",panel.requested.c_str(),panel.observed.c_str());
+            if(panel.preparing||panel.rebuilding)waiting_diagnosis(status);
+            if(nr.is_object()&&(nr.value("skipped_frames",0ULL)>0||nr.value("discarded_recordings",0ULL)>0)){
+                const auto rejected=nr.value("rejected_call",json());
+                ImGui::TextDisabled("累计跳过 %llu 帧 · 帧序中断 %llu 次 · 游戏丢弃 %llu 帧（均已重置历史）",
+                    nr.value("skipped_frames",0ULL),nr.value("history_gaps",0ULL),nr.value("discarded_recordings",0ULL));
+                ImGui::TextWrapped("最近原因：%s",rejected.is_object()?rejected.value("reason",std::string("-")).c_str():"-");}
+            ImGui::Spacing();product::eyebrow("模型读取回执");
+            if(nr.is_object()){const auto s=nr.value("settings",json::object());const auto v=s.value("observed",json());
+                if(s.value("read_mask",0u)==3&&s.value("style_read",false)&&v.is_object()){
+                    ImGui::TextDisabled("Tone %.2f · Structure %.2f · Style %u",v.value("tone",0.f),v.value("structure",0.f),v.value("style",0u));
+                    ImGui::TextDisabled("宿主曝光 %+.1f EV%s · 帧 %llu",s.value("applied_exposure_stops",v.value("exposure_stops",0.f)),v.value("exposure_auto",0u)?"（自动）":"",s.value("frame",0ULL));
+                    // Unread optional controls mirror the request; only *_read says the DLL read them.
+                    const bool skin_read=s.value("skin_read",false),mask_read=s.value("automask_read",false);
+                    char skin_text[16]="未读";if(skin_read)std::snprintf(skin_text,sizeof skin_text,"%.2f",v.value("skin",0.f));
+                    if(skin_read||mask_read)ImGui::TextDisabled("Skin %s · AutoMask %s",skin_text,mask_read?(v.value("automask",0u)?"开":"关"):"未读");
+                    else ImGui::TextDisabled("Skin / AutoMask：本代 Evaluate 未读取");}
+                else ImGui::TextDisabled("尚无本代 Evaluate 读取回执");}
+            else ImGui::TextDisabled("尚无本代 Evaluate 读取回执");
             // What this host has actually seen work, accumulated over the process.
             // Sticky on purpose: turning NR off does not un-prove a read-back.
             if(nr.is_object()){const auto caps=nr.value("capabilities",json::object());
@@ -451,7 +501,7 @@ struct GameOverlay::Impl {
                     ImGui::TextDisabled("仅表示 NR DLL 在 Evaluate 期间回读过该值，不代表画质正确或与官方接入一致。");}}
             if(status.value("capabilities",json::object()).value("nr_compute_only",false)){
                 ImGui::BeginDisabled(!panel.can_toggle||busy);
-                if(ImGui::Button("仅计算，不写回游戏"))dispatch("SetNrMode",{{"mode","compute-only"}});
+                if(ImGui::Button("仅计算，不写回游戏",{-1,0}))dispatch("SetNrMode",{{"mode","compute-only"}});mark("compute_only");
                 ImGui::EndDisabled();ImGui::TextWrapped("诊断模式仍执行转换、NR 和私有合成；不代表零影响。上方开关可停止计算。");
             }
 #ifdef LAB_OVERLAY_RESEARCH
@@ -461,12 +511,17 @@ struct GameOverlay::Impl {
             ImGui::TextWrapped("\u9762\u677f\u663e\u793a\u4e0d\u6539\u53d8\u6e38\u620f\u753b\u9762\u3002\u8272\u6821\u51c6\u4e0e\u6e38\u620f\u81ea\u8eab\u7a33\u5b9a\u6027\u5355\u72ec\u53e6\u7b97\u3002");
 #endif
             const char* keys[]{"Insert","F7","F8","F9"};const UINT values[]{VK_INSERT,VK_F7,VK_F8,VK_F9};int selected=0;for(int i=0;i<4;++i)if(hotkey==values[i])selected=i;
-            if(ImGui::Combo("面板快捷键（自动保存）",&selected,keys,4))hotkey=values[selected];
-            ImGui::SliderFloat("面板白电平 / nits",&paper_white,80,300,"%.0f");
+            ImGui::Spacing();ImGui::Separator();ImGui::Spacing();product::eyebrow("面板设置");
+            ImGui::TextUnformatted("快捷键");ImGui::SetNextItemWidth(-1);
+            if(ImGui::Combo("##panel_hotkey",&selected,keys,4))hotkey=values[selected];mark("hotkey");
+            ImGui::TextUnformatted("面板白电平");ImGui::SetNextItemWidth(-1);
+            ImGui::SliderFloat("##panel_white",&paper_white,80,300,"%.0f nits");mark("paper_white");
             ImGui::Text("输出：%s",space==DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709?"scRGB":space==DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020?"HDR10 / PQ":"SDR / sRGB");
             if(!panel.error.empty())ImGui::TextWrapped("%s",panel.error.c_str());if(!error.empty())ImGui::TextWrapped("%s",error.c_str());
             const auto saved_error=preferences.error();if(!saved_error.empty())ImGui::TextWrapped("界面设置未保存：%s",saved_error.c_str());
-            if(!preference_error.empty())ImGui::TextWrapped("界面设置未保存：%s",preference_error.c_str());}
+            if(!preference_error.empty())ImGui::TextWrapped("界面设置未保存：%s",preference_error.c_str());
+            ImGui::PopTextWrapPos();}
+        ImGui::Spacing();ImGui::TextDisabled("%s 收起  ·  Esc 返回游戏",key_name);
         {OverlayPreferences current;current.hotkey=hotkey.load();current.white=paper_white;
          if(settings_loaded){current.has_model=true;current.tone=tone;current.structure=structure;current.style=unsigned(model_style);current.exposure_stops=exposure_stops;current.exposure_auto=exposure_auto?1u:0u;current.skin=skin;current.automask=automask?1u:0u;}
          // A settings file must never take the panel down. A file range check
@@ -475,7 +530,7 @@ struct GameOverlay::Impl {
          // re-failed on its first frame.
          try{preferences.save(current.document());preference_error.clear();}
          catch(const std::exception& e){preference_error=e.what();}}
-        ImGui::End();if(!open)visibility(false);
+        ImGui::End();ImGui::PopFont();if(!open)visibility(false);
     }
     bool wait(){if(!fence)return true;const auto done=fence->GetCompletedValue();if(done==UINT64_MAX)return false;if(done>=sequence)return true;
         if(!event||FAILED(fence->SetEventOnCompletion(sequence,event->value)))return false;return WaitForSingleObject(event->value,2000)==WAIT_OBJECT_0;}

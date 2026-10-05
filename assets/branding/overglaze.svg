@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: 2026 HANsoA-KevinO -->
+<!-- SPDX-License-Identifier: MIT -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64">
+  <title>Overglaze: two offset layers</title>
+  <desc>An original geometric O, with a pale green front layer and a muted rear layer on charcoal.</desc>
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="#101418"/>
+  <rect x="11" y="21" width="32" height="32" rx="9" fill="none" stroke="#516747" stroke-width="6"/>
+  <rect x="21" y="11" width="32" height="32" rx="9" fill="#101418" stroke="#B6D88C" stroke-width="6"/>
+</svg>

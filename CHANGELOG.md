@@ -2,6 +2,25 @@
 
 All notable changes to Overglaze are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.2.0-preview.1] - Unreleased
+
+### Changed
+
+- Reworked the desktop Game Library with name/path search, installed/needs-attention filters, selected-game actions, and expandable checks and installation details.
+- Reorganised the in-game panel around observed NR status, Style, Tone, Structure, Skin/AutoMask, input exposure and split comparison. Model read-backs, skip reasons, compute-only mode and panel settings remain available under Advanced & Diagnostics.
+- Applied a shared charcoal-and-pale-green visual style to the desktop and in-game interfaces. The capture browser continues to operate on saved data.
+- Integrated provider updates through `61b5279`: ordinary Presents no longer end a frozen in-flight call or expire Lab-owned guide copies, and non-nested outer-admission refusals skip rather than immediately stopping NR. These code changes are not new real-game acceptance results; outstanding review limits are recorded in `docs/UI-PREVIEW-VALIDATION.md`.
+
+### Added
+
+- Original layered-ring brand mark, reproducible multi-size Windows icon, and embedded desktop application version information.
+- Settings & About with local model status, directory shortcuts, version and usage boundaries.
+- Allowlisted portable packaging with `Open-Overglaze.cmd`, licence texts, SHA-256 file manifest, archive checksum and source dirty-state reporting. Packaging refuses existing outputs and does not publish a release.
+
+### Preview scope
+
+The NVIDIA model is still user-supplied and is not included or downloaded. NR stays off at each game start. This preview changes the interface and distribution workflow; it does not add game certifications or establish new in-game image-quality, performance or stability results. Existing game-specific limitations still apply.
+
 ## [0.1.0] - 2026-10-05
 
 

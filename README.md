@@ -8,6 +8,12 @@ Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Ren
 
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
+## 0.2.0-preview.1
+
+This preview updates the desktop game library and the in-game panel with a shared charcoal-and-green design and an original layered-ring icon. The library adds search and status filters, a selected game's next action, and expandable check and installation details. *Settings & About* shows the local model status. The panel keeps the main NR controls together and puts model read-backs and troubleshooting details under *Advanced & Diagnostics*.
+
+The portable ZIP includes `Open-Overglaze.cmd`, licence texts and a file-hash manifest; the adjacent `.zip.sha256` checks the archive. See [Portable preview](docs/PORTABLE.md) for running or building a package. The model is still supplied by you. This interface and packaging preview does not certify every listed game, or establish new image-quality, performance or stability results.
+
 ## What it does
 
 Overglaze inserts the NR model, often called "DLSS 5", into games that already use DLSS Ray Reconstruction or DLSS Super Resolution. When the game's upscaler has finished a frame, Overglaze runs NR on that frame and writes the result back. The game then continues with its own post-processing and UI.
@@ -15,7 +21,7 @@ Overglaze inserts the NR model, often called "DLSS 5", into games that already u
 - **NR is off by default** every time a game starts.
 - **In-game panel, opened with Insert:** NR on/off, Tone, Structure, Style, Skin with AutoMask, input exposure, and a split-screen comparison.
 - **The panel reports what actually happened**, not only what you asked for: which parameters the model read back, and how many frames were skipped and why.
-- **Desktop program:** the Games page checks a game, installs Overglaze's files into it, updates them and uninstalls them.
+- **Desktop program:** the Game Library checks a game, installs Overglaze's files into it, updates them and uninstalls them. Capture Browser opens compatible saved captures separately.
 
 ## What it isn't
 
@@ -30,6 +36,7 @@ Overglaze inserts the NR model, often called "DLSS 5", into games that already u
 - An NVIDIA GeForce RTX 50 series GPU. Tested on an RTX 5090. Other GPUs are not supported.
 - NVIDIA driver 615 or newer. Tested on 617.14.
 - 64-bit Windows 11. This is the only OS it has been tested on.
+- Microsoft Visual C++ v14 x64 runtime, at least as recent as the build tools used for the package. See [Microsoft's runtime downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist). It is not bundled or installed automatically.
 - A DX12 game that uses DLSS Ray Reconstruction or Super Resolution, through Streamline or by calling NGX directly. See [SUPPORTED_GAMES.md](SUPPORTED_GAMES.md).
 - Your own copy of `nvngx_dlssnr.dll` (see [The model](#the-model)).
 - Free disk space. Installing keeps a reserve free on the drive that holds Overglaze's data folder (currently 30 GiB).
@@ -46,10 +53,10 @@ Overglaze checks the file's SHA-256 against the versions it knows and refuses an
 
 > The desktop program and the in-game panel are currently in Chinese. Labels in this README are English translations.
 
-1. **Get the program.** Download `Overglaze-<version>-win64.zip` from the GitHub Releases page and extract it to a folder on a local drive. The programs are in its `app\` folder.
+1. **Get the program.** Extract the whole `Overglaze-<version>-win64.zip` to a writable folder on a local drive. Open `Open-Overglaze.cmd` or `app\overglaze_viewer.exe`. See [docs/PORTABLE.md](docs/PORTABLE.md) for package details.
 2. **Place the model.** Copy your `nvngx_dlssnr.dll` into the `app\models\` folder next to the program.
-3. **Add a game.** Open `app\overglaze_viewer.exe` and go to the Games page. Choose *Add game* and paste the game's install folder or its EXE. A read-only check runs: store, NVIDIA modules and their signatures, anti-cheat and Denuvo markers, other injectors in the folder, and which DLSS path the game uses.
-4. **Install.** Close the game. Generate the adapter package, then choose *Install*. Overglaze writes only its own files and records exactly what it wrote, so it can remove exactly those files later.
+3. **Add a game.** On the Game Library page, choose *Add game* and paste the game's install folder or its EXE. A read-only check runs: store, NVIDIA modules and their signatures, anti-cheat and Denuvo markers, other injectors in the folder, and which DLSS path the game uses.
+4. **Install.** Close the game. Select it in the library, choose *Prepare installation* to generate the adapter package, then choose *Install* and review the confirmation. Overglaze writes only its own files and records exactly what it wrote, so it can remove exactly those files later.
 5. **Play.** Start the game the usual way and turn on DLSS: Ray Reconstruction if the game offers it, otherwise Super Resolution or DLAA. Press **Insert** to open the panel and enable NR.
 
 ### Games that need late loading
@@ -64,7 +71,7 @@ The game starts as usual. The first time you press Insert in the game, Overglaze
 
 ### Removing Overglaze
 
-Uninstall each game from the Games page **before** you delete the Overglaze folder. Also remove any Steam launch option that points to `overglaze_launch.exe`, otherwise Steam cannot start that game.
+Uninstall each game from the Game Library **before** you move or delete the Overglaze folder. Also remove any Steam launch option that points to `overglaze_launch.exe`, otherwise Steam cannot start that game.
 
 ## The in-game panel
 
@@ -79,7 +86,7 @@ Uninstall each game from the Games page **before** you delete the Overglaze fold
 | Compare split | Left half shows the original frame, right half the NR result. Diagnostic view only. |
 | Compute only | Runs NR without writing the result back into the game. Useful for measuring cost. |
 
-A line under the controls shows the values the model actually read during its last run. This tells you the interface took your settings. It says nothing about image quality.
+The status card distinguishes the requested mode from the observed frame result. Expand *Advanced & Diagnostics* to see the values the model actually read during its last run, skip reasons, compute-only mode and panel settings. A parameter read-back tells you the interface took your settings; it says nothing about image quality. Structure 0 is not the same as switching NR off.
 
 Settings other than on/off are remembered per game. The panel hotkey can be changed to F7, F8 or F9.
 
@@ -96,7 +103,7 @@ Confirmed in game:
 | A Plague Tale: Resonance | Streamline · Super Resolution | Proxy DLL |
 | Resident Evil Requiem | Streamline · Ray Reconstruction | Late load (Steam launch option) |
 
-More games are listed as experimental. Notes, store versions and the meaning of "confirmed" are in [SUPPORTED_GAMES.md](SUPPORTED_GAMES.md). A game that isn't listed may still work. Add it on the Games page and the check will tell you which path it uses.
+More games are listed as experimental. Notes, store versions and the meaning of "confirmed" are in [SUPPORTED_GAMES.md](SUPPORTED_GAMES.md). These are existing game-specific observations, not certification of this preview across all games. A game that isn't listed may still work. Add it in the Game Library and the check will tell you which path it uses.
 
 ## Policy in short
 
@@ -111,6 +118,7 @@ Full text: [POLICY.md](POLICY.md).
 
 ## Documentation
 
+- [docs/PORTABLE.md](docs/PORTABLE.md): using and building the portable preview
 - [docs/MODEL.md](docs/MODEL.md): what Overglaze expects of the model file
 - [docs/ADDING-A-GAME.md](docs/ADDING-A-GAME.md): adding, installing, updating and removing games
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md): common problems
