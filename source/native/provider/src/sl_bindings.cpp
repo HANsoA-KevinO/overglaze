@@ -123,7 +123,7 @@ const char* constants_state_name(ConstantsState s) noexcept {
     case ConstantsState::setter_rejected:return "setter-rejected";default:return "never-set";}
 }
 void Bindings::sync() noexcept {
-    const auto p=present_.load(),l=loss_.load();if(p!=seen_present_ || l!=seen_loss_){
+    const auto h=hard_.load(),p=present_.load(),l=loss_.load();if(p!=seen_present_ || l!=seen_loss_){
         // Present expires global resource tags, not common constants already
         // copied for another explicit frame token. SL accepts constants early
         // and supports multiple frames in flight. A real observation loss still
@@ -151,22 +151,27 @@ void Bindings::sync() noexcept {
             // call has not returned. Frame generation's pacing thread presents
             // repeatedly inside one Evaluate window, so invalidating on every
             // Present skipped frames that carried no resource risk at all.
-            bool inline_until_evaluate=true;
+            // Both profiles: no Present inside this window can be this frame's
+            // own. The game is still recording the frame on the Evaluate's thread
+            // and presents it only after its lists are submitted, so a Present
+            // here is an earlier frame's or frame generation's pacing thread
+            // (Cyberpunk 2077 with DLSS-G: the skips that flickered). The binding
+            // is frozen and leased, and NR is recorded on the same list right
+            // after the RR that consumes the same resources. Only an
+            // OnlyValidNow role (unless it is a Lab copy, which is ours) and a
+            // hard boundary (resize, stop) still end the call.
+            bool survives_present=h==seen_hard_;
             for(unsigned i=0;i<3;++i)
-                inline_until_evaluate=inline_until_evaluate&&(self_configure_
-                    // Self-configuring: another frame's Present, for any tag this
-                    // frame may still use (OnlyValidNow is refused on its own).
-                    // A Lab copy taken at the tag call is ours: no Present ends it.
-                    ?(pending_.binding.resources[i].lifecycle!=sl::eOnlyValidNow||pending_.binding.resources[i].lab_copy)
-                    :pending_.binding.local[i]&&pending_.binding.resources[i].lifecycle==sl::eValidUntilEvaluate);
+                survives_present=survives_present&&
+                    (pending_.binding.resources[i].lifecycle!=sl::eOnlyValidNow||pending_.binding.resources[i].lab_copy);
             if(p!=seen_present_){
                 ++pending_.presents_during_call;
-                if(!inline_until_evaluate){pending_.rejection=Rejection::stale;pending_.invalidations|=invalidation_present;}
+                if(!survives_present){pending_.rejection=Rejection::stale;pending_.invalidations|=invalidation_present;}
             }
             if(l!=seen_loss_){pending_.rejection=Rejection::stale;pending_.invalidations|=invalidation_loss;}}
         // A missed return must not leave a permanent orphan transaction.
         if(l!=seen_loss_)pending_call_=0;
-        seen_present_=p;seen_loss_=l;
+        seen_present_=p;seen_loss_=l;seen_hard_=h;
     }
 }
 bool Bindings::live_frame(std::uint32_t& lowest) const noexcept {

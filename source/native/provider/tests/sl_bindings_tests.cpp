@@ -314,8 +314,9 @@ __declspec(noinline) void gate_audit_relaxations(){
 // With frame generation (Cyberpunk 2077, DLSS-G on) the game tags
 // frame N -- and may already be inside Evaluate N -- before it presents frame N-1.
 // A Present the game's own latency marker declares for an EARLIER frame than
-// everything live expires nothing; the same or a later frame, an undeclared
-// Present, or live data whose frame cannot be derived keep the conservative boundary.
+// everything live expires nothing; between tags and Evaluate the same or a later
+// frame, an undeclared Present, or live data whose frame cannot be derived keep the
+// conservative boundary. Inside the Evaluate window only a hard boundary ends the call.
 __declspec(noinline) void present_frame_attribution(){
     // Pinned profile (the research host, 2077). Frame 1 makes the globals' frame
     // derivable: tags set after a target Evaluate serve the frame after it.
@@ -332,12 +333,16 @@ __declspec(noinline) void present_frame_attribution(){
     for(const std::uint32_t declared:{2u,3u}){auto fx=std::make_unique<Fixture>();auto& f=*fx;primed(f);auto c=f.eval();f.bindings.entering(c);
      bool spared=true;std::thread t([&]{spared=f.bindings.present_boundary_of_frame(declared);});t.join();
      const auto r=f.bindings.returned(c);
-     need(!spared&&r.rejection==Rejection::stale&&r.invalidations==invalidation_present,
-          declared==2?"A Present declared for the Evaluate's own frame still invalidates it":"A Present declared for a later frame still invalidates it");
+     // Inside the window no Present can be this frame's own: it ends nothing.
+     need(!spared&&r.ready()&&!(r.invalidations&invalidation_present)&&r.presents_during_call==1,
+          declared==2?"A Present declared for the Evaluate's own frame inside its window ends nothing, counted":"A Present declared for a later frame inside the window ends nothing, counted");
      need(f.bindings.stats().present_expiries_spared_previous_frame==0&&f.bindings.stats().presents_declared==1,"Declared but not spared");}
     {auto fx=std::make_unique<Fixture>();auto& f=*fx;primed(f);auto c=f.eval();f.bindings.entering(c);
      std::thread t([&]{f.bindings.present_boundary();});t.join();const auto r=f.bindings.returned(c);
-     need(r.rejection==Rejection::stale&&r.invalidations==invalidation_present&&f.bindings.stats().presents_declared==0,"A Present without a game marker still invalidates the window");}
+     need(r.ready()&&r.presents_during_call==1&&f.bindings.stats().presents_declared==0,"An undeclared Present inside the window (frame generation's pacing thread) ends nothing, counted");}
+    {auto fx=std::make_unique<Fixture>();auto& f=*fx;primed(f);auto c=f.eval();f.bindings.entering(c);
+     std::thread t([&]{f.bindings.hard_boundary();});t.join();const auto r=f.bindings.returned(c);
+     need(r.rejection==Rejection::stale&&r.invalidations==invalidation_present,"A hard boundary (resize, stop) inside the window still ends the call");}
     // Between the tags and the Evaluate (the 2077 fresh-resource-missing-or-revoked).
     {auto fx=std::make_unique<Fixture>();auto& f=*fx;primed(f);
      need(f.bindings.present_boundary_of_frame(1),"The previous frame's Present after frame 2's tags is spared");
@@ -394,7 +399,10 @@ int main(){try {
     {Fixture f;f.setup();f.bindings.present_boundary();need(!f.run(f.eval()).ready(),"Present invalidates earlier tags/constants");}
     {Fixture f;f.setup();auto c=f.eval();f.bindings.entering(c);std::thread t([&]{f.bindings.present_boundary();});t.join();
      const auto r=f.bindings.returned(c);
-     need(r.rejection==Rejection::stale&&r.invalidations==invalidation_present,"Concurrent Present is precisely diagnosed and still refused");}
+     need(r.ready()&&r.presents_during_call==1,"A concurrent Present ends no global tag already frozen for this call, counted");}
+    {Fixture f;f.setup();auto c=f.eval();f.bindings.entering(c);std::thread t([&]{f.bindings.hard_boundary();});t.join();
+     const auto r=f.bindings.returned(c);
+     need(r.rejection==Rejection::stale&&r.invalidations==invalidation_present,"A concurrent hard boundary is precisely diagnosed and still refused");}
     // Frame generation's pacing thread presents repeatedly inside one Evaluate
     // window. A Present ends GLOBAL tag validity; it does not end the validity
     // of a tag passed inline with this very Evaluate and declared valid until
@@ -420,8 +428,8 @@ int main(){try {
      auto c=f.eval(inputs,4);f.bindings.entering(c);
      std::thread t([&]{f.bindings.present_boundary();});t.join();
      const auto r=f.bindings.returned(c);
-     need(r.rejection==Rejection::stale&&(r.invalidations&invalidation_present),
-          "An inline tag that promised only until-Present is still invalidated by a Present");}
+     need(r.ready()&&r.presents_during_call==1,
+          "An inline until-Present tag survives a Present inside its own window: that Present is not this frame's");}
     {Fixture f;f.setup();
      std::array<sl::ResourceTag,3> inline_tags{
         sl::ResourceTag(&f.resources[0],sl::kBufferTypeScalingOutputColor,sl::eValidUntilEvaluate,&f.output),
@@ -482,7 +490,7 @@ int main(){try {
      for(unsigned frame=1;frame<=2400;++frame){f.bindings.present_boundary();f.issue(frame);f.emit(f.constants());f.emit(f.global());
          const auto r=f.run(f.eval());need(r.ready()&&r.binding.frame_index==frame&&!r.invalidations,"Long CPU token reuse retains exact current frame without old diagnostic bits");}
      f.bindings.present_boundary();f.issue(2401);f.emit(f.constants());f.emit(f.global());const auto c=f.eval();f.bindings.entering(c);
-     f.bindings.present_boundary();const auto rejected=f.bindings.returned(c);
+     f.bindings.hard_boundary();const auto rejected=f.bindings.returned(c);
      need(rejected.rejection==Rejection::stale&&rejected.invalidations==invalidation_present&&rejected.binding.frame_index==2401,
           "Late invalidation remains tied to exact call after 2400 good CPU transactions, not a visual/GPU test");}
     {Fixture f;f.setup();auto c=f.eval();f.bindings.entering(c);c.result=sl::Result::eErrorInvalidParameter;need(!f.bindings.returned(c).ready(),"Original failure cannot execute NR");}

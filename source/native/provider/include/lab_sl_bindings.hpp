@@ -248,8 +248,8 @@ class Bindings final {
     // writer still holds mutex_.
     std::atomic<bool> frame_tags_seen_{false};
     std::mutex mutex_;
-    std::atomic<std::uint64_t> present_{0},loss_{0};
-    std::uint64_t seen_present_=0,seen_loss_=0,generation_=0;
+    std::atomic<std::uint64_t> present_{0},loss_{0},hard_{0};
+    std::uint64_t seen_present_=0,seen_loss_=0,seen_hard_=0,generation_=0;
     Resolution pending_{};
     std::uint64_t pending_call_=0;
     // The frame the in-flight snapshot belongs to: the Evaluate's token index,
@@ -335,6 +335,9 @@ public:
     // Must be wired to actual host boundaries; not a timer or guessed frame ID.
     // Conservative invalidation also supports a callback from another thread.
     void present_boundary() noexcept {++present_;}
+    // A host boundary that is not a Present (swapchain resize or recreation,
+    // adapter stop): a Present everywhere, and it also ends a call in flight.
+    void hard_boundary() noexcept {++hard_;++present_;}
     // The same boundary, for a Present the
     // game's OWN latency marker declares for `frame` (an open ePresentStart on the
     // Present thread whose token address was seen issued with that index;

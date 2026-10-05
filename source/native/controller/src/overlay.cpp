@@ -356,7 +356,9 @@ struct GameOverlay::Impl {
         if(panel.preparing||panel.rebuilding){ImGui::TextWrapped("正在等待可用帧 / 安全准备。无需重新启动游戏。");waiting_diagnosis(status);}
         if(nr.is_object()&&(nr.value("skipped_frames",0ULL)>0||nr.value("discarded_recordings",0ULL)>0)){const auto rejected=nr.value("rejected_call",json());const auto streak=nr.value("consecutive_skips",0u);
             if(streak)ImGui::TextColored({1,.69f,.2f,1},"NR 已请求但连续 %u 帧未插入：%s",streak,rejected.is_object()?rejected.value("reason",std::string("-")).c_str():"-");
-            else ImGui::TextDisabled("累计跳过 %llu 帧未插入、帧序中断 %llu 次、游戏丢弃 %llu 帧（均已重置历史）· 最近：%s",nr.value("skipped_frames",0ULL),nr.value("history_gaps",0ULL),nr.value("discarded_recordings",0ULL),rejected.is_object()?rejected.value("reason",std::string("-")).c_str():"-");}
+            else {ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped("累计跳过 %llu 帧未插入、帧序中断 %llu 次、游戏丢弃 %llu 帧（均已重置历史）· 最近：%s",nr.value("skipped_frames",0ULL),nr.value("history_gaps",0ULL),nr.value("discarded_recordings",0ULL),rejected.is_object()?rejected.value("reason",std::string("-")).c_str():"-");
+                ImGui::PopStyleColor();}}
         if(panel.other_owner)ImGui::TextWrapped("外部工具已显式接管；这里暂为只读。归还后恢复游戏内控制。");
         const auto requested=status.value("nr_settings_request",json());
         if(requested.is_object()&&(!settings_loaded||(!settings_dirty&&!ImGui::IsAnyItemActive()&&requested.value("revision",0ULL)!=settings_revision))){

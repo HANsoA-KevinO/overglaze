@@ -203,16 +203,16 @@ int main(){try{
     need(receiver.entries==4,"Preparation invalidation rejects a call already in progress");
     need(receiver.rejection.call==evaluate.id&&std::string(receiver.rejection.stage)=="frozen-binding"&&std::string(receiver.rejection.reason)=="snapshot-invalidated; present-boundary","Preparation boundary invalidation reaches frozen first-error receipt");
     begin_controlled(230);controlled.returned(evaluate);need(receiver.entries==5,"Fresh tags/constants after preparation remain usable");
-    // A Present between entry and return still invalidates that call (present
-    // boundary); a single swapchain change alone is a recreation, not ambiguity.
+    // A Present between entry and return ends nothing frozen for that call (it
+    // cannot be that frame's own); a single swapchain change alone is a recreation, not ambiguity.
     begin_controlled(240);controlled.present(2);controlled.returned(evaluate);
-    need(receiver.entries==5&&controlled.snapshot()["multiple_swapchains"]==false,"A single swapchain change is a recreation, not two presentation sources");
+    need(receiver.entries==6&&controlled.snapshot()["multiple_swapchains"]==false,"A single swapchain change is a recreation, not two presentation sources");
     // begin_controlled presents chain 1 again: A,B,A within the window = ambiguous.
     begin_controlled(250);controlled.returned(evaluate);
-    need(receiver.entries==5&&controlled.snapshot()["multiple_swapchains"]==true,"Chains presenting alternately make frame association ambiguous");
+    need(receiver.entries==6&&controlled.snapshot()["multiple_swapchains"]==true,"Chains presenting alternately make frame association ambiguous");
     for(unsigned i=0;i<300;++i)controlled.present(1);
     need(controlled.snapshot()["multiple_swapchains"]==false,"A long run on one chain clears the ambiguity");
-    begin_controlled(260);controlled.returned(evaluate);need(receiver.entries==6,"Admission resumes after the ambiguity clears");
+    begin_controlled(260);controlled.returned(evaluate);need(receiver.entries==7,"Admission resumes after the ambiguity clears");
     need(receiver.valid&&receiver.acks==receiver.entries,"Every admitted entry receives exactly one boundary receipt");
     controlled.stop();
     Receiver missing_receiver;lab::WorkbenchAdapter missing(option_watch,true,&missing_receiver);missing_receiver.adapter=&missing;

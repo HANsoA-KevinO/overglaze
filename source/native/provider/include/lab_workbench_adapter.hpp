@@ -28,13 +28,13 @@ class WorkbenchAdapter final:public slboundary::Sink {
     std::uint32_t selected_viewport_=0; // reporting only; admission stays in bindings_
     bool self_configured_=false;         // reporting only; the binding layer decides
     mutable std::mutex mutex_;
-    // Self-configuring: a game thread that meets mutex_ held (the 16 ms status
+    // Every profile: a game thread that meets mutex_ held (the 16 ms status
     // snapshot, or another game thread) waits a bounded moment instead of
     // losing the call. Every holder copies fixed-size data only; snapshot()
     // does no allocation or COM release under it.
     std::unique_lock<std::mutex> game_lock() const noexcept {
         std::unique_lock lock(mutex_,std::try_to_lock);
-        if(!lock.owns_lock()&&self_configured_){++lock_waits_;
+        if(!lock.owns_lock()){++lock_waits_;
             for(unsigned spin=0;spin<256&&!lock.try_lock();++spin)std::this_thread::yield();}
         return lock;
     }
@@ -183,8 +183,8 @@ public:
     // thread's open ePresentStart decides the frame the Present is declared for
     // (slboundary::Bindings::present_boundary_of_frame).
     void present(std::uint64_t swapchain) noexcept;
-    void invalidate() noexcept {++epoch_;bindings_.present_boundary();}
-    void stop() noexcept {stopped_=true;copies_.stop();++epoch_;bindings_.present_boundary();}
+    void invalidate() noexcept {++epoch_;bindings_.hard_boundary();}
+    void stop() noexcept {stopped_=true;copies_.stop();++epoch_;bindings_.hard_boundary();}
     // Host worker, every poll, both tracks: whether the NR runtime (or an armed
     // research capture) would use an admitted frame now. Only then are
     // eOnlyValidNow input tags copied; otherwise they stay refused by name.

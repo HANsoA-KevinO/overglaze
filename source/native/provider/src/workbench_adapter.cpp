@@ -208,11 +208,13 @@ void WorkbenchAdapter::returned(const slboundary::Call& c) noexcept {
     if(c.api!=slboundary::Api::evaluate || !bindings_.target(c.feature))return;
     RejectedCall why;why.call=c.id;why.frame=r.binding.frame_index;
     strcpy_s(why.stage,"outer-admission");strcpy_s(why.reason,"metadata-lock-contention");
-    // Self-configuring, every refusal from here on follows the game's successful
-    // (or failed) original return with nothing of ours recorded: a skip that
-    // keeps ON and resets history. Only a nested call stays terminal. The
-    // pinned profile keeps its per-cause dispositions below.
-    if(self_configured_&&!c.parent)why.disposition=RejectedDisposition::skipped_before_insertion;
+    // Every refusal from here on follows the game's successful (or failed)
+    // original return with nothing of ours recorded: a skip that keeps ON and
+    // resets history; the runtime's skip budget still ends a run of them. Only
+    // a nested call stays terminal. The pinned profile keeps its constants
+    // bypass below. (It used to stay terminal here: one lock contention with
+    // the status snapshot stopped NR in 2077.)
+    if(!c.parent)why.disposition=RejectedDisposition::skipped_before_insertion;
     auto explain=[&](const char* stage,const char* reason){strncpy_s(why.stage,stage,_TRUNCATE);strncpy_s(why.reason,reason,_TRUNCATE);};
     bool admitted=false;struct RejectIncomplete {SlAdmissionSink* live;bool& admitted;const RejectedCall& why;
         ~RejectIncomplete(){if(live&&!admitted)live->unavailable(why);}} reject{live_,admitted,why};
