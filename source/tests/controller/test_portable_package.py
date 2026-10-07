@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "source/powershell/Package-Overglaze.ps1"
 POWERSHELL = shutil.which("powershell.exe")
 GIT = shutil.which("git")
-VERSION = "0.2.0-preview.1"
+VERSION = "0.2.0-preview.2"
 NAME = f"Overglaze-{VERSION}-win64"
 BINARIES = (
     "overglaze_viewer.exe", "overglazectl.exe", "overglaze_games.exe", "overglaze_launch.exe",
@@ -32,7 +32,7 @@ DOCUMENTS = (
     "SUPPORTED_GAMES.md", "CHANGELOG.md", "SECURITY.md", "CONTRIBUTING.md",
     "LICENSES/MIT.txt", "LICENSES/BSD-2-Clause.txt", "LICENSES/BSD-3-Clause.txt", "LICENSES/Apache-2.0.txt",
     "docs/MODEL.md", "docs/ADDING-A-GAME.md", "docs/TROUBLESHOOTING.md",
-    "docs/ARCHITECTURE.md", "docs/CONTROL-PROTOCOL.md", "docs/PORTABLE.md",
+    "docs/ARCHITECTURE.md", "docs/CONTROL-PROTOCOL.md", "docs/PORTABLE.md", "docs/INSTALLER.md",
 )
 
 
@@ -63,12 +63,15 @@ class PortablePackageTests(unittest.TestCase):
     def git(self, *args):
         return subprocess.run([GIT, "-C", str(self.repo), *args], check=True, capture_output=True)
 
-    def package(self, output=None, build=None, version=VERSION, succeeds=True):
-        result = subprocess.run([
+    def package(self, output=None, build=None, version=VERSION, succeeds=True, runtime=None):
+        arguments = [
             POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(SCRIPT),
             "-RepositoryRoot", str(self.repo), "-BuildDirectory", str(build or self.build),
             "-OutputDirectory", str(output or self.output), "-Version", version,
-        ], capture_output=True, text=True, errors="replace", timeout=45)
+        ]
+        if runtime is not None:
+            arguments += ["-RuntimeDirectory", str(runtime)]
+        result = subprocess.run(arguments, capture_output=True, text=True, errors="replace", timeout=45)
         if succeeds:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         else:
@@ -92,6 +95,8 @@ class PortablePackageTests(unittest.TestCase):
         manifest = self.manifest()
         self.assertTrue(manifest["source_dirty"])
         self.assertFalse(manifest["model_included"])
+        self.assertFalse(manifest["runtime_included"])
+        self.assertEqual(manifest["runtime_files"], [])
         self.assertEqual(manifest["version"], VERSION)
         self.assertNotIn(str(self.base), json.dumps(manifest))
         expected = {"app/" + name for name in BINARIES[:4]}
@@ -125,6 +130,14 @@ class PortablePackageTests(unittest.TestCase):
     def test_missing_input_fails_before_creating_stage(self):
         (self.build / "overglaze_viewer.exe").unlink()
         self.package(succeeds=False)
+        self.assertFalse(self.output.exists())
+
+    def test_unsigned_runtime_is_rejected_before_staging(self):
+        runtime = self.base / "runtime with spaces"
+        runtime.mkdir()
+        (runtime / "concrt140.dll").write_bytes(b"MZ unsigned fixture, never executable")
+        result = self.package(runtime=runtime, succeeds=False)
+        self.assertIn("Microsoft runtime signature refused", result.stderr)
         self.assertFalse(self.output.exists())
 
     def test_paths_and_version_cannot_escape_output(self):

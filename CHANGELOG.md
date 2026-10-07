@@ -2,7 +2,7 @@
 
 All notable changes to Overglaze are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.2.0-preview.1] - Unreleased
+## [0.2.0-preview.2] - Unreleased
 
 ### Changed
 
@@ -13,6 +13,8 @@ All notable changes to Overglaze are listed here. The format follows [Keep a Cha
 
 ### Added
 
+- Per-user Windows Setup with selectable stable installation location, shortcuts, application update/uninstall preflight, preserved user content, and application-local Microsoft C++ runtime DLLs.
+- Initial model configuration and model import from Settings, with reviewed-hash validation and no model download.
 - Original layered-ring brand mark, reproducible multi-size Windows icon, and embedded desktop application version information.
 - Settings & About with local model status, directory shortcuts, version and usage boundaries.
 - Allowlisted portable packaging with `Open-Overglaze.cmd`, licence texts, SHA-256 file manifest, archive checksum and source dirty-state reporting. Packaging refuses existing outputs and does not publish a release.

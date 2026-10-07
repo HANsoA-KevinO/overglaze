@@ -42,6 +42,8 @@ const wchar_t* kVerbs=L" <verb> ...\n"
     L"                a game installed by the pre-rename build (DLSS Lab, install state legacy): uninstall its files by\n"
     L"                their recorded hashes, rewrite the package under the new names, install -- as one operation\n"
     L"  model                             the user-supplied NR model: where it is looked for, present, reviewed version (read-only)\n"
+    L"  import-model <file>                validate and import your model; existing different files are not overwritten\n"
+    L"  app-check update|uninstall --root <folder> [--installer-text]    read-only application maintenance check\n"
     L"  repin <id|exe> --offline --no-anticheat --consent \"<text>\" [--progress] [--allow-unsigned-modules]\n"
     L"                [--denuvo-passive-coexistence]  re-adapt a changed game (controller track only): full preflight,\n"
     L"                uninstall, move the old package to app/adapters-retired/, generate the new one, install\n"
@@ -60,6 +62,12 @@ int wmain(int argc,wchar_t** argv){
     try{
         if(a.empty()||a[0]==L"--help"||a[0]==L"-h"){std::wcerr<<usage();return 2;}
         const auto verb=lab::utf8(a[0]);
+        if(verb=="app-check"){
+            if(a.size()<2||value(L"--root").empty())throw std::runtime_error("app-check needs update|uninstall and --root");
+            const auto result=lab::games::app_maintenance_check(value(L"--root"),lab::utf8(a[1]));
+            if(has(L"--installer-text"))std::cout<<result.message<<'\n';else std::cout<<lab::games::app_maintenance_json(result).dump(2)<<'\n';
+            return result.allowed?0:2;
+        }
         if(verb=="preflight"){if(a.size()<2)throw std::runtime_error("preflight needs a path");
             std::filesystem::path p=a[1];if(std::filesystem::is_directory(p)){const auto d=lab::games::discover(p);if(d.executables.size()!=1)throw std::runtime_error("Directory holds "+std::to_string(d.executables.size())+" executables; pass the game EXE");p=d.executables.front();}
             std::cout<<lab::games::preflight(p).to_json().dump(2)<<'\n';return 0;}
@@ -68,6 +76,9 @@ int wmain(int argc,wchar_t** argv){
         // Preflight above needs no root at all.
         const auto root=lab::root::resolve_self().root;
         lab::games::Manager m(root);
+        if(verb=="import-model"){if(a.size()<2)throw std::runtime_error("import-model needs a file");auto result=lab::games::model_json(m.import_model(a[1]));
+            result["scope"]="User-selected model validated; identical destination reused or a verified copy imported. No DLL loaded.";
+            std::cout<<result.dump(2)<<'\n';return 0;}
         // Said out loud on this command line or not at all. It never changes how
         // we treat the anti-tamper -- no patching, spoofing, debugging or dumping,
         // with or without it -- only whether the refusal was deliberate.

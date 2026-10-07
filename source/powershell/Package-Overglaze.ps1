@@ -10,14 +10,18 @@ it does not claim that arbitrary supplied binaries were built from that commit.
 #>
 [CmdletBinding()]
 param(
-    [string]$RepositoryRoot = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent),
+    [string]$RepositoryRoot = '',
     [Parameter(Mandatory = $true)][string]$BuildDirectory,
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
+    # Optional application-local x64 Microsoft.VC143.CRT redistributable directory.
+    # Only the named, signed Microsoft runtime files below can enter the payload.
+    [string]$RuntimeDirectory = '',
     [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$')]
-    [string]$Version = '0.2.0-preview.1'
+    [string]$Version = '0.2.0-preview.2'
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if (-not $RepositoryRoot) { $RepositoryRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
 
 function Get-LocalPath([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) { throw 'Empty path is not permitted.' }
@@ -105,7 +109,7 @@ $documents = @(
     'SUPPORTED_GAMES.md', 'CHANGELOG.md', 'SECURITY.md', 'CONTRIBUTING.md',
     'LICENSES/MIT.txt', 'LICENSES/BSD-2-Clause.txt', 'LICENSES/BSD-3-Clause.txt', 'LICENSES/Apache-2.0.txt',
     'docs/MODEL.md', 'docs/ADDING-A-GAME.md', 'docs/TROUBLESHOOTING.md',
-    'docs/ARCHITECTURE.md', 'docs/CONTROL-PROTOCOL.md', 'docs/PORTABLE.md'
+    'docs/ARCHITECTURE.md', 'docs/CONTROL-PROTOCOL.md', 'docs/PORTABLE.md', 'docs/INSTALLER.md'
 )
 $inputs = @()
 foreach ($entry in $binaryMap.GetEnumerator()) {
@@ -113,6 +117,42 @@ foreach ($entry in $binaryMap.GetEnumerator()) {
 }
 foreach ($document in $documents) {
     $inputs += [pscustomobject]@{ Source = (Join-Path $RepositoryRoot $document); Destination = $document }
+}
+$runtimeNames = @(
+    'concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll',
+    'msvcp140_atomic_wait.dll', 'msvcp140_codecvt_ids.dll', 'vccorlib140.dll',
+    'vcruntime140.dll', 'vcruntime140_1.dll', 'vcruntime140_threads.dll'
+)
+if ($RuntimeDirectory) {
+    # Use this host's security module even if a PowerShell 7 parent passed a
+    # PSModulePath to a Windows PowerShell 5 child (or vice versa).
+    Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+    $RuntimeDirectory = Get-LocalPath $RuntimeDirectory
+    if (-not (Test-Path -LiteralPath $RuntimeDirectory -PathType Container)) { throw 'Missing Microsoft runtime directory.' }
+    foreach ($runtimeName in $runtimeNames) {
+        $runtimeFile = Join-Path $RuntimeDirectory $runtimeName
+        Assert-NoReparse $runtimeFile
+        $runtimeSignature = Get-AuthenticodeSignature -LiteralPath $runtimeFile
+        if ($runtimeSignature.Status -ne 'Valid' -or $null -eq $runtimeSignature.SignerCertificate -or
+            $runtimeSignature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation(?:,|$)') {
+            throw "Microsoft runtime signature refused: $runtimeName"
+        }
+        $runtimeInfo = (Get-Item -LiteralPath $runtimeFile).VersionInfo
+        if ($runtimeInfo.FileMajorPart -ne 14) { throw "Unexpected Microsoft runtime version: $runtimeName" }
+        $runtimeStream = [IO.File]::OpenRead($runtimeFile)
+        $runtimeReader = [IO.BinaryReader]::new($runtimeStream)
+        try {
+            if ($runtimeStream.Length -lt 64 -or $runtimeReader.ReadUInt16() -ne 0x5A4D) { throw 'Runtime is not a PE image.' }
+            $runtimeStream.Position = 0x3C
+            $runtimePeOffset = $runtimeReader.ReadUInt32()
+            if ($runtimePeOffset -gt $runtimeStream.Length - 6) { throw 'Invalid runtime PE header.' }
+            $runtimeStream.Position = $runtimePeOffset
+            if ($runtimeReader.ReadUInt32() -ne 0x00004550 -or $runtimeReader.ReadUInt16() -ne 0x8664) {
+                throw "Microsoft runtime must be x64: $runtimeName"
+            }
+        } finally { $runtimeReader.Dispose() }
+        $inputs += [pscustomobject]@{ Source = $runtimeFile; Destination = "app/$runtimeName" }
+    }
 }
 [long]$bytes = 0
 foreach ($inputFile in $inputs) {
@@ -187,6 +227,8 @@ $manifest = [ordered]@{
     source_dirty = $sourceDirty
     provenance_scope = 'Checkout observed at packaging time; supplied binary provenance is not independently verified.'
     model_included = $false
+    runtime_included = [bool]$RuntimeDirectory
+    runtime_files = @(if ($RuntimeDirectory) { $runtimeNames })
     files = $files
 }
 Write-Utf8 (Join-Path $stage 'app/release-manifest.json') (($manifest | ConvertTo-Json -Depth 6) + "`n")

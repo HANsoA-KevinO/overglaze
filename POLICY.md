@@ -51,7 +51,7 @@ These recipes are never used by default. The desktop program refuses these games
 
 ## System
 
-Overglaze does not change driver settings, driver profiles, Windows security settings, file permissions, or the registry.
+Overglaze does not change driver settings, driver profiles, Windows security settings or file permissions. The optional Windows installer writes only its own per-user installation/uninstall registration and shortcuts. The portable application does not write registry settings.
 
 ## Network and privacy
 

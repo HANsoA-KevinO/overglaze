@@ -8,11 +8,11 @@ Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Ren
 
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
-## 0.2.0-preview.1
+## 0.2.0-preview.2
 
 This preview updates the desktop game library and the in-game panel with a shared charcoal-and-green design and an original layered-ring icon. The library adds search and status filters, a selected game's next action, and expandable check and installation details. *Settings & About* shows the local model status. The panel keeps the main NR controls together and puts model read-backs and troubleshooting details under *Advanced & Diagnostics*.
 
-The portable ZIP includes `Open-Overglaze.cmd`, licence texts and a file-hash manifest; the adjacent `.zip.sha256` checks the archive. See [Portable preview](docs/PORTABLE.md) for running or building a package. The model is still supplied by you. This interface and packaging preview does not certify every listed game, or establish new image-quality, performance or stability results.
+The Windows Setup adds a selectable installation folder, shortcuts, update/uninstall handling and first-launch model import. Settings, models and saved captures are retained across updates; game plugins are updated separately in Game Library. See [Windows installer](docs/INSTALLER.md). The portable ZIP remains available with licence texts and file checksums. The model is still supplied by you. This preview does not add game certifications or new image-quality, performance or stability results.
 
 ## What it does
 
@@ -36,7 +36,7 @@ Overglaze inserts the NR model, often called "DLSS 5", into games that already u
 - An NVIDIA GeForce RTX 50 series GPU. Tested on an RTX 5090. Other GPUs are not supported.
 - NVIDIA driver 615 or newer. Tested on 617.14.
 - 64-bit Windows 11. This is the only OS it has been tested on.
-- Microsoft Visual C++ v14 x64 runtime, at least as recent as the build tools used for the package. See [Microsoft's runtime downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist). It is not bundled or installed automatically.
+- Microsoft Visual C++ v14 x64 runtime. Setup and runtime-enabled ZIPs include signed application-local DLLs. Packages built without them require a separately installed runtime at least as recent as the build tools; see [Microsoft's runtime downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
 - A DX12 game that uses DLSS Ray Reconstruction or Super Resolution, through Streamline or by calling NGX directly. See [SUPPORTED_GAMES.md](SUPPORTED_GAMES.md).
 - Your own copy of `nvngx_dlssnr.dll` (see [The model](#the-model)).
 - Free disk space. Installing keeps a reserve free on the drive that holds Overglaze's data folder (currently 30 GiB).
@@ -53,8 +53,8 @@ Overglaze checks the file's SHA-256 against the versions it knows and refuses an
 
 > The desktop program and the in-game panel are currently in Chinese. Labels in this README are English translations.
 
-1. **Get the program.** Extract the whole `Overglaze-<version>-win64.zip` to a writable folder on a local drive. Open `Open-Overglaze.cmd` or `app\overglaze_viewer.exe`. See [docs/PORTABLE.md](docs/PORTABLE.md) for package details.
-2. **Place the model.** Copy your `nvngx_dlssnr.dll` into the `app\models\` folder next to the program.
+1. **Get the program.** Run the Setup and choose a local installation folder, or extract the whole portable ZIP. Open Overglaze from its shortcut or portable launcher.
+2. **Import your model.** Select your own model DLL in the initial configuration screen or Settings. It is verified and copied into the application's models folder. Manual placement also works.
 3. **Add a game.** On the Game Library page, choose *Add game* and paste the game's install folder or its EXE. A read-only check runs: store, NVIDIA modules and their signatures, anti-cheat and Denuvo markers, other injectors in the folder, and which DLSS path the game uses.
 4. **Install.** Close the game. Select it in the library, choose *Prepare installation* to generate the adapter package, then choose *Install* and review the confirmation. Overglaze writes only its own files and records exactly what it wrote, so it can remove exactly those files later.
 5. **Play.** Start the game the usual way and turn on DLSS: Ray Reconstruction if the game offers it, otherwise Super Resolution or DLAA. Press **Insert** to open the panel and enable NR.

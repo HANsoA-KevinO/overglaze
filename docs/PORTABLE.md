@@ -15,7 +15,9 @@ the extracted folder writable. A ZIP is a distribution format, not a place to
 run the program from. No driver, registry, security setting or Windows service is
 changed by extracting or opening this package.
 
-The binaries use the Microsoft Visual C++ v14 x64 runtime. If Windows reports
+Runtime-enabled packages carry the signed Microsoft Visual C++ v14 x64 runtime
+DLLs beside the programs (`runtime_included` in the manifest). They do not
+install a global runtime. For packages built without those DLLs, if Windows reports
 that `MSVCP140.dll`, `VCRUNTIME140.dll` or `VCRUNTIME140_1.dll` is missing, install
 the x64 runtime using [Microsoft's official instructions](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
 Its version must be at least as recent as the MSVC tools used to build the package.
@@ -34,10 +36,10 @@ After building the public controller track (see [CONTRIBUTING.md](../CONTRIBUTIN
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File source/powershell/Package-Overglaze.ps1 `
   -BuildDirectory .\build -OutputDirectory .\data\packages `
-  -Version 0.2.0-preview.1
+  -Version 0.2.0-preview.2
 ```
 
-This makes an unpacked `Overglaze-0.2.0-preview.1-win64` folder, the matching ZIP,
+This makes an unpacked `Overglaze-0.2.0-preview.2-win64` folder, the matching ZIP,
 and a `.zip.sha256` checksum. It does not create a Git tag, release or upload.
 Existing outputs are refused. Use a new output directory for another attempt;
 a failed attempt may leave its partial output for inspection. The script never
@@ -49,6 +51,12 @@ local root overrides, logs, debug symbols and any other unlisted build output.
 Every input and output ancestor is checked for reparse points. Input payloads
 are bounded to 512 MiB. Run the build and packaging from a stable checkout with
 no concurrent writers.
+
+For the Windows installer, additionally pass `-RuntimeDirectory` pointing to
+the x64 `Microsoft.VC143.CRT` redistributable directory. This adds only the ten
+named Microsoft-signed runtime DLLs to `app/`; it does not include any model.
+The executable installer and its update/uninstall behaviour are documented in
+[INSTALLER.md](INSTALLER.md).
 
 `app/release-manifest.json` records the requested preview version, the checkout's
 Git commit and dirty state observed at packaging time, and the SHA-256 and size

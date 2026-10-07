@@ -12,6 +12,20 @@ Dependencies are fetched at pinned versions when building; their source is not c
 | ReShade (derived source) | 6.8.0 | BSD-3-Clause | State-block structure in `binding_state.hpp` |
 | NVIDIA Streamline (public headers, adapted structures) | pinned commit | MIT | Declarations of the public Streamline interface; option-structure layouts in `lab_rr_options.hpp` |
 | BakingLab ACES fit | — | MIT | "Soft ACES" viewing curve in the desktop viewer |
+| Microsoft Visual C++ v14 x64 runtime (installer and runtime-enabled portable packages) | Packaged file versions are recorded in the release manifest | Microsoft proprietary redistributable | Application-local C++ runtime; not covered by Overglaze's MIT licence |
+| Inno Setup | Compiler 6.7.3 | Inno Setup licence | Windows Setup and uninstaller; copyright/website notices remain in the generated installer |
+
+Runtime-enabled packages include only unmodified, signed x64 files from the
+Visual Studio `Microsoft.VC143.CRT` redistributable directory. Their Microsoft
+copyright and signature remain intact. These files are subject to Microsoft's
+terms, not the open-source licences reproduced below. See Microsoft's
+[redistribution documentation](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files)
+and the [Visual Studio distribution list](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution).
+
+The Simplified Chinese wizard messages in `source/installer/ChineseSimplified.isl`
+come from the official [Inno Setup translations](https://jrsoftware.org/files/istrans/)
+repository, maintained by Zhenghan Yang (Kira). The translation's original header
+is retained. It is an installer translation, not original Overglaze artwork or code.
 
 Not included, not covered by this file:
 

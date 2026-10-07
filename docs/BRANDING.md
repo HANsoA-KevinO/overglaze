@@ -24,7 +24,7 @@ untouched. Generated ICO files belong in the build directory, not source control
 The desktop executable's resource template is
 `source/native/controller/resources/application.rc.in`. Resource 101 is the
 application icon. Resource 1 contains Windows VERSIONINFO, currently
-`0.2.0-preview.1` (`0,2,0,1` numerically), marked as prerelease. Its internal and
+`0.2.0-preview.2` (`0,2,0,2` numerically), marked as prerelease. Its internal and
 original filenames identify `overglaze_viewer.exe`. Do not attach that resource
 unchanged to a different executable.
 

@@ -66,7 +66,7 @@ class ExecutableBrandTests(unittest.TestCase):
         self.assertGreater(size, 0)
         data = ctypes.create_string_buffer(size)
         self.assertTrue(version.GetFileVersionInfoW(str(EXE), 0, size, data))
-        expected = {"ProductName": "Overglaze", "ProductVersion": "0.2.0-preview.1",
+        expected = {"ProductName": "Overglaze", "ProductVersion": "0.2.0-preview.2",
                     "OriginalFilename": "overglaze_viewer.exe", "CompanyName": "HANsoA-KevinO"}
         for key, value in expected.items():
             pointer, length = ctypes.c_void_p(), wintypes.UINT()

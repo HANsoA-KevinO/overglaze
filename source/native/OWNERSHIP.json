@@ -906,6 +906,15 @@
   "controller/tests/game_manager_ui_tests.cpp": {
    "track": "controller"
   },
+  "controller/tests/app_maintenance_tests.cpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_model_setup.hpp": {
+   "track": "controller"
+  },
+  "controller/tests/model_setup_tests.cpp": {
+   "track": "controller"
+  },
   "runtime/tests/color_test_gpu.hpp": {
    "track": "runtime"
   }

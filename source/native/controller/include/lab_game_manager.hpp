@@ -165,6 +165,16 @@ struct ModelStatus {
     std::string sha256,label,error;
 };
 json model_json(const ModelStatus&);
+// Installer checks read only the selected application root and existing records.
+// They never construct Manager, create directories or modify a game.
+struct AppMaintenanceStatus {
+    std::filesystem::path root;
+    std::string operation,message;
+    bool allowed=true;
+    json blockers=json::array();
+};
+AppMaintenanceStatus app_maintenance_check(const std::filesystem::path&,const std::string& operation);
+json app_maintenance_json(const AppMaintenanceStatus&);
 struct PackageOptions {
     // How the game should load us. Default is the original root dxgi.dll proxy.
     Loader loader;
@@ -257,6 +267,9 @@ public:
     // package under the new names, install -- refused for any other game.
     void migrate(const std::string& id,bool offline,bool no_anticheat,const std::string& consent,const Progress& progress={});
     ModelStatus model_status() const;
+    // User-selected file, reviewed SHA only. Existing different content is
+    // refused; a matching model is reused. No DLL is loaded by this operation.
+    ModelStatus import_model(const std::filesystem::path&);
     std::filesystem::path models_dir() const;  // <root>\app\models
     std::filesystem::path model_file() const;  // models_dir()\nvngx_dlssnr.dll
     void import_known_installations(); // registry only, no game writes

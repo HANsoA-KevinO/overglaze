@@ -35,7 +35,9 @@ fs::path local(fs::path p){
     for(const auto& part:p.relative_path()){const auto n=part.native();need(!n.empty()&&n.back()!=L'.'&&n.back()!=L' ',"路径末尾不能含空格或句点");}
     winpath::require_no_reparse(p);return fs::canonical(p);
 }
-void directory(const fs::path& p){winpath::require_no_reparse(p.parent_path());if(!fs::exists(p))need(fs::create_directory(p),"无法创建管理目录");winpath::require_no_reparse(p);need(fs::is_directory(p),"管理路径不是目录");}
+void directory(const fs::path& p){winpath::require_no_reparse(p.parent_path());if(!fs::exists(p)){std::error_code ec;
+    const bool made=fs::create_directory(p,ec);need(made||(!ec&&fs::is_directory(p)),"无法创建管理目录");}
+    winpath::require_no_reparse(p);need(fs::is_directory(p),"管理路径不是目录");}
 struct Pins {
     std::vector<std::unique_ptr<Handle>> handles;
     void parents(fs::path p){for(;;){winpath::require_no_reparse(p);auto h=std::make_unique<Handle>(CreateFileW(p.c_str(),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));need(h->valid(),"目录被占用或权限不足");handles.push_back(std::move(h));auto next=p.parent_path();if(next==p)break;p=next;}}
@@ -1321,6 +1323,103 @@ void Manager::import_known_installations(){for(const auto& p:policies_){if(p.gam
     if(fs::is_regular_file(exe,ec)&&(fs::is_regular_file(p.game_root/identity::kInstallationFile,ec)||fs::is_regular_file(p.game_root/identity::legacy::kInstallationFile,ec)))try{add(exe);}catch(...){}}}
 fs::path Manager::models_dir()const{return root_/L"app"/L"models";}
 fs::path Manager::model_file()const{return models_dir()/L"nvngx_dlssnr.dll";}
+ModelStatus Manager::import_model(const fs::path& source_path){
+    const auto source=local(source_path);Pins pins;pins.parents(source.parent_path());
+    const auto source_handle=pins.file(source);LARGE_INTEGER size{};
+    need(GetFileSizeEx(source_handle,&size)&&size.QuadPart>0&&size.QuadPart<=512LL*1024*1024,"模型大小不在导入范围内");
+    const auto hash=handle_digest(source_handle);const auto* reviewed=lab::model::known(hash);
+    need(model_sha256_.empty()?reviewed!=nullptr:hash==model_sha256_,"模型版本未识别：文件未导入，请选择支持的原版模型");
+    Writer writer(store_);directory(root_/L"app");directory(models_dir());pins.parents(models_dir());
+    const auto destination=model_file();
+    if(fs::exists(destination)){
+        need(handle_digest(pins.file(destination))==hash,"模型目录已有不同文件；请先核对该文件，不会自动覆盖");
+    }else{
+        const auto staging=models_dir()/wide(".model-import-"+uuid()+".tmp");
+        try{copy_handle(source_handle,staging,hash);
+            need(MoveFileExW(staging.c_str(),destination.c_str(),MOVEFILE_WRITE_THROUGH)!=FALSE,"模型导入未完成：目标文件已存在或目录不可写");}
+        catch(...){DeleteFileW(staging.c_str());throw;}
+    }
+    ModelStatus out;out.path=destination;out.present=out.known=true;out.sha256=hash;
+    out.label=reviewed?reviewed->label:"test model";return out;
+}
+
+AppMaintenanceStatus app_maintenance_check(const fs::path& selected,const std::string& operation){
+    AppMaintenanceStatus out;out.root=selected;out.operation=operation;
+    auto block=[&](const std::string& code,const std::string& message,const fs::path& path=fs::path{},const std::string& title=std::string{}){
+        out.allowed=false;json row={{"code",code},{"message",message}};
+        if(!path.empty())row["path"]=text(path);if(!title.empty())row["title"]=title;out.blockers.push_back(std::move(row));};
+    try{
+        need(operation=="update"||operation=="uninstall","未知应用维护操作");
+        need(selected.is_absolute()&&selected==selected.lexically_normal()&&selected!=selected.root_path(),"请选择规范的本地应用目录");
+        const auto spelling=selected.native();need(spelling.size()>3&&spelling[1]==L':'&&spelling.find(L':',2)==std::wstring::npos,"应用目录不能是网络、设备或替代数据流路径");
+        need(GetDriveTypeW(selected.root_path().c_str())==DRIVE_FIXED,"应用目录必须在本地固定磁盘上");
+        for(const auto& part:selected.relative_path()){const auto n=part.native();need(!n.empty()&&n.back()!=L'.'&&n.back()!=L' ',"路径末尾不能有空格或句点");}
+        for(auto p=selected;!p.empty();){const auto a=GetFileAttributesW(p.c_str());
+            if(a==INVALID_FILE_ATTRIBUTES)need(GetLastError()==ERROR_FILE_NOT_FOUND||GetLastError()==ERROR_PATH_NOT_FOUND,"应用目录不可读取");
+            else need(!(a&FILE_ATTRIBUTE_REPARSE_POINT),"应用目录含链接，请选择普通文件夹");
+            const auto parent=p.parent_path();if(parent==p)break;p=parent;}
+        if(!fs::exists(selected)){need(operation=="update","应用目录已不存在，请检查卸载记录");out.message="可以安装。";return out;}
+        need(fs::is_directory(selected),"应用路径不是文件夹");out.root=fs::canonical(selected);
+        const auto manifest=out.root/L"app"/L"release-manifest.json";
+        const auto marker=out.root/L"data"/L"settings"/L"application-install.json";
+        bool recognised=false;
+        if(fs::exists(manifest)){const auto j=read(manifest);
+            need(j.is_object()&&j.value("schema","")=="overglaze-release-v2"&&j.value("platform","")=="windows-x64"&&j.contains("version")&&j.at("version").is_string(),"应用版本清单无效");recognised=true;}
+        if(fs::exists(marker)){const auto j=read(marker);
+            need(j.is_object()&&j.value("schema","")=="overglaze-application-install-v1"&&j.value("product","")=="overglaze"&&
+                winpath::same_spelling(wide(j.at("root").get<std::string>()),out.root),"应用安装记录与目录不匹配");recognised=true;}
+        if(!recognised){need(operation=="update"&&fs::is_empty(out.root),"所选目录已有其他内容；请选择空目录或既有 Overglaze 安装目录");out.message="可以安装。";return out;}
+        // The caller itself is the preflight helper during uninstall. Any other
+        // process mapped from this application directory blocks replacement.
+        Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0));need(snapshot.valid(),"无法检查应用进程");
+        PROCESSENTRY32W proc{sizeof(proc)};need(Process32FirstW(snapshot.value,&proc)!=FALSE,"无法枚举应用进程");
+        std::vector<PROCESSENTRY32W> processes;std::map<DWORD,DWORD> parents;
+        do{need(processes.size()<16384,"应用进程检查超出范围");processes.push_back(proc);parents[proc.th32ProcessID]=proc.th32ParentProcessID;}
+        while(Process32NextW(snapshot.value,&proc));need(GetLastError()==ERROR_NO_MORE_FILES,"应用进程检查不完整");
+        // Inno's original uninstaller waits for a temporary worker, which in
+        // turn launches this helper. Exempt only that exact owned uninstaller
+        // on our ancestry chain, not every process named unins000.exe.
+        std::set<DWORD> ancestors;DWORD ancestor=GetCurrentProcessId();
+        for(unsigned depth=0;depth<16;++depth){const auto it=parents.find(ancestor);if(it==parents.end()||!it->second||!ancestors.insert(it->second).second)break;ancestor=it->second;}
+        const auto prefix=out.root.native()+L"\\";
+        for(const auto& process_info:processes){const auto& proc=process_info;if(proc.th32ProcessID==GetCurrentProcessId())continue;Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,proc.th32ProcessID));
+            if(!process.valid()){if(wcsncmp(proc.szExeFile,L"overglaze",9)==0)block("process-unreadable","无法确认某个 Overglaze 进程已退出");continue;}
+            std::wstring image(32768,0);DWORD count=DWORD(image.size());if(!QueryFullProcessImageNameW(process.value,0,image.data(),&count))continue;image.resize(count);
+            if(operation=="uninstall"&&ancestors.contains(proc.th32ProcessID)&&winpath::same_spelling(fs::path(image),out.root/L"app/unins000.exe"))continue;
+            if(image.size()>prefix.size()&&CompareStringOrdinal(image.data(),int(prefix.size()),prefix.data(),int(prefix.size()),TRUE)==CSTR_EQUAL)
+                block("application-running","请先退出应用："+text(fs::path(image).filename()),fs::path(image));
+        }
+        const auto store=out.root/L"data"/L"settings"/L"plugin-manager";
+        std::map<std::string,Entry> games;
+        if(fs::exists(store)){winpath::require_no_reparse(store);need(fs::is_directory(store),"游戏登记路径无效");
+            const auto registered=registry(store);for(const auto& row:registered.at("entries")){const auto e=entry(row);games.emplace(e.id,e);
+                if(running(e.exe))block("game-running","请先退出游戏："+e.title,e.exe,e.title);
+                if(operation=="uninstall")for(const auto& relative:{fs::path(L"overglaze.install.json"),fs::path(L"overglaze/overglaze.install.json"),fs::path(L"dlsslab.install.json"),fs::path(L"dlsslab/dlsslab.install.json")}){
+                    const auto config=e.exe.parent_path()/relative;if(!fs::exists(config))continue;const auto j=read(config);
+                    if(j.contains("output_root")&&j.at("output_root").is_string()&&winpath::same_spelling(wide(j.at("output_root").get<std::string>()),out.root/L"data"))
+                        block("game-installed","请先在游戏库卸载插件："+e.title,e.exe,e.title);
+                }}
+            unsigned boxes=0;for(const auto& box:fs::directory_iterator(store)){
+                winpath::require_no_reparse(box.path());if(!box.is_directory()||box.path().filename()==L"_models")continue;
+                need(++boxes<=512,"游戏维护记录数量超出检查范围");const auto id=text(box.path().filename());
+                const auto found=games.find(id);const std::string title=found==games.end()?id:found->second.title;
+                for(const auto& name:{L"transaction.json",L"install-receipt.json"}){const auto file=box.path()/name;if(!fs::exists(file))continue;
+                    const auto j=read(file);need(j.is_object()&&j.contains("state")&&j.at("state").is_string(),"游戏安装记录无效："+title);
+                    const auto state=j.at("state").get<std::string>();const bool transaction=std::wstring_view(name)==L"transaction.json";
+                    if(transaction){need((j.value("schema","")=="overglaze-install-transaction-v1"||j.value("schema","")=="dlsslab-install-transaction-v1")&&j.value("id","")==id,"游戏事务身份无效："+title);
+                        need(state=="installed"||state=="installing"||state=="removing"||state=="removed","游戏事务状态无效："+title);}
+                    else need(state=="installed"||state=="uninstalled","游戏回执状态无效："+title);
+                    const bool gone=transaction?state=="removed":state=="uninstalled";
+                    if(!gone&&(operation=="uninstall"||state!="installed"))block("game-dependency","请先在游戏库处理安装记录："+title,file,title);
+                }
+            }
+        }
+    }catch(const std::exception& e){block("check-incomplete",e.what(),selected);}
+    out.message=out.allowed?"可以继续。":"请先处理以下项目：";
+    if(!out.allowed)for(const auto& item:out.blockers)out.message+="\n"+item.at("message").get<std::string>();
+    return out;
+}
+json app_maintenance_json(const AppMaintenanceStatus& s){return {{"schema","overglaze-app-maintenance-v1"},{"root",text(s.root)},{"operation",s.operation},{"allowed",s.allowed},{"message",s.message},{"blockers",s.blockers}};}
 // What the user has supplied. Never throws for an absent or unreadable file:
 // that is exactly the state the page has to show in words.
 ModelStatus Manager::model_status()const{ModelStatus m;m.path=model_file();std::error_code ec;
