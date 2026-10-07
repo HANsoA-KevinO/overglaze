@@ -84,7 +84,7 @@ On the Streamline route, the viewport and depth type are read from the game's ow
    - **Steam:** set the launch option
 
      ```
-     "<Overglaze folder>\overglaze_launch.exe" %command%
+     "<Overglaze root>\app\overglaze_launch.exe" %command%
      ```
 
      The launcher starts the game unchanged. The first time you press Insert with the game in front, Overglaze loads and the panel opens. For a game without a late-load package, the launcher just starts it.
