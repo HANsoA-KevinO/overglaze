@@ -61,20 +61,22 @@ Name: "chinesesimplified"; MessagesFile: "{#AddBackslash(SourcePath)}ChineseSimp
 [CustomMessages]
 english.DesktopShortcut=Create a desktop shortcut
 english.LaunchProgram=Open Overglaze
-english.WelcomeLabel=Install Overglaze, then add your games from the application. Your NVIDIA model is imported separately.
+english.WelcomeTitle=Install Overglaze
+english.WelcomeLabel=Install Overglaze. Import your model and add games in the app.
 english.FixedRoot=Overglaze is already installed at %1. Update it at that location so existing game links keep working. To move it, first remove its game plugins and uninstall the application.
-english.GuardFailed=Overglaze could not verify whether this operation is safe. No application files have been changed. Open Overglaze to resolve its game installations, then try again.
+english.GuardFailed=Installation status could not be checked. Open Overglaze, review game installations, and retry.
 english.Blocked=Overglaze cannot continue yet:
 english.NoHelper=Overglaze's installation checker is missing. Restore the application files before trying to uninstall.
 english.Preserved=Your settings, captures, imported model and game recovery records are kept.
 chinesesimplified.DesktopShortcut=创建桌面快捷方式
 chinesesimplified.LaunchProgram=打开 Overglaze
-chinesesimplified.WelcomeLabel=安装 Overglaze 后，在应用中添加游戏。NVIDIA 模型将在首次使用时单独导入。
-chinesesimplified.FixedRoot=Overglaze 已安装在 %1。请在原位置更新，以保留现有游戏的关联。需要移动时，请先卸载游戏插件，再卸载应用。
-chinesesimplified.GuardFailed=无法确认当前是否可以安全执行。应用文件尚未改动。请打开 Overglaze 处理游戏安装状态后重试。
+chinesesimplified.WelcomeTitle=安装 Overglaze
+chinesesimplified.WelcomeLabel=安装后，在应用中导入模型并添加游戏。
+chinesesimplified.FixedRoot=请在原目录 %1 更新。迁移目录前，先卸载游戏插件和应用。
+chinesesimplified.GuardFailed=安装状态检查失败。请在应用中检查游戏安装记录后重试。
 chinesesimplified.Blocked=暂时无法继续：
-chinesesimplified.NoHelper=应用安装检查程序缺失。请先恢复应用文件，再尝试卸载。
-chinesesimplified.Preserved=设置、采集、导入的模型和游戏恢复记录将会保留。
+chinesesimplified.NoHelper=检查程序缺失。请修复应用后再卸载。
+chinesesimplified.Preserved=保留模型、设置、采集和恢复记录。
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:DesktopShortcut}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -124,6 +126,7 @@ begin
   PreviousRoot := '';
   RegQueryStringValue(HKCU, UninstallKey, 'InstallLocation', PreviousRoot);
   WizardForm.WelcomeLabel2.Caption := CustomMessage('WelcomeLabel');
+  WizardForm.WelcomeLabel1.Caption := CustomMessage('WelcomeTitle');
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;

@@ -2,7 +2,14 @@
 
 All notable changes to Overglaze are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.2.0-preview.2] - Unreleased
+## [0.2.0-preview.3] - Unreleased
+
+### Changed
+
+- Shortened desktop, first-run, in-game panel and installer copy. Removed slogans and repeated explanations; retained installation consent, actual status and diagnostic details.
+- Renamed Settings & About to Settings. Model configuration and empty states use direct labels.
+
+## [0.2.0-preview.2] - 2026-10-07
 
 ### Changed
 

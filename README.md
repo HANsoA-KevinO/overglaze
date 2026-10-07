@@ -8,9 +8,9 @@ Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Ren
 
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
-## 0.2.0-preview.2
+## 0.2.0-preview.3
 
-This preview updates the desktop game library and the in-game panel with a shared charcoal-and-green design and an original layered-ring icon. The library adds search and status filters, a selected game's next action, and expandable check and installation details. *Settings & About* shows the local model status. The panel keeps the main NR controls together and puts model read-backs and troubleshooting details under *Advanced & Diagnostics*.
+This preview uses shorter, direct interface labels and removes slogans and repeated help. The desktop game library provides search, status filters, game actions and expandable checks. Settings shows the local model status. The in-game panel groups the NR controls and keeps read-backs and troubleshooting details under Advanced & Diagnostics.
 
 The Windows Setup adds a selectable installation folder, shortcuts, update/uninstall handling and first-launch model import. Settings, models and saved captures are retained across updates; game plugins are updated separately in Game Library. See [Windows installer](docs/INSTALLER.md). The portable ZIP remains available with licence texts and file checksums. The model is still supplied by you. This preview does not add game certifications or new image-quality, performance or stability results.
 

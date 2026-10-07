@@ -150,7 +150,7 @@ struct View {
     void select_model(){if(!manager_allowed||model_job.valid())return;
         std::vector<wchar_t> path(32768);OPENFILENAMEW dialog{sizeof(dialog)};dialog.hwndOwner=window;
         dialog.lpstrFilter=L"NVIDIA NR model (nvngx_dlssnr.dll)\0nvngx_dlssnr.dll\0DLL files (*.dll)\0*.dll\0\0";
-        dialog.lpstrFile=path.data();dialog.nMaxFile=DWORD(path.size());dialog.lpstrTitle=L"选择你已拥有的 nvngx_dlssnr.dll";
+        dialog.lpstrFile=path.data();dialog.nMaxFile=DWORD(path.size());dialog.lpstrTitle=L"选择 NR 模型";
         dialog.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR|OFN_DONTADDTORECENT|OFN_EXPLORER;
         if(!GetOpenFileNameW(&dialog)){const auto code=CommDlgExtendedError();if(code)setup_error="无法打开文件选择窗口（Windows "+std::to_string(code)+"）";return;}
         const std::filesystem::path selected_model(path.data());const auto root=library_root().parent_path();setup_error.clear();setup_importing=true;startup_model_check=false;
@@ -245,41 +245,41 @@ struct View {
         if(lab::product::navigation("游戏库",games_page,{116*dpi,42*dpi}))games_page=true;mark("page.games");ImGui::SameLine(0,6*dpi);
         if(lab::product::navigation("采集浏览",!games_page,{116*dpi,42*dpi}))games_page=false;mark("page.captures");
         ImGui::SameLine(ImGui::GetWindowWidth()-154*dpi);
-        if(ImGui::Button("设置与关于",{126*dpi,40*dpi})){about=true;about_error.clear();ImGui::OpenPopup("设置与关于##product");check_model();}
+        if(ImGui::Button("设置",{126*dpi,40*dpi})){about=true;about_error.clear();ImGui::OpenPopup("设置##product");check_model();}
         mark("app.about");
-        if(setup_requested&&manager_allowed){setup_requested=false;ImGui::OpenPopup("开始使用 Overglaze##model-setup");}
+        if(setup_requested&&manager_allowed){setup_requested=false;ImGui::OpenPopup("模型配置##model-setup");}
         ImGui::SetNextWindowPos({io.DisplaySize.x*.5f,io.DisplaySize.y*.5f},ImGuiCond_Appearing,{.5f,.5f});
         ImGui::SetNextWindowSize({std::min(640*dpi,io.DisplaySize.x-48*dpi),0},ImGuiCond_Appearing);
-        if(ImGui::BeginPopupModal("开始使用 Overglaze##model-setup",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+        if(ImGui::BeginPopupModal("模型配置##model-setup",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
             lab::product::wordmark(dpi);ImGui::Dummy({0,16*dpi});
             const bool ready=model_checked&&model.known&&model.error.empty();
-            lab::product::eyebrow("01  /  配置本地模型");ImGui::Spacing();
-            ImGui::PushFont(nullptr,26);ImGui::TextUnformatted(ready?"模型已准备好":"让游戏画面多一层可能");ImGui::PopFont();
-            ImGui::TextWrapped("选择你已拥有的 nvngx_dlssnr.dll。Overglaze 会校验并导入本地副本，然后即可添加游戏。");
+            ImGui::Spacing();
+            ImGui::PushFont(nullptr,26);ImGui::TextUnformatted("NR 模型");ImGui::PopFont();
+            ImGui::TextWrapped("选择原版 nvngx_dlssnr.dll。");
             ImGui::Dummy({0,8*dpi});ImGui::Separator();ImGui::Spacing();
-            const auto status=model_job.valid()?(setup_importing?"正在校验并导入…":"正在检查本地模型…"):
-                ready?"模型已识别，可以继续":model_checked?(model.present?"当前模型未通过校验":"尚未配置模型"):"等待模型检查";
+            const auto status=model_job.valid()?(setup_importing?"导入中…":"校验中…"):
+                ready?"模型已识别":model_checked?(model.present?"校验未通过":"未配置模型"):"待校验";
             lab::product::pill(status,ready?lab::product::accent:lab::product::amber);
             if(ready){if(!model.label.empty())ImGui::TextWrapped("%s",model.label.c_str());
-                ImGui::TextDisabled("开启游戏后 NR 默认关闭，在游戏内按 Insert 调节。");}
-            else ImGui::TextWrapped("应用不包含、不会下载模型；仅接受已识别的原版文件。你也可以先浏览采集记录或登记游戏。");
-            if(!setup_error.empty()){ImGui::TextColored(lab::product::amber,"导入未完成");ImGui::TextWrapped("%s",setup_error.c_str());}
+                ImGui::TextDisabled("Insert 打开游戏内面板。NR 默认关闭。");}
+            else ImGui::TextWrapped("模型需自行提供，也可稍后导入。");
+            if(!setup_error.empty()){ImGui::TextColored(lab::product::amber,"导入失败");ImGui::TextWrapped("%s",setup_error.c_str());}
             else if(!model_job.valid()&&!model.error.empty())ImGui::TextWrapped("%s",model.error.c_str());
-            if(model_setup&&!model_setup->error.empty())ImGui::TextWrapped("无法保存首次配置状态：%s",model_setup->error.c_str());
+            if(model_setup&&!model_setup->error.empty())ImGui::TextWrapped("配置未保存：%s",model_setup->error.c_str());
             ImGui::Spacing();ImGui::BeginDisabled(model_job.valid());
             if(ready){if(lab::product::action("进入游戏库",{200*dpi,42*dpi},true)){if(model_setup)model_setup->remember(lab::ModelSetupState::Decision::completed);games_page=true;ImGui::CloseCurrentPopup();}mark("setup.complete");
-                ImGui::SameLine();if(ImGui::Button("选择其他模型",{180*dpi,42*dpi}))select_model();mark("setup.import");}
-            else{if(lab::product::action("选择并导入模型",{200*dpi,42*dpi},true))select_model();mark("setup.import");
-                ImGui::SameLine();if(ImGui::Button("暂时跳过",{180*dpi,42*dpi})){if(model_setup)model_setup->remember(lab::ModelSetupState::Decision::skipped);ImGui::CloseCurrentPopup();}mark("setup.skip");}
-            ImGui::EndDisabled();ImGui::Spacing();ImGui::TextDisabled("以后可在「设置与关于」中重新配置。原文件保持不变。");ImGui::EndPopup();}
+                ImGui::SameLine();if(ImGui::Button("重新选择",{180*dpi,42*dpi}))select_model();mark("setup.import");}
+            else{if(lab::product::action("导入模型",{200*dpi,42*dpi},true))select_model();mark("setup.import");
+                ImGui::SameLine();if(ImGui::Button("稍后配置",{180*dpi,42*dpi})){if(model_setup)model_setup->remember(lab::ModelSetupState::Decision::skipped);ImGui::CloseCurrentPopup();}mark("setup.skip");}
+            ImGui::EndDisabled();ImGui::Spacing();ImGui::TextDisabled("可在设置中重新配置。");ImGui::EndPopup();}
         ImGui::SetNextWindowPos({io.DisplaySize.x*.5f,io.DisplaySize.y*.5f},ImGuiCond_Appearing,{.5f,.5f});
         ImGui::SetNextWindowSize({620*dpi,0},ImGuiCond_Appearing);
-        if(ImGui::BeginPopupModal("设置与关于##product",&about,ImGuiWindowFlags_AlwaysAutoResize)){
-            lab::product::wordmark(dpi);ImGui::Spacing();ImGui::TextDisabled("0.2.0 Preview 2  /  WINDOWS · DX12");ImGui::Spacing();
-            ImGui::TextWrapped("在已渲染的画面之上，再画一层。管理游戏接入，在游戏内调节 NR，在这里查看保存的画面。");
-            ImGui::Spacing();ImGui::SeparatorText("模型与安装");
-            ImGui::TextColored(model_checked&&model.known&&model.error.empty()?lab::product::accent:lab::product::amber,"%s",model_job.valid()?"正在校验本地模型…":model_checked?(!model.error.empty()?"模型校验未通过":model.known?"模型已识别":model.present?"模型版本未识别":"尚未配置模型"):"模型状态尚未检查");
-            ImGui::TextWrapped("模型由你自行准备。选择文件后会校验并导入本地副本；程序不包含、不下载模型，未通过校验不能安装。");
+        if(ImGui::BeginPopupModal("设置##product",&about,ImGuiWindowFlags_AlwaysAutoResize)){
+            lab::product::wordmark(dpi);ImGui::Spacing();ImGui::TextDisabled("0.2.0 Preview 3  /  WINDOWS · DX12");ImGui::Spacing();
+            ImGui::TextWrapped("NR 控制与采集浏览");
+            ImGui::Spacing();ImGui::SeparatorText("模型");
+            ImGui::TextColored(model_checked&&model.known&&model.error.empty()?lab::product::accent:lab::product::amber,"%s",model_job.valid()?"校验中…":model_checked?(!model.error.empty()?"模型校验未通过":model.known?"模型已识别":model.present?"模型版本未识别":"未配置模型"):"待校验");
+            ImGui::TextWrapped("导入原版模型后可安装游戏插件。");
             if(!model.error.empty())ImGui::TextWrapped("%s",model.error.c_str());
             if(!model.label.empty())ImGui::TextDisabled("%s",model.label.c_str());
             auto show_folder=[&](const std::filesystem::path& path){about_error.clear();if(reinterpret_cast<INT_PTR>(ShellExecuteW(window,L"explore",path.c_str(),nullptr,nullptr,SW_SHOWNORMAL))<=32)about_error="无法打开本地目录："+lab::utf8(path.wstring());};
@@ -288,15 +288,15 @@ struct View {
             ImGui::BeginDisabled(model_job.valid()||!manager_allowed);if(ImGui::Button("重新校验"))check_model();ImGui::SameLine();
             if(lab::product::action("配置模型",{},true)){start_model_setup();ImGui::CloseCurrentPopup();}ImGui::EndDisabled();
             if(!about_error.empty()){ImGui::PushStyleColor(ImGuiCol_Text,lab::product::amber);ImGui::TextWrapped("%s",about_error.c_str());ImGui::PopStyleColor();}
-            if(ImGui::CollapsingHeader("当前程序与存储位置")){
+            if(ImGui::CollapsingHeader("存储位置")){
                 const auto root=lab::utf8(library_root().parent_path().wstring());
                 ImGui::TextWrapped("程序：%s",lab::utf8(lab::root::self_executable().wstring()).c_str());
                 ImGui::TextWrapped("数据：%s",lab::utf8(library_root().wstring()).c_str());
-                ImGui::TextWrapped("每份便携程序使用自己的目录，不会自动合并其他版本的游戏列表、模型或采集记录。");
+                ImGui::TextWrapped("不同安装目录的数据独立。");
                 if(ImGui::SmallButton("复制根目录路径"))ImGui::SetClipboardText(root.c_str());}
-            ImGui::Spacing();ImGui::SeparatorText("使用边界");ImGui::TextWrapped("仅限离线单人、无反作弊环境。启动时 NR 默认关闭；添加路径只做检查，安装前另行确认。安装完成不代表已通过实机画质验证。");
-            ImGui::TextWrapped("本应用不联网，无遥测。不是 NVIDIA 产品，与 NVIDIA 及游戏开发商无关联或认可。");
-            ImGui::Spacing();ImGui::TextDisabled("原创代码 MIT · 第三方许可见随包 LICENSES 与 THIRD_PARTY_NOTICES.md");
+            ImGui::Spacing();ImGui::SeparatorText("使用范围");ImGui::TextWrapped("仅限离线单人、无反作弊游戏。NR 默认关闭。");
+            ImGui::TextWrapped("离线工具，无遥测。非 NVIDIA 官方产品。");
+            ImGui::Spacing();ImGui::TextDisabled("MIT · 第三方许可见 THIRD_PARTY_NOTICES.md");
             if(ImGui::Button("关闭",{100*dpi,36*dpi}))ImGui::CloseCurrentPopup();mark("app.about.close");ImGui::EndPopup();}
         ImGui::Dummy({0,12*dpi});ImGui::Separator();ImGui::Dummy({0,8*dpi});
         if(games_page){if(manager_allowed){if(!manager)manager=std::make_unique<lab::GameManagerPage>(library_root().parent_path());manager->draw(window,dpi);}else ImGui::TextDisabled("采集回归模式：不读写游戏管理登记。");ImGui::End();return;}
@@ -304,10 +304,10 @@ struct View {
         ImGui::SameLine(ImGui::GetWindowWidth()-252*dpi);
         if(ImGui::Button(library_visible?"收起记录":"展开记录",{118*dpi,36*dpi})){library_visible=!library_visible;++interactions;}mark("library.toggle");ImGui::SameLine();
         if(ImGui::Button("刷新",{76*dpi,36*dpi}))scan();
-        ImGui::TextDisabled("原始数据只读 · 观看换算不改变游戏与 NR 输入");ImGui::Spacing();
+        ImGui::TextDisabled("显示设置不修改原件");ImGui::Spacing();
         if(library_visible){ImGui::BeginChild("Library",{260*dpi,0},ImGuiChildFlags_Borders);ImGui::GetWindowDrawList()->AddCallback(Renderer::callback,&ui);
             ImGui::SetNextItemWidth(-1);ImGui::InputTextWithHint("##filter","筛选运行 / 采集编号",filter,sizeof(filter));
-            ImGui::TextDisabled("%zu 份记录 · 打开时校验原件",catalog.entries.size());if(scanning.valid())ImGui::TextDisabled("读取目录中…");
+            ImGui::TextDisabled("%zu 份记录",catalog.entries.size());if(scanning.valid())ImGui::TextDisabled("读取目录中…");
             ImGui::Separator();for(const auto& item:catalog.entries){const auto label=item.run+" / "+item.pair+" / "+item.application+" / "+item.parameters;if(*filter&&label.find(filter)==std::string::npos)continue;
                 ImGui::PushID(lab::utf8(item.manifest.wstring()).c_str());if(ImGui::Selectable(item.pair.c_str(),selected==lab::utf8(item.manifest.wstring()),0,{0,0})&&!loading.valid())open(item.manifest);
                 if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",label.c_str());ImGui::TextWrapped("%s",item.run.c_str());
@@ -319,22 +319,22 @@ struct View {
                 ImGui::Spacing();ImGui::Separator();ImGui::PopID();}
             if(catalog.truncated)ImGui::TextWrapped("目录数量达到上限，未遍历全部条目。");ImGui::EndChild();ImGui::SameLine();}
         ImGui::BeginChild("Inspector",{0,0});ImGui::GetWindowDrawList()->AddCallback(Renderer::callback,&ui);
-        if(loading.valid())ImGui::TextColored({.7f,.8f,.4f,1},"正在只读锁定、校验原始数据与颜色契约…");
+        if(loading.valid())ImGui::TextColored({.7f,.8f,.4f,1},"加载并校验中…");
         if(!error.empty())ImGui::TextColored({1,.6f,.3f,1},"%s",error.c_str());
         if(!preference_error.empty())ImGui::TextColored({1,.6f,.3f,1},"显示设置无法保存：%s",preference_error.c_str());
-        if(!last_export.empty()){ImGui::TextColored({.65f,.8f,.4f,1},"SDR PNG 导出完成 · 原始数据未改写");ImGui::SameLine();
+        if(!last_export.empty()){ImGui::TextColored({.65f,.8f,.4f,1},"PNG 已导出");ImGui::SameLine();
             if(ImGui::SmallButton("打开导出目录"))ShellExecuteW(window,L"open",last_export.c_str(),nullptr,nullptr,SW_SHOWNORMAL);}
         if(!raw){ImGui::Dummy({0,65*dpi});const float width=ImGui::GetContentRegionAvail().x;const float inset=std::max(24.f*dpi,(width-510*dpi)*.5f);
             ImGui::SetCursorPosX(ImGui::GetCursorPosX()+inset);ImGui::BeginGroup();lab::product::mark(ImGui::GetWindowDrawList(),ImGui::GetCursorScreenPos(),64*dpi);ImGui::Dummy({64*dpi,88*dpi});
-            ImGui::PushFont(nullptr,26);ImGui::TextUnformatted(catalog.entries.empty()?"让每一次对比，都有原图可查。":"选择一份记录，开始对比。");ImGui::PopFont();ImGui::Spacing();
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+490*dpi);ImGui::TextColored(lab::product::muted,"%s",catalog.entries.empty()?"目前还没有采集记录。保存的兼容采集包会出现在左侧；这里不自动抓图，也不会为了生成预览修改原始数据。":"从左侧打开记录，可同步缩放、分割对照和导出 SDR。观看设置只作用于显示分支，不回写原件。");ImGui::PopTextWrapPos();
+            ImGui::PushFont(nullptr,26);ImGui::TextUnformatted(catalog.entries.empty()?"暂无采集记录":"未选择记录");ImGui::PopFont();ImGui::Spacing();
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+490*dpi);ImGui::TextColored(lab::product::muted,"%s",catalog.entries.empty()?"保存的采集记录会显示在此处。":"从左侧选择记录。");ImGui::PopTextWrapPos();
             ImGui::Spacing();if(ImGui::Button("打开采集目录",{150*dpi,40*dpi})){
                 if(!test_folder_dispatch&&reinterpret_cast<INT_PTR>(ShellExecuteW(window,L"explore",library_root().c_str(),nullptr,nullptr,SW_SHOWNORMAL))<=32)error="Windows 无法打开采集目录";}
             ImGui::EndGroup();ImGui::EndChild();ImGui::End();return;}
         const bool display_pair=raw->display_pair();
         ImGui::Text("%s   /   帧 %llu · 调用 %llu",display_pair?"显示诊断 · 候选区间配对":"同调用对照",raw->manifest().value("frame",0ULL),raw->manifest().value("call",0ULL));
         ImGui::SameLine();if(ImGui::SmallButton("打开所在文件夹##current"))folder(raw->path());mark("folder.current");
-        ImGui::TextDisabled("同一组原件，两侧同步观看。导出为单独的派生文件。");
+        ImGui::TextDisabled("同步缩放 · 导出副本");
         ImGui::BeginDisabled(display_pair);if(ImGui::Button("NR 输入 / 输出"))set_pair(1,2);mark("pair.nr");ImGui::SameLine();if(ImGui::Button("NR 前后工作图"))set_pair(0,3);mark("pair.hdr");ImGui::EndDisabled();
         ImGui::SameLine();ImGui::BeginDisabled(display_pair);if(ImGui::Checkbox("原始数值差分",&difference)){if(difference)wipe=false;++interactions;}mark("difference");ImGui::EndDisabled();
         ImGui::SameLine();if(ImGui::Checkbox("分割对照",&wipe)){if(wipe)difference=false;++interactions;}mark("wipe");
@@ -343,10 +343,10 @@ struct View {
         const bool can_reconstruct=raw->color_contract(left).reconstruction_available&&raw->color_contract(right).reconstruction_available;
         ImGui::Separator();ImGui::BeginDisabled(difference);
         if(ImGui::Checkbox("观看换算",&gpu.processing_enabled))++interactions;mark("display.processing");ImGui::EndDisabled();
-        ImGui::SameLine();ImGui::TextDisabled(gpu.processing_enabled?"左右共享设置 · 仅显示 / 导出":"已旁路 · 设置保留，开启即可恢复");
+        ImGui::SameLine();ImGui::TextDisabled(gpu.processing_enabled?"左右同步 · 用于显示和导出":"已关闭 · 设置保留");
         if(compressed){ImGui::SameLine();bool assist=gpu.display.nr_reconstruct!=0;ImGui::BeginDisabled(difference||!gpu.processing_enabled||!can_reconstruct);
             if(ImGui::Checkbox("RR 基底辅助恢复",&assist)){gpu.display.nr_reconstruct=assist?1:0;gpu.display.nr_linear=0;++interactions;}mark("display.assist");ImGui::EndDisabled();
-            if(!can_reconstruct)ImGui::TextDisabled("缺少已验证的同调用 RR 恢复契约；仅提供 NR 接口原值观看，不猜测恢复方式。");}
+            if(!can_reconstruct)ImGui::TextDisabled("缺少同调用 RR 恢复信息。");}
         const bool processed=compressed&&gpu.viewing_request().nr_reconstruct;
         ImGui::BeginDisabled(difference||(compressed&&!processed));
         if(ImGui::Button(gpu.display.mapping==0&&gpu.processing_enabled&&(!compressed||processed)?"自然 SDR · 已选":"自然 SDR")){lab::viewer::viewing_preset(gpu.display,0);gpu.processing_enabled=true;++interactions;}mark("mapping.view");ImGui::SameLine();

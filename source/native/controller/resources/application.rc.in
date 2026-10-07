@@ -6,8 +6,8 @@
 IDI_OVERGLAZE ICON "@OVERGLAZE_ICON_PATH@"
 
 1 VERSIONINFO
- FILEVERSION 0,2,0,2
- PRODUCTVERSION 0,2,0,2
+ FILEVERSION 0,2,0,3
+ PRODUCTVERSION 0,2,0,3
  FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
  FILEFLAGS VS_FF_PRERELEASE
  FILEOS VOS_NT_WINDOWS32
@@ -20,12 +20,12 @@ BEGIN
   BEGIN
    VALUE "CompanyName", "HANsoA-KevinO\0"
    VALUE "FileDescription", "Overglaze - Neural Rendering control\0"
-   VALUE "FileVersion", "0.2.0-preview.2\0"
+   VALUE "FileVersion", "0.2.0-preview.3\0"
    VALUE "InternalName", "overglaze_viewer\0"
    VALUE "LegalCopyright", "Copyright (c) 2026 HANsoA-KevinO. MIT License.\0"
    VALUE "OriginalFilename", "overglaze_viewer.exe\0"
    VALUE "ProductName", "Overglaze\0"
-   VALUE "ProductVersion", "0.2.0-preview.2\0"
+   VALUE "ProductVersion", "0.2.0-preview.3\0"
   END
  END
  BLOCK "VarFileInfo"

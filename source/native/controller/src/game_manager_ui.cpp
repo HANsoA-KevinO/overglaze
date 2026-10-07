@@ -47,8 +47,8 @@ bool needs_attention(const games::Presentation& view){
 // Words for a code, from the one table (lab_game_reasons.hpp).
 std::string words(std::string_view code){const auto* t=games::code_text(code);return t?std::string(t):"["+std::string(code)+"]";}
 std::string action_title(const games::Action& action){
-    if(action.name=="make-package")return "准备安装";
-    if(action.name=="refresh-package")return "更新安装配置";
+    if(action.name=="make-package")return "生成适配包";
+    if(action.name=="refresh-package")return "刷新适配包";
     return words(action.label);
 }
 std::string route_title(const std::string& route){
@@ -140,13 +140,12 @@ void GameManagerPage::draw(HWND window,float dpi){
     // evidence remains accessible further down; the backend owns every status.
     ImGui::BeginGroup();
     heading("游戏库",28);
-    muted_text("管理插件安装，在游戏内调节画面。");
     ImGui::EndGroup();
     ImGui::SameLine((std::max)(ImGui::GetCursorPosX(),ImGui::GetWindowContentRegionMax().x-242*dpi));
     ImGui::BeginDisabled(working);
     if(ImGui::Button("重新检查",{108*dpi,40*dpi}))refresh();mark("games.refresh");
     ImGui::SameLine(0,10*dpi);
-    if(primary_button("+ 添加游戏",{124*dpi,40*dpi}))begin_add();mark("games.add");
+    if(primary_button("添加游戏",{124*dpi,40*dpi}))begin_add();mark("games.add");
     ImGui::EndDisabled();
     gap(18*dpi);
 
@@ -154,7 +153,7 @@ void GameManagerPage::draw(HWND window,float dpi){
         std::string stage;unsigned index=0,total=0;
         {std::lock_guard guard(live_->lock);stage=live_->text;index=live_->index;total=live_->count;}
         ImGui::PushStyleColor(ImGuiCol_Text,ink(games::Tone::accent));
-        ImGui::TextUnformatted(stage.empty()?"正在读取游戏信息…":stage.c_str());ImGui::PopStyleColor();
+        ImGui::TextUnformatted(stage.empty()?"读取游戏信息…":stage.c_str());ImGui::PopStyleColor();
         if(total){ImGui::SameLine();ImGui::TextDisabled("%u / %u",index,total);}
         // Only genuine backend stages are shown; no invented percentage.
         gap(8*dpi);
@@ -166,7 +165,7 @@ void GameManagerPage::draw(HWND window,float dpi){
         ImGui::TextWrapped("%s",error_.c_str());gap(8*dpi);
     }
     if(!notice_.empty()){
-        ImGui::TextColored(ink(games::Tone::success),"操作已完成");
+        ImGui::TextColored(ink(games::Tone::success),"完成");
         ImGui::SameLine();if(ImGui::SmallButton("收起##games.notice"))notice_.clear();
         ImGui::TextWrapped("%s",notice_.c_str());gap(8*dpi);
     }
@@ -177,7 +176,7 @@ void GameManagerPage::draw(HWND window,float dpi){
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{16*dpi,16*dpi});
     ImGui::PushStyleColor(ImGuiCol_ChildBg,panel);
     ImGui::BeginChild("games.list",{library_width,0},ImGuiChildFlags_AlwaysUseWindowPadding);
-    ImGui::TextUnformatted("我的游戏");ImGui::SameLine();ImGui::TextDisabled("%zu",rows_.size());
+    ImGui::TextUnformatted("游戏");ImGui::SameLine();ImGui::TextDisabled("%zu",rows_.size());
     gap(10*dpi);
     ImGui::SetNextItemWidth(-1);
     ImGui::InputTextWithHint("##games.search","搜索名称或路径",search_,sizeof(search_));mark("games.search");
@@ -231,9 +230,8 @@ void GameManagerPage::draw(HWND window,float dpi){
     }
     if(visible.empty()){
         gap(18*dpi);
-        muted_text(working&&rows_.empty()?"正在读取你的游戏库…":rows_.empty()?"还没有添加游戏":"没有符合条件的游戏");
+        muted_text(working&&rows_.empty()?"读取游戏库…":rows_.empty()?"未添加游戏":"无匹配游戏");
         gap(7*dpi);
-        muted_text(rows_.empty()?"从一个游戏目录开始。":"试试其他名称，或切换到「全部」。");
         if(!rows_.empty()&&ImGui::Button("清除筛选")){*search_=0;filter_=0;}
     }
     ImGui::EndChild();ImGui::EndChild();
@@ -258,9 +256,9 @@ void GameManagerPage::draw(HWND window,float dpi){
         gap(14*dpi);
         // These three preparation states get concise navigation copy. The
         // complete backend reasons, including refusals, remain in the fold.
-        if(s.state=="needs-package")muted_text("已找到游戏的 DLSS 接入方式。先准备安装配置，再确认安装。");
-        else if(s.state=="package-stale")muted_text("本地安装配置需要更新，更新后可继续安装。");
-        else if(s.state=="available")muted_text("已识别当前游戏版本。安装前请先关闭游戏。");
+        if(s.state=="needs-package")muted_text("已识别 DLSS，尚无适配包。");
+        else if(s.state=="package-stale")muted_text("适配包需要刷新。");
+        else if(s.state=="available")muted_text("当前游戏版本可安装。");
         else if(!s.reasons.empty())ImGui::TextWrapped("%s",games::render(s.reasons.front()).c_str());
         if(s.running){gap(6*dpi);ImGui::TextColored(ink(games::Tone::warning),"%s",games::render("game-running").c_str());}
         gap(17*dpi);
@@ -294,22 +292,22 @@ void GameManagerPage::draw(HWND window,float dpi){
         muted_text(text(s.entry.exe).c_str());
         const bool has_install_path=s.installed||s.state=="available"||s.state=="needs-package"||s.state=="package-stale";
         if(has_install_path){
-            gap(20*dpi);ImGui::TextUnformatted("进入游戏后");gap(7*dpi);
+            gap(20*dpi);ImGui::TextUnformatted("启动方式");gap(7*dpi);
             const std::string launch=launch_text(s);
-            if(s.load_mode=="root_proxy_d3d12")muted_text("照常从商店启动游戏，进图后按 Insert 打开面板。");
-            else if(s.load_mode=="root_proxy_on_insert")muted_text("照常启动游戏。第一次按 Insert 时，插件会加载并打开面板。");
+            if(s.load_mode=="root_proxy_d3d12")muted_text("从商店启动游戏。");
+            else if(s.load_mode=="root_proxy_on_insert")muted_text("首次按 Insert 加载插件并打开面板。");
             else if(!launch.empty())ImGui::TextWrapped("%s",launch.c_str());
-            else muted_text("完成安装后，启动游戏并开启 DLSS 光线重构、超分辨率或 DLAA。");
+            else muted_text("安装后启用游戏的 DLSS 光线重构、超分辨率或 DLAA。");
             gap(8*dpi);
             product::pill("Insert",muted);ImGui::SameLine();ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("打开游戏内面板");
-            gap(4*dpi);muted_text("NR 每次启动时默认关闭。开启后可调节效果，并用分屏比较画面。");
+            gap(4*dpi);muted_text("NR 默认关闭，运行状态以游戏内面板为准。");
         }
         gap(20*dpi);ImGui::Separator();gap(12*dpi);
 
         const bool show_checks=ImGui::CollapsingHeader("检查明细");mark("games.check-details");
         if(show_checks){
             gap(5*dpi);
-            muted_text("只读检查；「无法检查」不代表通过。");
+            muted_text("「无法检查」不代表通过。");
             if(s.preflight.is_object()){
                 const auto& pf=s.preflight;
                 ImGui::TextWrapped("商店：%s · 路线：%s",words("store."+pf.value("store","unknown")).c_str(),words("route."+pf.value("route","none")).c_str());
@@ -337,18 +335,18 @@ void GameManagerPage::draw(HWND window,float dpi){
             ImGui::TextDisabled("兼容 %s · 健康检查 %s",s.compatibility.c_str(),s.health.c_str());
             for(const auto& r:s.reasons)if(r.params.is_object()&&r.params.contains("message"))ImGui::TextWrapped("原始信息：%s",r.params.value("message","").c_str());
             gap(8*dpi);
-            muted_text("仅管理已登记的 Overglaze 文件。卸载按记录的 SHA-256 校验，并先保存恢复副本。");
+            muted_text("卸载前校验已登记文件并保存恢复副本。");
             for(const auto& g:storage_.games)if(g.id==s.entry.id){
                 ImGui::TextWrapped("恢复副本 %llu 份 · %.1f MiB%s",static_cast<unsigned long long>(g.recovery_copies),double(g.recovery_bytes)/1048576.0,g.complete?"":"（统计不完整）");
-                ImGui::TextWrapped("其中 %llu 份按最近 %zu 份的规则管理。",static_cast<unsigned long long>(g.managed_recovery_copies),games::kRecoveryCopiesKept);
+                ImGui::TextWrapped("自动管理 %llu 份 · 保留最近 %zu 份",static_cast<unsigned long long>(g.managed_recovery_copies),games::kRecoveryCopiesKept);
                 ImGui::TextWrapped("暂存目录 %llu 个 · %.1f MiB",static_cast<unsigned long long>(g.staging_directories),double(g.staging_bytes)/1048576.0);
                 ImGui::TextWrapped("数据盘可用 %.1f GiB · 安装预留 %llu GiB",double(storage_.data_disk_available)/1073741824.0,static_cast<unsigned long long>(storage_.data_disk_reserve>>30));
             }
             gap(8*dpi);
         }
         if(ImGui::CollapsingHeader("使用范围")){
-            muted_text("仅用于离线单人、无反作弊的 DX12 游戏，需要游戏本身提供 DLSS。桌面程序不安装带 Denuvo 标记的游戏；已支持的被动共存方案由命令行显式选择。");
-            gap(6*dpi);muted_text("适配检查不代表画质或性能保证。游戏更新后请重新检查；无法自动接入的游戏需要单独配置。");
+            muted_text("仅限离线单人、无反作弊、支持 DLSS 的 DX12 游戏。Denuvo 不通过桌面安装；已支持的被动共存需在命令行确认。");
+            gap(6*dpi);muted_text("适配检查不保证画质或性能。游戏更新后需重新检查；部分游戏需单独配置。");
         }
     }else{
         gap((std::max)(28*dpi,ImGui::GetContentRegionAvail().y*.18f));
@@ -356,37 +354,34 @@ void GameManagerPage::draw(HWND window,float dpi){
         ImGui::GetWindowDrawList()->AddRectFilled(at,{at.x+64*dpi,at.y+64*dpi},IM_COL32(36,45,44,255),16*dpi);
         game_symbol(ImGui::GetWindowDrawList(),{at.x+12*dpi,at.y+12*dpi},40*dpi,ImGui::GetColorU32(ink(games::Tone::accent)));
         ImGui::Dummy({64*dpi,64*dpi});gap(18*dpi);
-        heading(working&&rows_.empty()?"正在整理游戏库":rows_.empty()?"从你想玩的游戏开始":"找到你的下一款游戏",25);
-        gap(9*dpi);
-        muted_text(working&&rows_.empty()?"正在读取已登记游戏的安装状态。":rows_.empty()?"添加游戏目录，检查接入条件，再按提示完成安装。":"调整左侧搜索或筛选，选择游戏查看安装状态。");
-        if(rows_.empty()&&!working){gap(18*dpi);if(primary_button("添加第一个游戏",{185*dpi,44*dpi}))begin_add();mark("games.add-empty");}
-        gap(24*dpi);muted_text("本地运行 · 无需账号 · NR 默认关闭");
+        heading(working&&rows_.empty()?"读取游戏库…":rows_.empty()?"未添加游戏":"无匹配游戏",25);
+        if(rows_.empty()&&!working){gap(18*dpi);if(primary_button("添加游戏",{185*dpi,44*dpi}))begin_add();mark("games.add-empty");}
     }
 
     ImGui::SetNextWindowSize({(std::min)(650*dpi,ImGui::GetIO().DisplaySize.x-40*dpi),0},ImGuiCond_Appearing);
     if(ImGui::BeginPopupModal("确认插件操作",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
-        heading(operation_=="install"?"安装到这个游戏":operation_=="update"?"更新插件":operation_=="repin"?"重新适配游戏":operation_=="uninstall"?"卸载插件":"移出游戏库",23);
+        heading(operation_=="install"?"安装插件":operation_=="update"?"更新插件":operation_=="repin"?"重新适配":operation_=="uninstall"?"卸载插件":"移出游戏库",23);
         gap(12*dpi);
         heading(pending_title_.c_str(),19);muted_text(pending_path_.c_str());
         gap(12*dpi);ImGui::Separator();gap(12*dpi);
-        ImGui::TextWrapped("%s",operation_=="install"?"将安装已校验的 Overglaze 文件。请先退出游戏。安装可能影响游戏启动或性能。":
-            operation_=="update"?"先保存恢复副本并卸载旧插件，再校验适配包并安装新版本。中途失败时游戏可能回到未安装状态，结果会说明停在哪一步。请先退出游戏。":
-            operation_=="repin"?"重新检查游戏版本和模块，保存恢复副本并卸载旧插件。旧适配包保留归档；为当前版本生成适配包并重新安装。请先退出游戏。":
-            operation_=="uninstall"?"仅移除登记且 SHA-256 未改变的 Overglaze 文件，先保存恢复副本。游戏文件、已有模型和采集数据保留。":
-            "仅移除游戏库记录。游戏和采集数据保留。");
+        ImGui::TextWrapped("%s",operation_=="install"?"退出游戏后安装。可能影响游戏启动或性能。":
+            operation_=="update"?"退出游戏后，保存恢复副本、卸载旧插件并安装新版。失败时可能处于未安装状态。":
+            operation_=="repin"?"退出游戏后，重新检查版本、保存恢复副本并重装。旧适配包归档保留。":
+            operation_=="uninstall"?"移除已登记的插件文件并保存恢复副本。保留游戏本体和采集数据。":
+            "仅移除游戏库记录，保留游戏和采集数据。");
         const bool writes=operation_=="install"||operation_=="update"||operation_=="repin";
         gap(12*dpi);
         // User consent is explicit and bound to the named path. A marker scan
         // cannot certify the absence of anti-cheat; backend gates still apply.
         if(writes){
-            muted_text("预检不能证明没有反作弊。请仅在确认以下条件后继续。");
+            muted_text("预检不能证明没有反作弊。");
             gap(8*dpi);
         }
-        ImGui::Checkbox(writes?"我确认这是离线单人、无反作弊的游戏，并允许此次操作":
-            operation_=="uninstall"?"确认卸载上述游戏的 Overglaze 插件":"确认移除上述游戏的列表记录",&approved_);
+        ImGui::Checkbox(writes?"确认离线单人、无反作弊，并允许此次操作":
+            operation_=="uninstall"?"确认卸载此游戏的 Overglaze 插件":"确认移除列表记录",&approved_);
         mark("games.approve");gap(16*dpi);
         ImGui::BeginDisabled(!approved_||busy());
-        if(primary_button("确认执行",{150*dpi,40*dpi})){act(operation_,pending_);ImGui::CloseCurrentPopup();}
+        if(primary_button(operation_=="install"?"安装":operation_=="update"?"更新":operation_=="repin"?"重新适配":operation_=="uninstall"?"卸载":"移除",{150*dpi,40*dpi})){act(operation_,pending_);ImGui::CloseCurrentPopup();}
         mark("games.confirm");ImGui::EndDisabled();ImGui::SameLine(0,10*dpi);
         if(ImGui::Button("取消",{100*dpi,40*dpi}))ImGui::CloseCurrentPopup();mark("games.cancel");
         ImGui::EndPopup();
@@ -396,12 +391,11 @@ void GameManagerPage::draw(HWND window,float dpi){
     if(show_add_){ImGui::OpenPopup("添加游戏目录");show_add_=false;}
     ImGui::SetNextWindowSize({(std::min)(720*dpi,ImGui::GetIO().DisplaySize.x-40*dpi),0},ImGuiCond_Appearing);
     if(ImGui::BeginPopupModal("添加游戏目录",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
-        heading("添加一款游戏",24);gap(8*dpi);
-        muted_text("选择安装目录，或粘贴游戏 EXE 路径。先检查，再由你决定安装。");
+        heading("添加游戏",24);gap(8*dpi);
         gap(16*dpi);ImGui::TextUnformatted("游戏位置");
         ImGui::BeginDisabled(busy());
         ImGui::SetNextItemWidth((std::max)(100*dpi,ImGui::GetContentRegionAvail().x-118*dpi));
-        if(ImGui::InputTextWithHint("##gamepath","粘贴游戏文件夹或 EXE 的完整路径",path_,sizeof(path_))){found_={};candidate_=0;}mark("games.path");
+        if(ImGui::InputTextWithHint("##gamepath","游戏目录或 EXE 完整路径",path_,sizeof(path_))){found_={};candidate_=0;}mark("games.path");
         ImGui::SameLine(0,8*dpi);if(ImGui::Button("选择目录",{110*dpi,unit})){const auto p=pick(window);if(!p.empty()&&p.size()<sizeof(path_)){strcpy_s(path_,p.c_str());found_={};candidate_=0;}}mark("games.browse");
         gap(10*dpi);
         ImGui::BeginDisabled(!*path_);
@@ -415,7 +409,7 @@ void GameManagerPage::draw(HWND window,float dpi){
         if(!error_.empty()){gap(8*dpi);ImGui::TextColored(ink(games::Tone::error),"检查未完成");ImGui::TextWrapped("%s",error_.c_str());}
         if(!found_.notice.empty()){gap(8*dpi);ImGui::TextWrapped("%s",found_.notice.c_str());}
         if(!found_.executables.empty()){
-            gap(14*dpi);ImGui::TextUnformatted("选择实际游戏程序");muted_text("选择游戏本体，而不是启动器。");gap(6*dpi);
+            gap(14*dpi);ImGui::TextUnformatted("游戏 EXE（非启动器）");gap(6*dpi);
             ImGui::BeginChild("game.exe.candidates",{0,145*dpi},ImGuiChildFlags_Borders);
             for(std::size_t i=0;i<found_.executables.size();++i){
                 ImGui::PushID(static_cast<int>(i));
@@ -426,7 +420,7 @@ void GameManagerPage::draw(HWND window,float dpi){
         }
         gap(18*dpi);ImGui::Separator();gap(14*dpi);
         ImGui::BeginDisabled(busy()||found_.executables.empty()||!found_.complete);
-        if(primary_button("添加到游戏库",{165*dpi,40*dpi})){
+        if(primary_button("添加",{165*dpi,40*dpi})){
             const auto root=root_,exe=found_.executables.at(candidate_);
             job_=std::async(std::launch::async,[root,exe]{games::Manager m(root);const auto added=m.add(exe);Result r;r.selection=added.id;r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;r.message=games::render("registered");return r;});
             selected_.clear();*search_=0;filter_=0;ImGui::CloseCurrentPopup();

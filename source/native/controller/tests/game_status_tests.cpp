@@ -43,7 +43,9 @@ int main(){try{
     {const auto t=render("operation-failed",json{{"operation","update"},{"stage","refresh-check"},{"message","boom"}});
      need(t.find("更新")!=std::string::npos&&t.find("重新预检")!=std::string::npos&&t.find("boom")!=std::string::npos,"a stage renders under its operation");}
     need(render("preflight-incomplete",json{{"count",2},{"check",json::array({"denuvo","anticheat"})}}).find("Denuvo 反篡改、反作弊标记")!=std::string::npos,"check names render");
-    need(render("package-ready")=="本地版本命中适配包「?」（?）。","a missing parameter shows as ?, never as a brace");
+    {const auto t=render("package-ready");
+     need(std::count(t.begin(),t.end(),'?')==2&&t.find('{')==std::string::npos&&t.find('}')==std::string::npos,
+          "missing parameters show as ?, independent of UI wording");}
     for(const auto* o:{"pass","fail","unknown"})need(code_text(std::string("outcome.")+o)!=nullptr,"three outcomes named");
     need(outcome_name(Outcome::unknown)==std::string("unknown")&&check_json({"denuvo",Outcome::unknown,nullptr,"exe-unreadable"})["ok"].is_null(),"cannot-check is ok:null, never true");
     need(check_json({"denuvo",Outcome::pass,6,{}})["ok"]==true&&check_json({"denuvo",Outcome::fail,nullptr,"denuvo-sections"})["ok"]==false,"pass and fail are booleans");
