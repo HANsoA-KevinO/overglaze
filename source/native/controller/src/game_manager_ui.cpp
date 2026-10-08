@@ -474,7 +474,9 @@ void GameManagerPage::draw(HWND window,float dpi){
             ImGui::EndChild();
         }
         gap(18*dpi);ImGui::Separator();gap(14*dpi);
-        ImGui::BeginDisabled(busy()||found_.executables.empty()||!found_.complete);
+        // A partial scan still lists what it found, best candidate first; the
+        // notice above says the scan was partial.
+        ImGui::BeginDisabled(busy()||found_.executables.empty());
         if(primary_button("添加",{165*dpi,40*dpi})){
             const auto root=root_,exe=found_.executables.at(candidate_);const auto opening=opening_;
             job_=std::async(std::launch::async,[root,exe,opening]{games::Manager m(root,std::nullopt,opening.model_sha256,opening.run_checker);const auto added=m.add(exe);Result r;r.selection=added.id;r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;r.message=games::render("registered");return r;});

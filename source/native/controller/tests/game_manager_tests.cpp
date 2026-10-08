@@ -326,6 +326,16 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     need(lab::games::store_kind(root/L"game4",true)=="gdk"&&lab::games::store_kind(root/L"game4",false)=="unknown"&&lab::games::store_kind(root/L"game5",false)=="gdk","package identity decides the store");
     // ---- discovery is bounded and explicit
     auto disc=lab::games::discover(root/L"game5");need(disc.complete&&disc.executables.size()==1,"directory discovery");need(lab::games::discover(root/L"game5/Plain.exe").executables.size()==1,"direct EXE discovery");
+    // An Unreal layout: bootstrap at the root, the game under <Project>\Binaries\Win64
+    // beside its DLSS module, and asset folders the scan does not need to walk.
+    {const auto ue=root/L"ue";for(const auto* d:{L"Engine/Binaries/Win64",L"Proj/Binaries/Win64",L"Proj/Content/Paks"})fs::create_directories(ue/d);
+        put(ue/L"Game.exe",pe64(standard,"boot"));put(ue/L"Engine/Binaries/Win64/CrashReportClient.exe",pe64(standard,"crash"));
+        const auto shipping=ue/L"Proj/Binaries/Win64/Proj-Win64-Shipping.exe";put(shipping,pe64(standard,"ship"));put(ue/L"Proj/Binaries/Win64/nvngx_dlssd.dll","x");
+        for(int i=0;i<40;++i)put(ue/L"Proj/Content/Paks"/(L"p"+std::to_wstring(i)+L".exe"),"x");
+        const auto dir=lab::games::discover(ue);need(dir.complete&&dir.executables.size()==3&&dir.executables.front()==fs::canonical(shipping),"Unreal directory: game EXE first, asset folders skipped");
+        const auto boot=lab::games::discover(ue/L"Game.exe");need(boot.executables.size()==2&&boot.executables.front()==fs::canonical(shipping)&&!boot.notice.empty(),"Unreal bootstrap: game offered first");
+        const auto notes=lab::games::preflight(ue/L"Game.exe").notes;
+        need(std::any_of(notes.begin(),notes.end(),[](const std::string& n){return n.find("Proj-Win64-Shipping.exe")!=std::string::npos;}),"preflight names the game behind the bootstrap");}
     reject([&]{lab::games::discover(root/L"game2/../game");},"noncanonical input rejected");reject([&]{lab::games::discover(root.root_path());},"whole drive rejected");
     m.forget(plain.id);need(m.list().size()==4&&fs::exists(root/L"game5/Plain.exe"),"forget registry only");
     // ---- hardlinks can alias a protected file even without a reparse point

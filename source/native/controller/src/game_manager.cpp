@@ -319,14 +319,52 @@ profiles::Facts facts_from_json(const json& f,const std::string& id,const std::s
     x.native_evaluate_host_rebind=f.value("native_evaluate_host_rebind",false);x.binding_preservation=f.value("binding_preservation",false);
     x.default_exposure_stops=f.value("default_exposure_stops",0.f);x.settings_file=f.value("settings_file","overlay-"+package+".json");
     x.capture_origin=f.value("capture_origin",package+"-controlled-rr-stage");for(auto it=f.at("modules").begin();it!=f.at("modules").end();++it)x.modules[it.key()]=it.value().get<std::string>();return x;}
+
+// A folder that holds a DLSS route's modules: the game's own EXE sits next to them.
+bool holds_dlss(const fs::path& dir){std::error_code ec;
+    for(const auto* name:{L"sl.interposer.dll",L"nvngx_dlssd.dll",L"nvngx_dlss.dll"})if(fs::is_regular_file(dir/name,ec))return true;
+    return false;}
+bool ends_with(const std::string& s,std::string_view tail){return s.size()>=tail.size()&&s.compare(s.size()-tail.size(),tail.size(),tail)==0;}
+// Unreal Engine games carry a small bootstrap EXE at their root that starts
+// <Project>\Binaries\Win64 (or WinGDK)\<Project>-Win64-Shipping.exe. The
+// bootstrap has no DLSS beside it; the shipping EXE is the game. Only the
+// root's direct subfolders are looked at, and only when an Engine folder marks
+// the layout.
+std::vector<fs::path> unreal_games(const fs::path& root){std::vector<fs::path> out;std::error_code ec;
+    if(!fs::is_directory(root/L"Engine",ec))return out;unsigned seen=0;
+    for(fs::directory_iterator it(root,fs::directory_options::skip_permission_denied,ec),end;it!=end&&!ec&&++seen<=64;it.increment(ec)){
+        if(!it->is_directory(ec))continue;
+        for(const auto* platform:{L"Win64",L"WinGDK"}){const auto bin=it->path()/L"Binaries"/platform;std::error_code bec;if(!fs::is_directory(bin,bec))continue;
+            unsigned files=0;for(fs::directory_iterator f(bin,fs::directory_options::skip_permission_denied,bec),fe;f!=fe&&!bec&&++files<=256;f.increment(bec))
+                if(f->is_regular_file(bec)&&ends_with(lower_ascii(text(f->path().filename())),"-shipping.exe"))out.push_back(f->path());}}
+    std::stable_sort(out.begin(),out.end(),[](const fs::path& a,const fs::path& b){return holds_dlss(a.parent_path())>holds_dlss(b.parent_path());});
+    return out;}
+// Most likely game EXE first: one beside DLSS modules, then an Unreal shipping
+// build, then anything else, then installers, crash reporters and helpers.
+int candidate_rank(const fs::path& exe){
+    if(holds_dlss(exe.parent_path()))return 0;const auto name=lower_ascii(text(exe.filename()));if(ends_with(name,"-shipping.exe"))return 1;
+    for(const auto* helper:{"crashreport","cefsubprocess","redist","dxsetup","unins","setup"})if(name.find(helper)!=std::string::npos)return 3;
+    return 2;}
+// Folders of game data, never of the game's EXE. Skipping them keeps a large
+// game (thousands of packed asset files) inside the scan bound.
+bool data_folder(const fs::path& dir){const auto name=lower_ascii(text(dir.filename()));
+    for(const auto* data:{"content","paks","movies","saved","logs","localization","shadercache","crashes"})if(name==data)return true;
+    return false;}
 }
 
-Discovery discover(const fs::path& input){Discovery out;const auto path=local(input);if(fs::is_regular_file(path)){need(winpath::same_spelling(path.extension(),L".exe"),"请选择游戏目录或 EXE");out.executables.push_back(path);return out;}need(fs::is_directory(path)&&path!=path.root_path(),"请选择具体游戏目录，不扫描整块磁盘");
+Discovery discover(const fs::path& input){Discovery out;const auto path=local(input);if(fs::is_regular_file(path)){need(winpath::same_spelling(path.extension(),L".exe"),"请选择游戏目录或 EXE");
+        // An Unreal bootstrap at the game root: offer the game itself first, keep
+        // the chosen EXE as the last choice.
+        if(!holds_dlss(path.parent_path())){auto games=unreal_games(path.parent_path());if(!games.empty()){out.executables=std::move(games);out.executables.push_back(path);
+            out.notice="所选 EXE 是虚幻引擎的启动器，旁边没有 DLSS 模块。游戏本体已排在最前。";return out;}}
+        out.executables.push_back(path);return out;}need(fs::is_directory(path)&&path!=path.root_path(),"请选择具体游戏目录，不扫描整块磁盘");
     const auto start=GetTickCount64();unsigned count=0;std::error_code ec;for(fs::recursive_directory_iterator it(path,fs::directory_options::none,ec),end;it!=end;it.increment(ec)){if(ec){out.complete=false;break;}
         if(++count>8192||GetTickCount64()-start>15000||out.executables.size()>=128){out.complete=false;break;}const auto attr=GetFileAttributesW(it->path().c_str());if(attr==INVALID_FILE_ATTRIBUTES){out.complete=false;continue;}
-        if(attr&FILE_ATTRIBUTE_REPARSE_POINT){it.disable_recursion_pending();out.complete=false;continue;}if(it.depth()>=7&&it->is_directory()){it.disable_recursion_pending();out.complete=false;}
+        if(attr&FILE_ATTRIBUTE_REPARSE_POINT){it.disable_recursion_pending();out.complete=false;continue;}if((attr&FILE_ATTRIBUTE_DIRECTORY)&&data_folder(it->path())){it.disable_recursion_pending();continue;}if(it.depth()>=7&&it->is_directory()){it.disable_recursion_pending();out.complete=false;}
         if(it->is_regular_file()&&winpath::same_spelling(it->path().extension(),L".exe"))out.executables.push_back(it->path());}if(ec)out.complete=false;
-    std::sort(out.executables.begin(),out.executables.end());if(!out.complete)out.notice="目录检查未完整完成。请直接选择游戏 EXE 再检查，不自动猜测。";return out;}
+    std::sort(out.executables.begin(),out.executables.end(),[](const fs::path& a,const fs::path& b){const int ra=candidate_rank(a),rb=candidate_rank(b);return ra!=rb?ra<rb:a<b;});
+    if(!out.complete)out.notice=out.executables.empty()?"目录检查未完整完成，没有找到 EXE。请直接选择游戏 EXE 再检查。":"目录较大，只检查了一部分；旁边有 DLSS 模块的 EXE 排在最前。";
+    return out;}
 // ---------------------------------------------------------------- packages
 std::vector<Policy> load_packages(const fs::path& lab_root,std::vector<std::string>* notes){
     std::vector<Policy> out;const auto adapters=lab_root/L"app"/L"adapters";std::error_code ec;if(!fs::is_directory(adapters,ec))return out;
@@ -441,6 +479,8 @@ Preflight preflight(const fs::path& input){
     // NGX). What decides the route is which surface carries DLSS, not whether
     // Streamline is present at all.
     r.route=interposer&&dlss_d?"sl-rr":interposer&&dlss?"sl-sr":ngx_d?"ngx-rr":ngx?"ngx-sr":"none";
+    if(r.route=="none"){const auto games=unreal_games(dir);if(!games.empty()){std::error_code rec;
+        r.notes.push_back("这是虚幻引擎的启动器，游戏本体是 "+text(fs::relative(games.front(),dir,rec))+"。请把它从列表移除，改为添加游戏本体。");}}
     // The verdict ladder holds only what is functional: an identity that cannot
     // be checked, another loader in the folder, the DLSS route. Anti-tamper and
     // anti-cheat are risks (risks(), and the checks below name what was found),
