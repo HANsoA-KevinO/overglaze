@@ -190,7 +190,17 @@ int main() try {
         e = base; e.mv_scale_x = std::nanf(""); refused(e, "scale", "MV scale not finite");
         e = base; e.mv_scale_y = INFINITY; refused(e, "scale", "MV scale infinite");
         auto small_motion = gpu.texture(gw / 2, gh / 2, DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_NONE);
-        e = base; e.motion = small_motion.Get(); refused(e, "MVLowRes", "render-resolution motion whose extent differs from depth");
+        e = base; e.motion = small_motion.Get(); refused(e, "MVLowRes", "render-resolution motion smaller than the render region");
+        // Wuthering Waves' measured shape, scaled down: SR created IsHDR | MVLowRes |
+        // DepthInverted | AutoExposure, render subrect 1705x720, depth padded to
+        // 1708x720, motion exactly the render subrect. The motion covers the guide
+        // region, so both are cropped to it.
+        {auto ww_depth = gpu.texture(gw + 3, gh, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_NONE);
+            e = base; e.feature_id = lab::ngx::super_sampling; e.create_flags = 75; e.depth = ww_depth.Get();
+            lab::live::Frame f; const char* why = lab::ngx::translate(e, f);
+            need(!why, std::string("Wuthering Waves' shape must translate; got: ") + (why ? why : ""));
+            need(f.guide_width == gw && f.guide_height == gh && f.region_crop == 1 && f.motion_width == 0 && f.motion_height == 0,
+                 "padded depth: guide grid is the render subrect, cropped; motion on that grid");}
         e = base; e.subrect_base_offset = true; refused(e, "not at the origin", "a subrect base away from the origin");
         e = base; e.output_width = ow + 2; e.output_height = oh; refused(e, "larger than its output resource", "output extent beyond its resource");
         e = base; e.render_width = gw + 2; refused(e, "larger than the depth resource", "render subrect beyond the depth resource");

@@ -137,12 +137,20 @@ inline const char* translate(const Evaluation& e, live::Frame& f) noexcept {
     // motion beside 2972x1256 depth; the runtime resamples it onto the guide
     // grid. Anything else is refused by name rather than guessed at.
     unsigned mw = 0, mh = 0;
-    if (m.Width == d.Width && m.Height == d.Height) {
+    // Render-resolution motion is on the depth grid even when the two
+    // resources are padded differently: Wuthering Waves measured 1705x720
+    // motion beside 1708x720 depth, render subrect 1705x720. What NR needs is
+    // that the motion covers the guide region and is no larger than the depth
+    // resource (larger would be display-resolution motion mislabelled as
+    // render-resolution); both are cropped to the guide region.
+    const bool covers_guides = (e.create_flags & flag_mv_low_res) && m.Width >= gw && m.Height >= gh &&
+                               m.Width <= d.Width && m.Height <= d.Height;
+    if ((m.Width == d.Width && m.Height == d.Height) || covers_guides) {
         // same grid as depth, cropped with it
     } else if (!(e.create_flags & flag_mv_low_res) && m.Width >= ow && m.Height >= oh) {
         mw = ow; mh = oh;
     } else {
-        return (e.create_flags & flag_mv_low_res) ? "Motion declared render-resolution (MVLowRes) but its extent differs from depth"
+        return (e.create_flags & flag_mv_low_res) ? "Motion declared render-resolution (MVLowRes) but smaller than the render region"
                                                   : "Display-resolution motion is smaller than the output region";
     }
     const bool crop = ow != out.Width || oh != out.Height || gw != d.Width || gh != d.Height ||
