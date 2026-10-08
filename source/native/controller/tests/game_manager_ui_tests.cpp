@@ -98,7 +98,17 @@ int main(){
             visible(page,"games.add");visible(page,"games.add-empty");visible(page,"games.search");
             click(page,"games.add-empty");
             visible(page,"games.path");visible(page,"games.addcancel");
+            // Regression: the auto-resizing popup fed widths taken from the available
+            // region back into its own width. At a fractional scale (125%) truncation
+            // shrank it by a pixel every frame (724, 716, ... 692) until its minimum.
             click(page,"games.addcancel");need(!page.controls.contains("games.path"),"cancel closes add dialog");
+            for(const float d:{1.25f,1.5f}){const ImVec2 view{1564*d,941*d};
+                frame(page,view,d);frame(page,view,d);click(page,"games.add-empty",view,d);
+                auto* popup=ImGui::FindWindowByName("添加游戏目录");need(popup!=nullptr,"add dialog window exists");
+                for(int i=0;i<40;++i)frame(page,view,d);
+                need(popup->Size.x==std::floor(720*d),"add dialog keeps its set width across frames at "+std::to_string(d)+"x");
+                click(page,"games.addcancel",view,d);}
+            frame(page);frame(page);
 
             auto installed=game(root,"alpha","Alpha Game",true);
             auto available=game(root,"beta","Beta Game",false);

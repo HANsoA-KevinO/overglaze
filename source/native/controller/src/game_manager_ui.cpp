@@ -404,7 +404,10 @@ void GameManagerPage::draw(HWND window,float dpi){
         if(rows_.empty()&&!working){gap(18*dpi);if(primary_button("添加游戏",{185*dpi,44*dpi}))begin_add();mark("games.add-empty");}
     }
 
-    ImGui::SetNextWindowSize({(std::min)(650*dpi,ImGui::GetIO().DisplaySize.x-40*dpi),0},ImGuiCond_Appearing);
+    // Width fixed every frame, height from the content: AlwaysAutoResize alone
+    // feeds widths taken from the available region back into the window's own
+    // width, and truncation then shrinks the popup a little every frame.
+    {const float w=(std::min)(650*dpi,ImGui::GetIO().DisplaySize.x-40*dpi);ImGui::SetNextWindowSizeConstraints({w,0},{w,FLT_MAX});}
     if(ImGui::BeginPopupModal("确认插件操作",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
         heading(operation_=="install"?"安装插件":operation_=="update"?"更新插件":operation_=="repin"?"重新适配":operation_=="uninstall"?"卸载插件":"移出游戏库",23);
         gap(12*dpi);
@@ -441,7 +444,7 @@ void GameManagerPage::draw(HWND window,float dpi){
     ImGui::EndChild();ImGui::PopStyleColor();ImGui::PopStyleVar(2);
 
     if(show_add_){ImGui::OpenPopup("添加游戏目录");show_add_=false;}
-    ImGui::SetNextWindowSize({(std::min)(720*dpi,ImGui::GetIO().DisplaySize.x-40*dpi),0},ImGuiCond_Appearing);
+    {const float w=(std::min)(720*dpi,ImGui::GetIO().DisplaySize.x-40*dpi);ImGui::SetNextWindowSizeConstraints({w,0},{w,FLT_MAX});}
     if(ImGui::BeginPopupModal("添加游戏目录",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
         heading("添加游戏",24);gap(8*dpi);
         gap(16*dpi);ImGui::TextUnformatted("游戏位置");
@@ -484,7 +487,7 @@ void GameManagerPage::draw(HWND window,float dpi){
     // After installing a late-loading game: how to start it, with the exact
     // text to paste. The same card stays in that game's 启动方式 afterwards.
     if(show_launch_){ImGui::OpenPopup("启动方式");show_launch_=false;}
-    ImGui::SetNextWindowSize({(std::min)(720*dpi,ImGui::GetIO().DisplaySize.x-40*dpi),0},ImGuiCond_Appearing);
+    {const float w=(std::min)(720*dpi,ImGui::GetIO().DisplaySize.x-40*dpi);ImGui::SetNextWindowSizeConstraints({w,0},{w,FLT_MAX});}
     if(ImGui::BeginPopupModal("启动方式",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
         heading(launch_.via=="steam"?"设置 Steam 启动选项":"启动方式",23);gap(8*dpi);
         heading(launch_.title.c_str(),19);gap(12*dpi);ImGui::Separator();gap(12*dpi);

@@ -249,7 +249,8 @@ struct View {
         mark("app.about");
         if(setup_requested&&manager_allowed){setup_requested=false;ImGui::OpenPopup("模型配置##model-setup");}
         ImGui::SetNextWindowPos({io.DisplaySize.x*.5f,io.DisplaySize.y*.5f},ImGuiCond_Appearing,{.5f,.5f});
-        ImGui::SetNextWindowSize({std::min(640*dpi,io.DisplaySize.x-48*dpi),0},ImGuiCond_Appearing);
+        // Width fixed every frame, height from the content (see the game library popups).
+        {const float w=std::min(640*dpi,io.DisplaySize.x-48*dpi);ImGui::SetNextWindowSizeConstraints({w,0},{w,FLT_MAX});}
         if(ImGui::BeginPopupModal("模型配置##model-setup",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
             lab::product::wordmark(dpi);ImGui::Dummy({0,16*dpi});
             const bool ready=model_checked&&model.known&&model.error.empty();
@@ -273,7 +274,7 @@ struct View {
                 ImGui::SameLine();if(ImGui::Button("稍后配置",{180*dpi,42*dpi})){if(model_setup)model_setup->remember(lab::ModelSetupState::Decision::skipped);ImGui::CloseCurrentPopup();}mark("setup.skip");}
             ImGui::EndDisabled();ImGui::Spacing();ImGui::TextDisabled("可在设置中重新配置。");ImGui::EndPopup();}
         ImGui::SetNextWindowPos({io.DisplaySize.x*.5f,io.DisplaySize.y*.5f},ImGuiCond_Appearing,{.5f,.5f});
-        ImGui::SetNextWindowSize({620*dpi,0},ImGuiCond_Appearing);
+        {const float w=std::min(620*dpi,io.DisplaySize.x-48*dpi);ImGui::SetNextWindowSizeConstraints({w,0},{w,FLT_MAX});}
         if(ImGui::BeginPopupModal("设置##product",&about,ImGuiWindowFlags_AlwaysAutoResize)){
             lab::product::wordmark(dpi);ImGui::Spacing();ImGui::TextDisabled("0.2.0 Preview 3  /  WINDOWS · DX12");ImGui::Spacing();
             ImGui::TextWrapped("NR 控制与采集浏览");
@@ -408,9 +409,15 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
         wc.hIcon=static_cast<HICON>(LoadImageW(instance,MAKEINTRESOURCEW(101),IMAGE_ICON,GetSystemMetrics(SM_CXICON),GetSystemMetrics(SM_CYICON),LR_SHARED));
         wc.hIconSm=static_cast<HICON>(LoadImageW(instance,MAKEINTRESOURCEW(101),IMAGE_ICON,GetSystemMetrics(SM_CXSMICON),GetSystemMetrics(SM_CYSMICON),LR_SHARED));
         need(wc.hIcon&&wc.hIconSm,"Load application icons");need(RegisterClassExW(&wc)!=0,"Register viewer");
-        const auto dpi=GetDpiForSystem();const auto monitor=MonitorFromPoint({0,0},MONITOR_DEFAULTTOPRIMARY);MONITORINFO monitor_info{sizeof(monitor_info)};GetMonitorInfoW(monitor,&monitor_info);
-        const int width=std::min<int>(MulDiv(1580,dpi,96),monitor_info.rcWork.right-monitor_info.rcWork.left-60),height=std::min<int>(MulDiv(980,dpi,96),monitor_info.rcWork.bottom-monitor_info.rcWork.top-60);
-        HWND window=CreateWindowW(wc.lpszClassName,lab::brand::kViewerWindowTitle,WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,width,height,nullptr,nullptr,instance,nullptr);need(window!=nullptr,"Create viewer");
+        HWND window=CreateWindowW(wc.lpszClassName,lab::brand::kViewerWindowTitle,WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,1580,980,nullptr,nullptr,instance,nullptr);need(window!=nullptr,"Create viewer");
+        // Size and centre it for the monitor it was placed on, at that monitor's DPI.
+        // The system DPI is the primary monitor's: on a 200% monitor a size taken
+        // from it was half what the scaled layout needs, and the content overlapped
+        // until the window was resized.
+        {const auto dpi=GetDpiForWindow(window);MONITORINFO monitor_info{sizeof(monitor_info)};GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST),&monitor_info);
+            const auto& work=monitor_info.rcWork;const int work_width=work.right-work.left,work_height=work.bottom-work.top,margin=MulDiv(30,dpi,96);
+            const int width=std::min<int>(MulDiv(1580,dpi,96),work_width-2*margin),height=std::min<int>(MulDiv(980,dpi,96),work_height-2*margin);
+            SetWindowPos(window,nullptr,work.left+(work_width-width)/2,work.top+(work_height-height)/2,width,height,SWP_NOZORDER|SWP_NOACTIVATE);}
         BOOL dark=TRUE;DwmSetWindowAttribute(window,20,&dark,sizeof(dark));Renderer gpu(window);ImGui::CreateContext();auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.LogFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
         wchar_t windows[MAX_PATH]{};GetWindowsDirectoryW(windows,MAX_PATH);
         const auto font_file=std::filesystem::path(windows)/L"Fonts"/L"msyh.ttc";
