@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "source/powershell/Package-Overglaze.ps1"
 POWERSHELL = shutil.which("powershell.exe")
 GIT = shutil.which("git")
-VERSION = "0.2.0-preview.3"
+VERSION = "0.2.0-preview.4"
 NAME = f"Overglaze-{VERSION}-win64"
 BINARIES = (
     "overglaze_viewer.exe", "overglazectl.exe", "overglaze_games.exe", "overglaze_launch.exe",

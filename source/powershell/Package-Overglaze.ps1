@@ -17,7 +17,7 @@ param(
     # Only the named, signed Microsoft runtime files below can enter the payload.
     [string]$RuntimeDirectory = '',
     [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$')]
-    [string]$Version = '0.2.0-preview.3'
+    [string]$Version = '0.2.0-preview.4'
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
