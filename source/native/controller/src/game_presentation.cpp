@@ -11,7 +11,7 @@ const std::vector<BackendState> kStates{
     {"existing","external"},{"existing","research-managed"},
     {"changed","game-changed"},{"incomplete","incomplete"},
     {"blocked","modified"},{"blocked","other-copy"},{"blocked","not-installed"},{"blocked","unknown"},
-    {"denuvo-blocked","not-installed"},{"anticheat-blocked","not-installed"},{"no-dlss","not-installed"},
+    {"no-dlss","not-installed"},
     {"unsupported-store","not-installed"},{"loader-conflict","not-installed"},
 };
 // A refusal that means "this tool never offers it for this package": the
@@ -74,7 +74,9 @@ Presentation present(const Status& s,bool busy){
         else if(conflict(first)){p.label="label.loader-conflict";p.tone=Tone::warning;}
         else{p.label="label.blocked";p.tone=Tone::error;}
         folder();forget();}
-    else if(st=="denuvo-blocked"||st=="anticheat-blocked"||st=="no-dlss"||st=="unsupported-store"){
+    // Anti-tamper and anti-cheat are not states: a game with either gets the
+    // ordinary states above, and its risks are shown as information.
+    else if(st=="no-dlss"||st=="unsupported-store"){
         p.label="label."+st;p.tone=Tone::neutral;folder();forget();}
     else if(st=="loader-conflict"){p.label="label.loader-conflict";p.tone=Tone::warning;folder();forget();}
     else{p.label="label.blocked";p.tone=Tone::error;folder();} // not a backend state; the test forbids reaching it

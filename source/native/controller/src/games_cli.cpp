@@ -28,24 +28,26 @@ const wchar_t* kVerbs=L" <verb> ...\n"
     L"  reason-codes                      the code table every status, check and stage renders through (read-only)\n"
     L"  make-package <id|exe> [--name n] [--title t] [--viewport N] [--linear-depth] [--host-rebind]\n"
     L"                [--binding-preservation] [--exposure S] [--allow-unsigned-modules] [--late|--root-proxy|--root-proxy-on-insert]\n"
+    L"                writes only app/adapters/<name>; Denuvo or anti-cheat found by the preflight is recorded, not refused\n"
     L"  refresh-package <name> [--root-proxy|--root-proxy-on-insert|--late]\n"
-    L"                [--denuvo-passive-coexistence]  re-copy the payload, optionally changing how the game loads us;\n"
-    L"                the override must be said again here, exactly as for make-package. Refused while the game has\n"
+    L"                re-copy the payload, optionally changing how the game loads us. Refused while the game has\n"
     L"                Lab files installed: use update, which uninstalls, refreshes and installs in one operation\n"
-    L"  install <id|exe> --offline --no-anticheat --consent \"<text>\" [--progress]\n"
-    L"                [--denuvo-passive-coexistence]  explicitly accept an anti-tamper EXE; we still never patch it\n"
+    L"  install <id|exe> --accept-risk --consent \"<text>\" [--progress]\n"
+    L"                --accept-risk: you accept that online or anti-cheat games may not start, may kick or ban you,\n"
+    L"                and that Overglaze never hides from or bypasses any protection. Required for every game; the\n"
+    L"                older --offline --no-anticheat and --denuvo-passive-coexistence are accepted as its aliases\n"
     L"  uninstall <id|exe> --confirm [--progress]\n"
-    L"  update <id|exe> --offline --no-anticheat --consent \"<text>\" [--progress] [--denuvo-passive-coexistence]\n"
+    L"  update <id|exe> --accept-risk --consent \"<text>\" [--progress]\n"
     L"                when update_available: refresh the package first if it is behind the published host, then\n"
     L"                uninstall the installed payload and install the package's current one, as one operation\n"
-    L"  migrate <id|exe> --offline --no-anticheat --consent \"<text>\" [--progress] [--denuvo-passive-coexistence]\n"
+    L"  migrate <id|exe> --accept-risk --consent \"<text>\" [--progress]\n"
     L"                a game installed by the pre-rename build (DLSS Lab, install state legacy): uninstall its files by\n"
     L"                their recorded hashes, rewrite the package under the new names, install -- as one operation\n"
     L"  model                             the user-supplied NR model: where it is looked for, present, reviewed version (read-only)\n"
     L"  import-model <file>                validate and import your model; existing different files are not overwritten\n"
     L"  app-check update|uninstall --root <folder> [--installer-text]    read-only application maintenance check\n"
-    L"  repin <id|exe> --offline --no-anticheat --consent \"<text>\" [--progress] [--allow-unsigned-modules]\n"
-    L"                [--denuvo-passive-coexistence]  re-adapt a changed game (controller track only): full preflight,\n"
+    L"  repin <id|exe> --accept-risk --consent \"<text>\" [--progress] [--allow-unsigned-modules]\n"
+    L"                re-adapt a changed game (controller track only): full preflight,\n"
     L"                uninstall, move the old package to app/adapters-retired/, generate the new one, install\n"
     L"  --progress    write each stage as one JSON line on stderr while install/uninstall/update/repin run\n"
     L"  attach <id|exe> --pid N            inject the late-loading controller into a RUNNING game\n"
@@ -79,10 +81,13 @@ int wmain(int argc,wchar_t** argv){
         if(verb=="import-model"){if(a.size()<2)throw std::runtime_error("import-model needs a file");auto result=lab::games::model_json(m.import_model(a[1]));
             result["scope"]="User-selected model validated; identical destination reused or a verified copy imported. No DLL loaded.";
             std::cout<<result.dump(2)<<'\n';return 0;}
-        // Said out loud on this command line or not at all. It never changes how
-        // we treat the anti-tamper -- no patching, spoofing, debugging or dumping,
-        // with or without it -- only whether the refusal was deliberate.
-        m.allow_denuvo_passive_coexistence(has(L"--denuvo-passive-coexistence"));
+        // The user's risk acknowledgement, said on this command line or not at
+        // all: the CLI's equivalent of the install dialog's button. The older
+        // spellings stay accepted so existing commands keep working. It never
+        // changes how a protection is treated -- nothing hides from, patches,
+        // spoofs, debugs or dumps one, with or without it.
+        const bool risk_accepted=has(L"--accept-risk")||(has(L"--offline")&&has(L"--no-anticheat"))||has(L"--denuvo-passive-coexistence");
+        const char* const ack_usage=" requires --accept-risk --consent \"<your own words>\" (older spelling: --offline --no-anticheat)";
         // The observation-only override applied to an "unsupported-route"
         // verdict that no preflight can produce any more; say so instead of
         // silently ignoring the flag.
@@ -141,18 +146,18 @@ int wmain(int argc,wchar_t** argv){
             if(has(L"--late"))strategy="late_d3d12";
             out=lab::games::policy_json(m.refresh_package(lab::utf8(a[1]),strategy));}
         else if(verb=="install"){if(a.size()<2)throw std::runtime_error("install needs an id or EXE");const auto consent=lab::utf8(value(L"--consent"));
-            if(!has(L"--offline")||!has(L"--no-anticheat")||consent.empty())throw std::runtime_error("install requires --offline --no-anticheat --consent \"<your own words>\"");
-            const auto e=entry(a[1]);m.install(e.id,true,true,consent,progress);out=lab::games::status_json(m.inspect(e));}
+            if(!risk_accepted||consent.empty())throw std::runtime_error(std::string("install")+ack_usage);
+            const auto e=entry(a[1]);m.install(e.id,true,consent,progress);out=lab::games::status_json(m.inspect(e));}
         else if(verb=="update"){if(a.size()<2)throw std::runtime_error("update needs an id or EXE");const auto consent=lab::utf8(value(L"--consent"));
-            if(!has(L"--offline")||!has(L"--no-anticheat")||consent.empty())throw std::runtime_error("update requires --offline --no-anticheat --consent \"<your own words>\"");
-            const auto e=entry(a[1]);m.update(e.id,true,true,consent,progress);out=lab::games::status_json(m.inspect(e));}
+            if(!risk_accepted||consent.empty())throw std::runtime_error(std::string("update")+ack_usage);
+            const auto e=entry(a[1]);m.update(e.id,true,consent,progress);out=lab::games::status_json(m.inspect(e));}
         else if(verb=="migrate"){if(a.size()<2)throw std::runtime_error("migrate needs an id or EXE");const auto consent=lab::utf8(value(L"--consent"));
-            if(!has(L"--offline")||!has(L"--no-anticheat")||consent.empty())throw std::runtime_error("migrate requires --offline --no-anticheat --consent \"<your own words>\"");
-            const auto e=entry(a[1]);m.migrate(e.id,true,true,consent,progress);out={{"reason",lab::games::reason_json({"migrate-done"})},{"status",lab::games::status_json(m.inspect(e))}};}
+            if(!risk_accepted||consent.empty())throw std::runtime_error(std::string("migrate")+ack_usage);
+            const auto e=entry(a[1]);m.migrate(e.id,true,consent,progress);out={{"reason",lab::games::reason_json({"migrate-done"})},{"status",lab::games::status_json(m.inspect(e))}};}
         else if(verb=="model")out=lab::games::model_json(m.model_status());
         else if(verb=="repin"){if(a.size()<2)throw std::runtime_error("repin needs an id or EXE");const auto consent=lab::utf8(value(L"--consent"));
-            if(!has(L"--offline")||!has(L"--no-anticheat")||consent.empty())throw std::runtime_error("repin requires --offline --no-anticheat --consent \"<your own words>\"");
-            const auto e=entry(a[1]);const auto retired=m.repin(e.id,true,true,consent,has(L"--allow-unsigned-modules"),progress);out={{"retired_package",lab::utf8(retired.wstring())},{"status",lab::games::status_json(m.inspect(e))}};}
+            if(!risk_accepted||consent.empty())throw std::runtime_error(std::string("repin")+ack_usage);
+            const auto e=entry(a[1]);const auto retired=m.repin(e.id,true,consent,has(L"--allow-unsigned-modules"),progress);out={{"retired_package",lab::utf8(retired.wstring())},{"status",lab::games::status_json(m.inspect(e))}};}
         else if(verb=="uninstall"){if(a.size()<2)throw std::runtime_error("uninstall needs an id or EXE");if(!has(L"--confirm"))throw std::runtime_error("uninstall requires --confirm");
             const auto e=entry(a[1]);m.uninstall(e.id,true,progress);out=lab::games::status_json(m.inspect(e));}
         else if(verb=="attach"){

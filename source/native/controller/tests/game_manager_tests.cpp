@@ -112,7 +112,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      need(s.preflight["modules_signed"]==false&&s.preflight["modules"].contains("sl.dlss_d.dll")&&s.preflight["store"]=="unknown","synthetic modules are unsigned and store unknown");
      need(s.preflight["sections"].size()==6&&s.preflight["executable_sha256"]==lab::sha256(root/L"game/TestGame.exe"),"sections and executable hash reported");}
     reject([&]{m.make_package(e.id,{});},"unsigned Streamline modules need explicit acknowledgement");need(!fs::exists(root/L"app/adapters/testgame"),"no package written on refusal");
-    reject([&]{m.install(e.id,true,true,"x");},"no package: cannot install");
+    reject([&]{m.install(e.id,true,"x");},"no package: cannot install");
     // ---- generate the package from the published host
     lab::games::PackageOptions opt;opt.allow_unsigned_modules=true;opt.viewport=2;opt.default_exposure_stops=1.5f;opt.linear_depth=true;
     auto policy=m.make_package(e.id,opt);
@@ -134,13 +134,13 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     reject([&]{m.make_package(e.id,opt);},"existing package directory never overwritten");
     need(m.policies().size()==1&&st(m,e).state=="available"&&st(m,e).package=="testgame"&&st(m,e).can_install,"generated package makes the game available");
     // ---- consent, conflicts, foreign loaders, single writer
-    reject([&]{m.install(e.id,false,true,"c");},"offline consent mandatory");reject([&]{m.install(e.id,true,false,"c");},"no AC consent mandatory");reject([&]{m.install(e.id,true,true,"");},"consent text mandatory");need(!fs::exists(root/L"game/dxgi.dll"),"no side effects without confirmation");
+    reject([&]{m.install(e.id,false,"c");},"the risk acknowledgement is mandatory");reject([&]{m.install(e.id,true,"");},"consent text mandatory");need(!fs::exists(root/L"game/dxgi.dll"),"no side effects without confirmation");
     put(root/L"game/ReShade.ini","existing user mod");need(!st(m,e).can_install&&st(m,e).state=="blocked","loader conflict rejected");
     {auto s=st(m,e);need(s.reasons.front().code=="loader-conflict"&&s.install_state=="not-installed"&&s.reasons.front().params["files"].size()==1&&lab::games::present(s).label=="label.loader-conflict","a blocked state names its refusal");}fs::remove(root/L"game/ReShade.ini");
-    put(root/L"game/dxgi.dll","another loader");need(!st(m,e).can_install&&!st(m,e).can_uninstall,"foreign host no overwrite/delete");need(st(m,e).reasons.front().code=="foreign-loader","a foreign loader is named");reject([&]{m.install(e.id,true,true,"c");},"foreign install refused");need(fs::file_size(root/L"game/dxgi.dll")==14,"foreign bytes preserved");fs::remove(root/L"game/dxgi.dll");
+    put(root/L"game/dxgi.dll","another loader");need(!st(m,e).can_install&&!st(m,e).can_uninstall,"foreign host no overwrite/delete");need(st(m,e).reasons.front().code=="foreign-loader","a foreign loader is named");reject([&]{m.install(e.id,true,"c");},"foreign install refused");need(fs::file_size(root/L"game/dxgi.dll")==14,"foreign bytes preserved");fs::remove(root/L"game/dxgi.dll");
     put(pkg/L"dxgi.dll","tampered package");need(!st(m,e).can_install,"package payload hash bound");need(st(m,e).reasons.front().code=="package-payload-mismatch","a tampered package is named");fs::remove(pkg/L"dxgi.dll");fs::copy_file(root/L"app/research/host/dxgi.dll",pkg/L"dxgi.dll");
     const auto store=root/L"data/settings/plugin-manager",tx=store/lab::wide(e.id)/L"transaction.json";
-    {lab::Handle other(CreateFileW((store/L"writer.lock").c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,0,nullptr));need(other.valid(),"lock fixture acquired");reject([&]{m.install(e.id,true,true,"c");},"single writer enforcement");}
+    {lab::Handle other(CreateFileW((store/L"writer.lock").c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,0,nullptr));need(other.valid(),"lock fixture acquired");reject([&]{m.install(e.id,true,"c");},"single writer enforcement");}
     // ---- stale package: published host moved on
     put(root/L"app/research/host/dxgi.dll","synthetic host v2");
     {auto s=st(m,e);need(s.state=="package-stale"&&s.can_refresh_package&&!s.can_install,"package lagging the published host is not installable");
@@ -156,7 +156,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     {// The package's checker is a text file here, so the real checker run refuses
      // AFTER staging and activation: the documented failure path.
      lab::games::Manager checked(root,std::nullopt,model_hash,true);
-     reject([&]{checked.install(e.id,true,true,"fixture consent: checker refusal");},"a refused checker fails the install");
+     reject([&]{checked.install(e.id,true,"fixture consent: checker refusal");},"a refused checker fails the install");
      need(read(tx)["state"]=="removed"&&!fs::exists(root/L"game/dxgi.dll")&&!fs::exists(root/L"game/overglaze.install.json"),"the refused install removed what it copied");}
     const auto failed_staging=made(L"package-");
     need(failed_staging.size()==1&&fs::is_regular_file(failed_staging[0]/L"dxgi.dll")&&fs::is_regular_file(failed_staging[0]/L"overglaze.install.json"),"the failed install's staging is kept");
@@ -166,7 +166,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     // owner decides what to do with them).
     const auto legacy_copy=box/lab::wide("uninstall-"+lab::uuid());need(fs::create_directory(legacy_copy),"legacy recovery copy");put(legacy_copy/L"dxgi.dll","pre-rule recovery copy");
     // ---- install: transaction + second receipt beside it, in the manager's own store
-    m.install(e.id,true,true,"fixture consent: offline single-player, no anti-cheat");
+    m.install(e.id,true,"fixture consent: offline single-player, no anti-cheat");
     {auto s=st(m,e);need(s.state=="installed"&&s.installed&&s.can_uninstall&&!s.can_install,"installed state");need(read(tx)["files"].size()==4&&read(tx)["package"]=="testgame","new model owned, package recorded");
      need(lab::sha256(root/L"game/dxgi.dll")==refreshed.payload.at("dxgi.dll")&&lab::sha256(root/L"game/overglaze.install.json")==refreshed.config_sha256,"installed payload exact");
      auto docs=read(box/L"install-receipt.json");need(docs["state"]=="installed"&&docs["after"].size()==4&&docs["game_pins"].size()==4&&docs["package"]=="testgame"&&docs["adopted"]==false,"second receipt in the Manage-LabGame schema, beside the transaction");
@@ -176,7 +176,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     need(managed_copies().empty(),"no recovery copy before any uninstall");
     // ---- update: a newer published host reaches the installed game through its package
     need(!st(m,e).update_available,"a current install reports no update");
-    reject([&]{m.update(e.id,true,true,"c");},"no update without a newer package");
+    reject([&]{m.update(e.id,true,"c");},"no update without a newer package");
     std::vector<fs::path> copies_seen; // recovery copies in the order the uninstalls made them
     {auto s=st(m,e);need(s.install_state=="installed"&&s.health=="ok"&&!s.can_update&&has_reason(s,"installed")&&has_reason(s,"launch-root-layout"),"a current install: health ok, how to start it");
      need(lab::games::present(s).label=="label.installed","a current install is labelled current");}
@@ -191,7 +191,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
              "an installed game whose package is behind the published host has an update and still works");
          need(s.reasons.front().code=="update-available"&&has_reason(s,"package-behind-published")&&lab::games::present(s).label=="label.update-available"&&lab::games::present(s).dot,"有更新, with the dot");}
         std::vector<lab::games::ProgressEvent> ev;const lab::games::Progress cb=[&](const lab::games::ProgressEvent& x){ev.push_back(x);};
-        m.update(e.id,true,true,"fixture consent: offline single-player, no anti-cheat",cb);
+        m.update(e.id,true,"fixture consent: offline single-player, no anti-cheat",cb);
         {auto s=st(m,e);need(s.state=="installed"&&!s.update_available&&s.install_state=="installed"&&lab::sha256(root/L"game/dxgi.dll")==lab::sha256(root/L"app/research/host/dxgi.dll"),
              "update installs the package's current host");
          need(lab::sha256(pkg/L"dxgi.dll")==lab::sha256(root/L"app/research/host/dxgi.dll"),"one operation: the update refreshed the package itself");}
@@ -207,7 +207,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     }
     need(copies_seen.size()==2&&managed_copies().size()==2,"two updates, two recovery copies");
     need(lab::sha256(root/L"game/dxgi.dll")==refreshed.payload.at("dxgi.dll"),"back on the v2 host the assertions below expect");
-    reject([&]{m.install(e.id,true,true,"c");},"duplicate install rejected");reject([&]{m.forget(e.id);},"cannot forget active ownership");reject([&]{m.uninstall(e.id,false);},"uninstall confirmation mandatory");
+    reject([&]{m.install(e.id,true,"c");},"duplicate install rejected");reject([&]{m.forget(e.id);},"cannot forget active ownership");reject([&]{m.uninstall(e.id,false);},"uninstall confirmation mandatory");
     put(root/L"game/dxgi.dll","modified foreign bytes");need(!st(m,e).can_uninstall,"tamper detected");need(st(m,e).install_state=="modified"&&st(m,e).reasons.front().code=="installed-files-modified","tamper is named");reject([&]{m.uninstall(e.id,true);},"no destructive tamper recovery");fs::remove(root/L"game/dxgi.dll");fs::copy_file(pkg/L"dxgi.dll",root/L"game/dxgi.dll");
     auto valid=read(tx),forged=valid;forged["files"]["../important.txt"]=std::string(64,'a');put(tx,forged.dump());need(!st(m,e).can_uninstall,"receipt path traversal refused");need(st(m,e).reasons.front().code=="transaction-invalid","a forged receipt is named");put(tx,valid.dump());
     put(root/L"game/user-save.dat","user save");m.uninstall(e.id,true);need(read(tx)["state"]=="removed"&&!fs::exists(root/L"game/dxgi.dll")&&!fs::exists(root/L"game/nvngx_dlssnr.dll"),"owned files uninstalled");need(fs::exists(root/L"game/user-save.dat")&&fs::exists(root/L"game/TestGame.exe")&&fs::exists(root/L"game/sl.interposer.dll"),"game and user data preserved");
@@ -230,10 +230,10 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     fs::create_directories(root/L"docs"/L"maintenance");const auto legacy=root/L"docs"/L"maintenance"/L"testgame-install.json";
     const auto game_dir=lab::utf8((root/L"game").wstring());
     put(legacy,json{{"version",1},{"state","installed"},{"game_directory",game_dir},{"package","testgame"}}.dump(2));
-    reject([&]{m.install(e.id,true,true,"c");},"a legacy receipt that still says installed blocks the install");need(!fs::exists(root/L"game/dxgi.dll"),"nothing written past the guard");
+    reject([&]{m.install(e.id,true,"c");},"a legacy receipt that still says installed blocks the install");need(!fs::exists(root/L"game/dxgi.dll"),"nothing written past the guard");
     put(legacy,json{{"version",1},{"state","uninstalled"},{"game_directory",game_dir},{"package","testgame"}}.dump(2));const auto legacy_bytes=lab::sha256(legacy);
     // ---- reinstall archives the manager's own old receipt instead of replaying it; the legacy one is only read
-    m.install(e.id,true,true,"second consent");unsigned archived=0;for(auto& f:fs::directory_iterator(box))if(f.path().filename().wstring().starts_with(L"install-receipt-uninstalled-"))++archived;
+    m.install(e.id,true,"second consent");unsigned archived=0;for(auto& f:fs::directory_iterator(box))if(f.path().filename().wstring().starts_with(L"install-receipt-uninstalled-"))++archived;
     // Three: one from each of the two updates above, and this reinstall's.
     need(archived==3&&read(box/L"install-receipt.json")["state"]=="installed"&&read(box/L"install-receipt.json")["consent"]=="second consent","old receipt archived, new one written");
     need(lab::sha256(legacy)==legacy_bytes&&std::distance(fs::directory_iterator(root/L"docs"/L"maintenance"),fs::directory_iterator{})==1,"install neither moves nor rewrites the legacy receipt or anything beside it");
@@ -244,43 +244,62 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     need(read(legacy)["state"]=="uninstalled"&&read(legacy)["uninstalled_by"]=="overglaze-games native controller","the transitional legacy receipt is kept truthful");
     need(managed_copies().size()==2&&fs::exists(backup)&&!fs::exists(copies_seen[1]),"every later uninstall keeps exactly the newest two");
     // ---- existing identical model is used but never acquired as owned content
-    fs::copy_file(root/L"app/models/nvngx_dlssnr.dll",root/L"game/nvngx_dlssnr.dll");m.install(e.id,true,true,"c");need(read(tx)["files"].size()==3,"reused model not owned");m.uninstall(e.id,true);need(fs::exists(root/L"game/nvngx_dlssnr.dll"),"reused model survives uninstall");
+    fs::copy_file(root/L"app/models/nvngx_dlssnr.dll",root/L"game/nvngx_dlssnr.dll");m.install(e.id,true,"c");need(read(tx)["files"].size()==3,"reused model not owned");m.uninstall(e.id,true);need(fs::exists(root/L"game/nvngx_dlssnr.dll"),"reused model survives uninstall");
     // ---- interrupted install: explicit cleanup, never automatic retry
-    m.install(e.id,true,true,"c");auto interrupted=read(tx);interrupted["state"]="installing";put(tx,interrupted.dump());fs::remove(root/L"game/dxgi.dll");need(st(m,e).state=="incomplete"&&st(m,e).can_uninstall,"interrupted install recoverable");m.uninstall(e.id,true);need(!fs::exists(root/L"game/overglaze_nvngx.dll"),"partial cleanup");
+    m.install(e.id,true,"c");auto interrupted=read(tx);interrupted["state"]="installing";put(tx,interrupted.dump());fs::remove(root/L"game/dxgi.dll");need(st(m,e).state=="incomplete"&&st(m,e).can_uninstall,"interrupted install recoverable");m.uninstall(e.id,true);need(!fs::exists(root/L"game/overglaze_nvngx.dll"),"partial cleanup");
     // ---- game update: pins fail, nothing installs or enables; safe removal stays
-    m.install(e.id,true,true,"c");put(root/L"game/TestGame.exe",pe64(standard,"updated game"));need(st(m,e).state=="changed"&&st(m,e).can_uninstall,"game update does not prevent safe removal");m.uninstall(e.id,true);
+    m.install(e.id,true,"c");put(root/L"game/TestGame.exe",pe64(standard,"updated game"));need(st(m,e).state=="changed"&&st(m,e).can_uninstall,"game update does not prevent safe removal");m.uninstall(e.id,true);
     need(st(m,e).state=="changed"&&!st(m,e).can_install&&!st(m,e).can_make_package,"updated game cannot reinstall against the old package");
     {auto s=st(m,e);need(!s.can_repin&&s.refusals.contains("repin")&&s.refusals.at("repin").code=="repin-research-track"&&s.install_state=="game-changed","a research-track package is never repinned here");
      const auto view=lab::games::present(s);need(std::none_of(view.actions.begin(),view.actions.end(),[](const lab::games::Action& a){return a.name=="repin";}),"and the page does not offer it");
-     reject([&]{m.repin(e.id,true,true,"c",true);},"repin refuses a research-track package");}put(root/L"game/TestGame.exe",game_bytes);need(st(m,e).state=="available","restored build available again");
+     reject([&]{m.repin(e.id,true,"c",true);},"repin refuses a research-track package");}put(root/L"game/TestGame.exe",game_bytes);need(st(m,e).state=="available","restored build available again");
     // ---- existing installation without our transaction is recognised (adopted), removed by handle
-    m.install(e.id,true,true,"c");fs::remove(tx);need(st(m,e).state=="existing"&&st(m,e).can_uninstall&&st(m,e).host_hash==refreshed.payload.at("dxgi.dll"),"legacy install recognized through the package");
+    m.install(e.id,true,"c");fs::remove(tx);need(st(m,e).state=="existing"&&st(m,e).can_uninstall&&st(m,e).host_hash==refreshed.payload.at("dxgi.dll"),"legacy install recognized through the package");
     {auto s=st(m,e);need(s.install_state=="research-managed"&&has_reason(s,"existing-research")&&s.load_mode=="root_dxgi_minimal","a research install is research-managed, with no script to run");
      const auto view=lab::games::present(s);need(view.label=="label.research-managed"&&std::none_of(view.actions.begin(),view.actions.end(),[](const lab::games::Action& a){return a.writes;}),"and read-only on the page");}
     m.uninstall(e.id,true);need(!fs::exists(root/L"game/dxgi.dll")&&fs::exists(root/L"game/nvngx_dlssnr.dll"),"adoption removes Lab files, preserves pre-existing model");
-    // ---- verdicts for games the controller must refuse or defer
+    // ---- anti-tamper and anti-cheat: risks the user acknowledges at install,
+    // never a refusal. The checks still name what they found.
+    put(root/L"app/plugin/overglaze_controller.dll","synthetic CONTROLLER loader");
     put(root/L"game2/Denuvo.exe",pe64({".text",".xtext",".xcode",".rdata",".xtls"},"denuvo-like"));put(root/L"game2/sl.interposer.dll","sl");put(root/L"game2/sl.dlss_d.dll","dlss_d");
-    auto d=m.add(root/L"game2/Denuvo.exe");{auto s=st(m,d);need(s.state=="denuvo-blocked"&&!s.can_make_package&&!s.can_install&&s.preflight["denuvo_suspected"]==true&&s.route=="sl-rr","Denuvo sections block before any install");
-     need(check_named(s.checks,"denuvo")&&check_named(s.checks,"denuvo")->outcome==lab::games::Outcome::fail&&s.compatibility=="unsupported"&&lab::games::present(s).tone==lab::games::Tone::neutral,"Denuvo: a failed check, unsupported, grey not red");}
-    reject([&]{lab::games::PackageOptions o;o.allow_unsigned_modules=true;m.make_package(d.id,o);},"Denuvo game gets no package");
-    // NGX-direct + Denuvo (LEGO Batman's shape). The passive-coexistence
-    // override must apply to this route too, not just sl-rr, once said out loud.
-    // It is still refused WITHOUT the flag, and the flag changes nothing but
-    // that refusal.
+    auto d=m.add(root/L"game2/Denuvo.exe");{auto s=st(m,d);need(s.state=="needs-package"&&s.can_make_package&&s.preflight["denuvo_suspected"]==true&&s.preflight["verdict"]=="sl-rr-ready"&&s.route=="sl-rr","a Denuvo game is not a dead end");
+     need(check_named(s.checks,"denuvo")&&check_named(s.checks,"denuvo")->outcome==lab::games::Outcome::fail&&s.compatibility=="supported","Denuvo: still a failed, named check");
+     need(s.risks==std::vector<std::string>{"anti-tamper"}&&has_reason(s,"risk-anti-tamper")&&s.preflight["risks"]==json::array({"anti-tamper"}),"and a risk, named as such");
+     const auto view=lab::games::present(s);need(view.label=="label.available"&&view.actions.front().name=="make-package"&&view.actions.front().enabled,"offered like any other game");}
+    // What the viewer makes: late loading for a Denuvo game, the root proxy for any other.
+    need(lab::games::PackageOptions::for_viewer(true).loader.strategy=="late_d3d12"&&lab::games::PackageOptions::for_viewer(false).loader.strategy=="root_proxy_d3d12","the viewer's loader choice");
+    // NGX-direct + Denuvo (LEGO Batman's shape): the same, on its own route.
     put(root/L"game6/DenuvoNgx.exe",pe64({".text",".xtext",".xcode",".rdata",".xtls"},"denuvo-ngx"));
     put(root/L"game6/nvngx_dlss.dll","dlss");put(root/L"game6/nvngx_dlssd.dll","dlssd");
     auto dn=m.add(root/L"game6/DenuvoNgx.exe");
-    {auto s=st(m,dn);need(s.state=="denuvo-blocked"&&s.route=="ngx-rr"&&!s.can_make_package,"an NGX-direct Denuvo game is blocked by default");}
-    reject([&]{lab::games::PackageOptions o;o.allow_unsigned_modules=true;m.make_package(dn.id,o);},"NGX Denuvo game gets no package without the override");
-    m.allow_denuvo_passive_coexistence(true);
-    {lab::games::PackageOptions o;o.allow_unsigned_modules=true;o.name="denuvo-ngx";
-     const auto pkg=m.make_package(dn.id,o);need(pkg.route=="ngx-rr","the override packages an NGX-direct Denuvo game");}
-    m.allow_denuvo_passive_coexistence(false);
+    {auto s=st(m,dn);need(s.state=="needs-package"&&s.route=="ngx-rr"&&s.can_make_package&&s.risks.size()==1,"an NGX-direct Denuvo game too");}
+    {auto o=lab::games::PackageOptions::for_viewer(true);o.allow_unsigned_modules=true;o.name="denuvo-ngx";
+     const auto pkg=m.make_package(dn.id,o);
+     need(pkg.route=="ngx-rr"&&pkg.loader.strategy=="late_d3d12"&&pkg.track=="controller"&&pkg.anti_tamper()&&!pkg.payload.contains("dxgi.dll"),"a late controller package: nothing for the game's root");
+     const auto cfg=read(root/L"app/adapters/denuvo-ngx/overglaze.install.json");
+     need(cfg["version"]==4&&cfg.size()==12&&!cfg.contains("no_anticheat")&&cfg["risk"]["acknowledged"]==true&&cfg["risk"]["anti_tamper"]==true&&cfg["risk"]["anticheat"].empty(),"config V4 records Denuvo, claims nothing about anti-cheat");
+     const auto man=read(root/L"app/adapters/denuvo-ngx/package.json");bool noted=false;
+     for(const auto& n:man["notes"])if(n.get<std::string>().find("Denuvo")!=std::string::npos)noted=true;need(noted,"the package notes name the risk");}
     // Leave the registry and the package set exactly as the assertions below expect.
     m.forget(dn.id);fs::remove_all(root/L"app/adapters/denuvo-ngx");
     put(root/L"game3/Cheat.exe",pe64(standard,"cheat"));put(root/L"game3/sl.interposer.dll","sl");put(root/L"game3/sl.dlss_d.dll","dlss_d");put(root/L"game3/EasyAntiCheat_EOS.dll","eac");
-    auto c=m.add(root/L"game3/Cheat.exe");{auto s=st(m,c);need(s.state=="anticheat-blocked"&&!s.can_make_package&&s.preflight["anticheat_markers"].size()==1,"anti-cheat marker blocks");
-     need(check_named(s.checks,"anticheat")->outcome==lab::games::Outcome::fail&&s.reasons.front().params["markers"].size()==1,"the marker is a failed check and a named reason");}
+    auto c=m.add(root/L"game3/Cheat.exe");{auto s=st(m,c);need(s.state=="needs-package"&&s.can_make_package&&s.preflight["anticheat_markers"].size()==1&&s.preflight["verdict"]=="sl-rr-ready","an anti-cheat game is not refused");
+     need(check_named(s.checks,"anticheat")->outcome==lab::games::Outcome::fail&&s.anticheat==std::vector<std::string>{"Easy Anti-Cheat"}&&s.risks==std::vector<std::string>{"anticheat"}&&has_reason(s,"risk-anticheat"),"the marker is a failed check and a risk, named by product");}
+    // A research package's V3 config could only claim no_anticheat:true: refused, nothing written.
+    reject([&]{lab::games::PackageOptions o;o.allow_unsigned_modules=true;o.name="cheat-research";m.make_package(c.id,o);},"no V3 config for an anti-cheat game");need(!fs::exists(root/L"app/adapters/cheat-research"),"nothing written on that refusal");
+    {auto o=lab::games::PackageOptions::for_viewer(false);o.allow_unsigned_modules=true;o.name="cheat";const auto pkg=m.make_package(c.id,o);
+     need(pkg.loader.strategy=="root_proxy_d3d12"&&pkg.risks==std::vector<std::string>{"anticheat"}&&pkg.anticheat==std::vector<std::string>{"Easy Anti-Cheat"},"anti-cheat alone keeps the root proxy; the risk is on the package");
+     const auto cfg=read(root/L"app/adapters/cheat/overglaze.install.json");
+     need(cfg["version"]==4&&!cfg.contains("no_anticheat")&&!cfg.contains("offline_single_player")&&cfg["risk"]["anticheat"]==json::array({"Easy Anti-Cheat"})&&cfg["risk"]["anti_tamper"]==false,"the config records the anti-cheat, never no_anticheat:true");
+     need(st(m,c).state=="available"&&st(m,c).can_install,"installable");
+     reject([&]{m.install(c.id,false,"c");},"no install without the risk acknowledgement");need(!fs::exists(root/L"game3/dxgi.dll")&&!fs::exists(root/L"game3/overglaze"),"nothing written without it");
+     m.install(c.id,true,"fixture consent: risks acknowledged");
+     {auto s=st(m,c);need(s.state=="installed"&&s.health=="ok"&&fs::exists(root/L"game3/dxgi.dll")&&s.risks==std::vector<std::string>{"anticheat"},"installed after the acknowledgement");}
+     const auto txj=read(store/lab::wide(c.id)/L"transaction.json");
+     need(txj["risk_acknowledged"]==true&&txj["risks"]==json::array({"anticheat"})&&txj["consent"]=="fixture consent: risks acknowledged","the transaction records the acknowledgement and the risk");
+     m.uninstall(c.id,true);need(!fs::exists(root/L"game3/dxgi.dll")&&!fs::exists(root/L"game3/overglaze"),"and uninstalls like any other");
+     fs::remove_all(root/L"app/adapters/cheat");}
+    fs::remove(root/L"app/plugin/overglaze_controller.dll");
     put(root/L"game4/SrOnly.exe",pe64(standard,"sr"));put(root/L"game4/sl.interposer.dll","sl");put(root/L"game4/sl.dlss.dll","dlss");
     auto sr=m.add(root/L"game4/SrOnly.exe");{auto s=st(m,sr);need(s.state=="needs-package"&&s.route=="sl-sr"&&s.can_make_package,"an SR-only game can be packaged now");}
     put(root/L"game4/sl.common.dll","common");
@@ -327,7 +346,8 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      const auto plan=m.plan_install(g.id);need(plan["schema"]=="overglaze-install-plan-v1"&&plan["package"].is_null()&&plan["can_install"]==false&&plan["files"].empty(),"no package, no plan");}
     {auto o=lab::games::PackageOptions::controller_root_proxy();o.allow_unsigned_modules=true;o.name="seven";const auto p=m.make_package(g.id,o);
      need(p.track=="controller"&&p.loader.strategy=="root_proxy_d3d12","a controller root-proxy package");
-     const auto cfg=read(root/L"app/adapters/seven/overglaze.install.json");need(cfg["exception_diagnostics"]==false&&cfg.size()==13,"the controller package says exception_diagnostics=false too; 13 keys with the loader block");}
+     const auto cfg=read(root/L"app/adapters/seven/overglaze.install.json");need(cfg["exception_diagnostics"]==false&&cfg["version"]==4&&cfg.size()==12,"the controller package says exception_diagnostics=false too; config V4 is 12 keys with the loader block");
+     need(!cfg.contains("offline_single_player")&&!cfg.contains("no_anticheat")&&cfg["risk"]==json{{"acknowledged",true},{"anti_tamper",false},{"anticheat",json::array()}},"V4 states the risk acknowledgement and the facts, no offline / no-anti-cheat claim");}
     const auto seven=root/L"app/adapters/seven";
     // ---- plan_install: a dry run that writes nothing
     {const auto box=store/lab::wide(g.id);need(!fs::exists(box),"no manager box before the plan");
@@ -345,7 +365,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      need(!fs::exists(box)&&!fs::exists(root/L"game7/overglaze")&&!fs::exists(root/L"game7/dxgi.dll"),"the plan wrote nothing");}
     // ---- install, with progress
     std::vector<lab::games::ProgressEvent> ev;const lab::games::Progress cb=[&](const lab::games::ProgressEvent& x){ev.push_back(x);};
-    m.install(g.id,true,true,"fixture consent: controller game",cb);
+    m.install(g.id,true,"fixture consent: controller game",cb);
     {auto expected=lab::games::operation_stages("install");expected.erase(std::find(expected.begin(),expected.end(),"verify"));
      need(started(ev,"install","")==expected,"install reports its stages in order");
      unsigned done=0,skipped=0;for(const auto& x:ev){need(x.status!="failed","no failure");if(x.status=="done")++done;if(x.status=="skipped"){++skipped;need(x.stage=="verify","only the checker is skipped");}
@@ -359,7 +379,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     put(root/L"app/plugin/dxgi.dll","synthetic CONTROLLER proxy v2");
     m=lab::games::Manager(root,std::nullopt,model_hash,false);
     {auto s=st(m,g);need(s.install_state=="update-available"&&s.update.package_behind_published&&s.health=="ok"&&s.reasons.front().params["parts"].size()==1&&s.reasons.front().params["parts"][0]=="proxy","a newer proxy is an update, named as such");}
-    ev.clear();m.update(g.id,true,true,"fixture consent: controller game",cb);
+    ev.clear();m.update(g.id,true,"fixture consent: controller game",cb);
     {auto s=st(m,g);need(s.install_state=="installed"&&lab::sha256(root/L"game7/dxgi.dll")==lab::sha256(root/L"app/plugin/dxgi.dll"),"the update carried the new proxy");
      need(started(ev,"update","")==lab::games::operation_stages("update"),"update stages");}
     // ---- negative: the package was refreshed behind the game's back (an
@@ -370,15 +390,15 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      auto s=st(m,g);
      need(s.state=="installed"&&s.install_state=="needs-update"&&s.health=="needs-update"&&s.update.host&&!s.update.package_behind_published&&s.update_available&&s.can_update,"the health check catches a package refreshed without the game");
      need(s.reasons.front().code=="needs-update"&&lab::games::render(s.reasons.front()).find("宿主")!=std::string::npos&&check_named(s.checks,"health.host")->outcome==lab::games::Outcome::fail,"named, with the part that differs");
-     const auto view=lab::games::present(s);need(view.label=="label.needs-update"&&lab::games::code_text(view.label)==std::string("需要更新才能使用")&&view.tone==lab::games::Tone::warning&&view.actions.front().name=="update"&&view.actions.front().enabled,"需要更新才能使用, with update as the one primary action");
-     m.update(g.id,true,true,"fixture consent: controller game");
+     const auto view=lab::games::present(s);need(view.label=="label.needs-update"&&lab::games::code_text(view.label)==std::string("需更新")&&view.tone==lab::games::Tone::warning&&view.actions.front().name=="update"&&view.actions.front().enabled,"需要更新才能使用, with update as the one primary action");
+     m.update(g.id,true,"fixture consent: controller game");
      need(st(m,g).install_state=="installed"&&st(m,g).health=="ok","update repairs it");}
     // ---- an update that fails after its uninstall: back to not installed, said so
     put(root/L"app/plugin/overglaze_controller.dll","synthetic CONTROLLER loader v4");
     {lab::games::Manager checked(root,std::nullopt,model_hash,true); // the package's checker refuses
      need(st(checked,g).install_state=="update-available","an update is available");
      ev.clear();bool reported=false;
-     try{checked.update(g.id,true,true,"fixture consent: controller game",cb);}
+     try{checked.update(g.id,true,"fixture consent: controller game",cb);}
      catch(const lab::games::OperationError& x){reported=true;
         need(x.operation=="update"&&x.stage=="install"&&x.install_after=="not-installed"&&x.reason.code=="update-failed-uninstalled","the failure says where it stopped and that the game is not installed");
         need(fs::is_directory(fs::path(lab::wide(x.reason.params["recovery"].get<std::string>())))&&std::string(x.what()).find("安装检查器")!=std::string::npos,"with the recovery copy and the checker's refusal");
@@ -389,7 +409,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      // (a proxy left behind would block any reinstall).
      need(!fs::exists(root/L"game7/dxgi.dll")&&!fs::exists(root/L"game7/overglaze"),"nothing of ours is left in the game");
      auto s=st(checked,g);need(s.state=="available"&&s.install_state=="not-installed"&&s.can_install,"really not installed, and installable again");}
-    m=lab::games::Manager(root,std::nullopt,model_hash,false);m.install(g.id,true,true,"fixture consent: controller game");need(st(m,g).install_state=="installed","reinstalled");
+    m=lab::games::Manager(root,std::nullopt,model_hash,false);m.install(g.id,true,"fixture consent: controller game");need(st(m,g).install_state=="installed","reinstalled");
     // ---- the game updates: repin
     const auto old_exe=lab::sha256(root/L"game7/Seven.exe");put(root/L"game7/Seven.exe",pe64(standard,"seven v2"));
     {auto s=st(m,g);need(s.state=="changed"&&s.install_state=="game-changed"&&s.installed&&s.health=="game-changed"&&s.can_uninstall,"a changed controller game");
@@ -397,16 +417,16 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      const auto view=lab::games::present(s);const auto it=std::find_if(view.actions.begin(),view.actions.end(),[](const lab::games::Action& a){return a.name=="repin";});
      need(it!=view.actions.end()&&!it->enabled&&it->why_not.code=="repin-unsigned-modules","shown, disabled, with the reason on hover");
      need(s.preflight.is_object()&&check_named(s.checks,"module-signatures")->outcome==lab::games::Outcome::fail,"the fresh preflight is shown");}
-    reject([&]{m.repin(g.id,false,true,"c",true);},"repin needs the confirmations");
+    reject([&]{m.repin(g.id,false,"c",true);},"repin needs the risk acknowledgement");
     // A package whose profile is a compiled review row is refused (the host would
     // demand that row's EXE hash): same package, the profile id of a reviewed row.
     {auto policies=m.policies();for(auto& p:policies)if(p.name=="seven")p.profile="re9-rr-v1";
      lab::games::Manager reviewed(root,policies,model_hash,false);auto s=st(reviewed,g);
      need(s.refusals.at("repin").code=="repin-compiled-row"&&!s.can_repin,"a compiled review row is never repinned automatically");
      const auto view=lab::games::present(s);need(std::none_of(view.actions.begin(),view.actions.end(),[](const lab::games::Action& a){return a.name=="repin";}),"and not offered");
-     bool refused=false;try{reviewed.repin(g.id,true,true,"c",true);}catch(const lab::games::OperationError& x){refused=x.reason.code=="operation-failed"&&x.install_after=="game-changed";}need(refused,"repin refuses it before touching anything");
+     bool refused=false;try{reviewed.repin(g.id,true,"c",true);}catch(const lab::games::OperationError& x){refused=x.reason.code=="operation-failed"&&x.install_after=="game-changed";}need(refused,"repin refuses it before touching anything");
      need(fs::exists(root/L"game7/dxgi.dll")&&fs::is_directory(seven),"nothing touched");}
-    ev.clear();const auto retired=m.repin(g.id,true,true,"fixture consent: re-adapt",true,cb);
+    ev.clear();const auto retired=m.repin(g.id,true,"fixture consent: re-adapt",true,cb);
     need(started(ev,"repin","")==lab::games::operation_stages("repin"),"repin reports every stage in order");
     need(lab::winpath::same_spelling(retired.parent_path(),(root/L"app/adapters-retired").lexically_normal())&&retired.filename().wstring().starts_with(L"seven-repin-")&&read(retired/L"package.json")["pins"]["Seven.exe"]==old_exe,"the old package is retired, not deleted");
     need(fs::is_regular_file(retired/L"overglaze_controller.dll")&&fs::is_regular_file(retired/L"overglaze.install.json"),"retired with its payload");
@@ -414,25 +434,31 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      bool note=false;for(const auto& n:man["notes"])if(n.get<std::string>().rfind("repinned ",0)==0)note=true;need(note,"the repin is recorded in the package notes");
      need(read(seven/L"overglaze.install.json")["exception_diagnostics"]==false,"a repinned package carries exception_diagnostics=false too");}
     {auto s=st(m,g);need(s.state=="installed"&&s.install_state=="installed"&&s.health=="ok"&&fs::exists(root/L"game7/dxgi.dll"),"repinned and installed");}
-    reject([&]{m.repin(g.id,true,true,"c",true);},"nothing to repin when nothing changed");
+    reject([&]{m.repin(g.id,true,"c",true);},"nothing to repin when nothing changed");
     // ---- uninstall with progress, then forget
     ev.clear();m.uninstall(g.id,true,cb);need(started(ev,"uninstall","")==lab::games::operation_stages("uninstall"),"uninstall reports every stage in order");
     need(!fs::exists(root/L"game7/dxgi.dll")&&!fs::exists(root/L"game7/overglaze"),"uninstalled");m.forget(g.id);
-    // ---- a package made under the Denuvo override: refreshing it needs the flag
-    // said again, so the page shows the refresh disabled with that reason
+    // ---- a Denuvo game's late package: refreshed, installed and started like any
+    // other game; the risk stays recorded, and how to start it comes from this root
     put(root/L"game10/DenuvoSl.exe",pe64({".text",".xtext",".rdata"},"denuvo-sl"));put(root/L"game10/sl.interposer.dll","sl ten");put(root/L"game10/sl.common.dll","common ten");put(root/L"game10/sl.dlss_d.dll","dlss_d ten");
     {auto dz=m.add(root/L"game10/DenuvoSl.exe");
-     m.allow_denuvo_passive_coexistence(true);{auto o=lab::games::PackageOptions::controller_root_proxy();o.allow_unsigned_modules=true;o.name="denuvo-sl";need(m.make_package(dz.id,o).denuvo_override,"the override is recorded on the package");}
-     m.allow_denuvo_passive_coexistence(false);
+     {auto o=lab::games::PackageOptions::for_viewer(true);o.allow_unsigned_modules=true;o.name="denuvo-sl";const auto pkg=m.make_package(dz.id,o);need(pkg.anti_tamper()&&pkg.loader.strategy=="late_d3d12","the risk is recorded on the package, which loads late");}
+     // A manifest written while Denuvo was a refusal says so through its verdict.
+     {auto man=read(root/L"app/adapters/denuvo-sl/package.json");man["preflight"].erase("denuvo_suspected");man["preflight"].erase("risks");man["preflight"]["verdict"]="denuvo-blocked";put(root/L"app/adapters/denuvo-sl/package.json",man.dump(2));
+      lab::games::Manager older(root,std::nullopt,model_hash,false);bool found=false;for(const auto& p:older.policies())if(p.name=="denuvo-sl")found=p.anti_tamper();need(found,"an older manifest's verdict still counts as the risk");}
      put(root/L"app/plugin/overglaze_controller.dll","synthetic CONTROLLER loader v5");
      m=lab::games::Manager(root,std::nullopt,model_hash,false);
-     {auto s=st(m,dz);need(s.state=="package-stale"&&!s.can_refresh_package&&s.refusals.at("refresh-package").code=="refresh-needs-denuvo-flag","a Denuvo package's refresh is gated, and says why");
-      const auto view=lab::games::present(s);need(view.actions.front().name=="refresh-package"&&!view.actions.front().enabled&&view.actions.front().why_not.code=="refresh-needs-denuvo-flag","shown disabled with the reason");}
-     reject([&]{m.refresh_package("denuvo-sl");},"refresh refused without the flag");
-     m.allow_denuvo_passive_coexistence(true);
-     {auto s=st(m,dz);need(s.can_refresh_package&&!s.refusals.contains("refresh-package"),"with the flag said, refresh is offered");}
+     {auto s=st(m,dz);need(s.state=="package-stale"&&s.can_refresh_package&&!s.refusals.contains("refresh-package")&&s.risks==std::vector<std::string>{"anti-tamper"},"a Denuvo package refreshes like any other");}
      m.refresh_package("denuvo-sl");need(st(m,dz).state=="available","and works");
-     m.allow_denuvo_passive_coexistence(false);m.forget(dz.id);}
+     {auto s=st(m,dz);need(s.load_mode=="late_d3d12"&&s.store=="unknown"&&s.launch_via=="watch"&&s.launch_command=="\""+lab::utf8((root/L"app"/L"overglaze_games.exe").wstring())+"\" watch","not a Steam game: started through watch");}
+     put(root/L"game10/steam_api64.dll","steam");
+     m.install(dz.id,true,"fixture consent: Denuvo risk acknowledged");
+     {auto s=st(m,dz);const auto option="\""+lab::utf8((root/L"app"/L"overglaze_launch.exe").wstring())+"\" %command%";
+      need(s.installed&&s.store=="steam"&&s.launch_via=="steam"&&s.launch_command==option,"a Steam game: the launch option, built from this program's own root");
+      bool reason=false;for(const auto& r:s.reasons)if(r.code=="launch-late"&&r.params["option"]==option)reason=true;need(reason,"the status says the same");
+      need(!fs::exists(root/L"game10/dxgi.dll")&&fs::exists(root/L"game10/overglaze/overglaze_controller.dll"),"nothing in the game's root");
+      const auto j=lab::games::status_json(s);need(j["launch"]["via"]=="steam"&&j["launch"]["command"]==option&&j["risks"]==json::array({"anti-tamper"}),"and so does the status JSON");}
+     m.uninstall(dz.id,true);m.forget(dz.id);}
     // ================================================================ rename / host contract V4
     // A game installed by the pre-rename build: legacy package, legacy transaction,
     // legacy files in game11\dlsslab\. It is recognised, shown as "legacy", and
@@ -466,8 +492,8 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
            "a pre-rename package is loaded, described under the new names, and remembers its old ones");}
      {auto s=st(m,g11);need(s.state=="installed"&&s.install_state=="legacy"&&s.installed&&s.update_available&&s.can_update&&s.can_uninstall&&has_reason(s,"legacy-install"),"a pre-rename install is recognised as legacy, migratable");
       const auto view=lab::games::present(s);need(view.label=="label.legacy"&&view.actions.front().name=="update"&&view.actions.front().label=="action.migrate"&&view.actions.front().enabled,"the page offers the migration");}
-     reject([&]{m.install(g11.id,true,true,"c");},"a legacy install is never installed over");
-     ev.clear();m.migrate(g11.id,true,true,"fixture consent: migrate",cb);
+     reject([&]{m.install(g11.id,true,"c");},"a legacy install is never installed over");
+     ev.clear();m.migrate(g11.id,true,"fixture consent: migrate",cb);
      need(started(ev,"update","")==lab::games::operation_stages("update"),"the migration is the update operation, every stage");
      {auto s=st(m,g11);need(s.state=="installed"&&s.install_state=="installed"&&s.health=="ok","migrated, installed, healthy");}
      need(!fs::exists(root/L"game11/dlsslab")&&fs::is_regular_file(root/L"game11/overglaze/overglaze_controller.dll")&&fs::is_regular_file(root/L"game11/overglaze/overglaze_nvngx.dll")&&
@@ -476,7 +502,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
       for(const auto* n:{L"dlsslab_controller.dll",L"dlsslab_nvngx.dll",L"dlsslab.install.json",L"dlsslab_install_check.exe"})need(!fs::exists(pkg11/n),"the package's old files are gone");}
      {bool legacy_copy_kept=false;for(const auto& d:fs::directory_iterator(store/lab::wide(g11.id)))if(d.is_directory()&&d.path().filename().wstring().starts_with(L"uninstall-")&&fs::is_regular_file(d.path()/L"dlsslab_controller.dll"))legacy_copy_kept=true;
       need(legacy_copy_kept,"the recovery copy keeps the legacy files under their names");}
-     reject([&]{m.migrate(g11.id,true,true,"c");},"nothing to migrate twice");
+     reject([&]{m.migrate(g11.id,true,"c");},"nothing to migrate twice");
      m.uninstall(g11.id,true);need(!fs::exists(root/L"game11/overglaze")&&!fs::exists(root/L"game11/dxgi.dll"),"uninstalled after the migration");m.forget(g11.id);}
     // The user-supplied model against the reviewed-version table: the
     // synthetic model is not a reviewed version; a missing one is said as such.
@@ -511,8 +537,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      m.forget(big.id);}
     // ---- every listed backend state the synthetic flow can reach was reached
     for(const auto* pair:{"needs-package/not-installed","package-stale/not-installed","available/not-installed","installed/installed","installed/update-available","installed/needs-update","installed/legacy",
-        "existing/research-managed","changed/game-changed","incomplete/incomplete","blocked/modified","blocked/not-installed","blocked/unknown","denuvo-blocked/not-installed",
-        "anticheat-blocked/not-installed","no-dlss/not-installed"})need(reached.contains(pair),std::string("the flow reached ")+pair);
+        "existing/research-managed","changed/game-changed","incomplete/incomplete","blocked/modified","blocked/not-installed","blocked/unknown","no-dlss/not-installed"})need(reached.contains(pair),std::string("the flow reached ")+pair);
     put(store/L"games.json","broken");reject([&]{m.add(root/L"game5/Plain.exe");},"malformed registry not overwritten");need(fs::file_size(store/L"games.json")==6,"malformed registry preserved");
     // ---- storage statistic (read-only) and the disk rule for uninstall
     {const auto u=m.storage_usage();const lab::games::StorageUsage::Game* g=nullptr;for(const auto& x:u.games)if(x.id==e.id)g=&x;

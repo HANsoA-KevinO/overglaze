@@ -94,8 +94,6 @@ int main(){try{
         {"blocked","other-copy","label.other-copy",Tone::info,nullptr},
         {"blocked","not-installed","label.loader-conflict",Tone::warning,nullptr},
         {"blocked","unknown","label.blocked",Tone::error,nullptr},
-        {"denuvo-blocked","not-installed","label.denuvo-blocked",Tone::neutral,nullptr},
-        {"anticheat-blocked","not-installed","label.anticheat-blocked",Tone::neutral,nullptr},
         {"no-dlss","not-installed","label.no-dlss",Tone::neutral,nullptr},
         {"unsupported-store","not-installed","label.unsupported-store",Tone::neutral,nullptr},
         {"loader-conflict","not-installed","label.loader-conflict",Tone::warning,nullptr},
@@ -110,12 +108,21 @@ int main(){try{
     {const auto p=present(shaped("installed","installed",false));need(!find(p,"update")&&find(p,"uninstall"),"a current install offers no update");}
     {const auto p=present(shaped("existing","research-managed",false));need(!find(p,"uninstall")&&!find(p,"update"),"a research install is read-only here");}
     {const auto p=present(shaped("incomplete","incomplete",false));need(primary(p)->label=="action.cleanup","incomplete cleans up");}
-    {const auto p=present(shaped("denuvo-blocked","not-installed",false));for(const auto& a:p.actions)need(!a.writes,"an unsupported game offers nothing that writes");}
+    {const auto p=present(shaped("no-dlss","not-installed",false));for(const auto& a:p.actions)need(!a.writes,"an unsupported game offers nothing that writes");}
+    // Anti-tamper and anti-cheat are risks, not states: a game with both is
+    // shown and offered exactly as any other game in its state.
+    for(const auto* state:{"needs-package","available"}){auto s=shaped(state,"not-installed",false);s.risks={"anti-tamper","anticheat"};s.anticheat={"Easy Anti-Cheat"};
+        const auto p=present(s),plain=present(shaped(state,"not-installed",false));const auto* first=primary(p);
+        need(p.label==plain.label&&p.tone==plain.tone&&first&&first->enabled&&first->name==primary(plain)->name,std::string("risks change no state, label or action: ")+state);}
+    need(render("risk-anticheat",json{{"names",json::array({"Easy Anti-Cheat","BattlEye"})}}).find("Easy Anti-Cheat、BattlEye")!=std::string::npos,"anti-cheat names render");
+    need(render("load-plan",json{{"load_mode","late_d3d12"}}).find(code_text("load-mode.late_d3d12"))!=std::string::npos,"the planned load mode renders by name");
+    for(const auto* code:{"risk-notice","risk-anti-tamper","tag.anti-tamper","tag.anticheat","launch.steam","launch.watch","launch.insert","launch.remove","launch.uninstall"})need(code_text(code)!=nullptr,std::string("risk / launch text: ")+code);
+    for(const auto* gone:{"label.denuvo-blocked","label.anticheat-blocked","update-needs-denuvo-flag","refresh-needs-denuvo-flag","repin-needs-denuvo-flag","denuvo-override"})need(code_text(gone)==nullptr,std::string("no refusal for a risk: ")+gone);
     // A refusal decided by the backend: shown disabled, with its reason.
-    {auto s=shaped("installed","update-available",false);s.can_update=false;s.refusals["update"]={"update-needs-denuvo-flag"};
-     const auto p=present(s);const auto* u=find(p,"update");need(u&&!u->enabled&&u->why_not.code=="update-needs-denuvo-flag","a gated update says why");}
-    {auto s=shaped("changed","game-changed",false);s.can_repin=false;s.refusals["repin"]={"repin-needs-denuvo-flag"};
-     const auto p=present(s);const auto* r=find(p,"repin");need(r&&!r->enabled&&r->why_not.code=="repin-needs-denuvo-flag","a gated repin is shown disabled with its reason");}
+    {auto s=shaped("installed","update-available",false);s.can_update=false;s.refusals["update"]={"update-refresh-refused",{{"verdict","identity"}}};
+     const auto p=present(s);const auto* u=find(p,"update");need(u&&!u->enabled&&u->why_not.code=="update-refresh-refused","a gated update says why");}
+    {auto s=shaped("changed","game-changed",false);s.can_repin=false;s.refusals["repin"]={"repin-unsigned-modules"};
+     const auto p=present(s);const auto* r=find(p,"repin");need(r&&!r->enabled&&r->why_not.code=="repin-unsigned-modules","a gated repin is shown disabled with its reason");}
     // A refusal by design (research track, compiled review row): not offered at all.
     for(const auto* code:{"repin-research-track","repin-compiled-row","repin-no-game-root"}){auto s=shaped("changed","game-changed",false);s.can_repin=false;s.refusals["repin"]={code};
         const auto p=present(s);need(!find(p,"repin"),std::string("a structural refusal hides repin: ")+code);}

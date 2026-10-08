@@ -294,7 +294,7 @@ struct View {
                 ImGui::TextWrapped("数据：%s",lab::utf8(library_root().wstring()).c_str());
                 ImGui::TextWrapped("不同安装目录的数据独立。");
                 if(ImGui::SmallButton("复制根目录路径"))ImGui::SetClipboardText(root.c_str());}
-            ImGui::Spacing();ImGui::SeparatorText("使用范围");ImGui::TextWrapped("仅限离线单人、无反作弊游戏。NR 默认关闭。");
+            ImGui::Spacing();ImGui::SeparatorText("使用范围");ImGui::TextWrapped("适合离线单人游戏；联网或带反作弊的游戏风险自负。NR 默认关闭。");
             ImGui::TextWrapped("离线工具，无遥测。非 NVIDIA 官方产品。");
             ImGui::Spacing();ImGui::TextDisabled("MIT · 第三方许可见 THIRD_PARTY_NOTICES.md");
             if(ImGui::Button("关闭",{100*dpi,36*dpi}))ImGui::CloseCurrentPopup();mark("app.about.close");ImGui::EndPopup();}

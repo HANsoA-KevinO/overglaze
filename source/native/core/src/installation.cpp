@@ -163,16 +163,34 @@ Loader parse_loader(const json& j){
 Installation parse_installation(const json& j,const json& exe,const json& host){
     demand(j.is_object(),"Unsupported installation contract");
     const unsigned version=j.value("version",0u);
-    const bool embedded=version==2,data_driven=version==3;
-    // V3 (controller-generated) always states exception_diagnostics and names
-    // its adapter package plus the facts the host would otherwise compile in.
+    // V4 is V3 with the scope stated differently: instead of the user's
+    // offline / no-anti-cheat declaration it carries the user's risk
+    // acknowledgement and the facts the checks found, so a game with
+    // anti-cheat is never recorded as having none. Everything else is V3.
+    const bool acknowledged=version==4;
+    const bool embedded=version==2,data_driven=version==3||acknowledged;
+    // V3/V4 (controller-generated) always state exception_diagnostics and name
+    // their adapter package plus the facts the host would otherwise compile in.
     const bool diagnostics=(embedded&&j.contains("exception_diagnostics"))||data_driven;
-    // V3 is 12 keys, or 13 with the optional loader block. A V3 config without
-    // it is the original root dxgi.dll layout and stays valid unchanged.
-    demand((!embedded&&!data_driven&&j.size()==11&&j.at("version")==1)||(embedded&&j.size()==(diagnostics?10:9))||(data_driven&&(j.size()==12||j.size()==13)),"Unsupported installation contract");
-    demand(!j.contains("loader")||data_driven,"Only the V3 contract carries a loader block");
+    // V3 is 12 keys, or 13 with the optional loader block; V4 is 11, or 12. A
+    // config without the block is the original root dxgi.dll layout and stays
+    // valid unchanged.
+    // The extra key is the loader block and nothing else: a V3 config carrying
+    // V4's risk block, or the reverse, is neither contract.
+    const std::size_t loader_key=j.contains("loader")?1:0;
+    demand((!embedded&&!data_driven&&j.size()==11&&j.at("version")==1)||(embedded&&j.size()==(diagnostics?10:9))||
+        (version==3&&j.size()==12+loader_key)||(acknowledged&&j.size()==11+loader_key),"Unsupported installation contract");
+    demand(!j.contains("loader")||data_driven,"Only the V3/V4 contract carries a loader block");
     const auto id=j.at("profile").get<std::string>();const auto* profile=profiles::game(id);
-    demand((profile||data_driven)&&j.at("offline_single_player")==true&&j.at("no_anticheat")==true,"Unapproved game profile or offline scope");
+    demand(profile||data_driven,"Unapproved game profile");
+    if(acknowledged){
+        // The acknowledgement is the user's, given at install (the manager
+        // refuses an install without it); the facts are what the checks found.
+        // Shape only: the host treats no protection differently for them.
+        const auto& r=j.at("risk");
+        demand(r.is_object()&&r.size()==3&&r.at("acknowledged")==true&&r.at("anti_tamper").is_boolean()&&r.at("anticheat").is_array()&&r.at("anticheat").size()<=16,"V4 risk acknowledgement malformed");
+        for(const auto& name:r.at("anticheat"))demand(name.is_string()&&!name.get<std::string>().empty()&&name.get<std::string>().size()<=128,"V4 anti-cheat name malformed");
+    }else demand(j.at("offline_single_player")==true&&j.at("no_anticheat")==true,"Unapproved game profile or offline scope");
     demand(embedded||data_driven||profile->id=="cyberpunk2077-rr-v1","Additional games require the embedded V2 contract");
     // A SHA-256, or -- for a title whose EXE cannot be read (Xbox app / GDK) --
     // the installed OS package's full name (lab_package_identity.hpp).

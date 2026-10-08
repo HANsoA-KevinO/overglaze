@@ -72,6 +72,11 @@ void draw_check(const games::Check& c){
     if(c.outcome==games::Outcome::unknown&&!c.reason.empty())line+="（"+games::render(c.reason,c.value.is_object()?c.value:json{{"value",c.value}})+"）";
     ImGui::TextColored(colour,"%s",mark);ImGui::SameLine();ImGui::TextWrapped("%s",line.c_str());}
 std::string launch_text(const games::Status& s){for(const auto& r:s.reasons)if(r.code.rfind("launch-",0)==0)return games::render(r);return {};}
+bool has_risk(const games::Status& s,const char* risk){return std::find(s.risks.begin(),s.risks.end(),risk)!=s.risks.end();}
+// What the checks found, one line each: information, never an error state.
+void risk_lines(const games::Status& s){
+    if(has_risk(s,"anti-tamper"))muted_text(games::render("risk-anti-tamper").c_str());
+    if(has_risk(s,"anticheat"))muted_text(games::render("risk-anticheat",json{{"names",s.anticheat}}).c_str());}
 std::vector<games::Status> rows(games::Manager& manager){std::vector<games::Status> all;for(auto& e:manager.list())all.push_back(manager.inspect(e));return all;}
 std::string pick(HWND w){const auto result=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;std::string path;
     if(SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog)))){dialog->SetOptions(FOS_PICKFOLDERS|FOS_FORCEFILESYSTEM|FOS_PATHMUSTEXIST|FOS_NOCHANGEDIR);dialog->SetTitle(L"选择游戏安装目录");if(SUCCEEDED(dialog->Show(w))){Microsoft::WRL::ComPtr<IShellItem> item;PWSTR value=nullptr;if(SUCCEEDED(dialog->GetResult(&item))&&SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH,&value))){path=utf8(value);CoTaskMemFree(value);}}}
@@ -86,29 +91,42 @@ GameManagerPage::GameManagerPage(std::filesystem::path root,bool known):root_(st
 void GameManagerPage::mark(const char* id){const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();controls[id]={a.x,a.y,b.x-a.x,b.y-a.y};}
 void GameManagerPage::refresh(bool known){if(busy())return;error_.clear();
     {std::lock_guard guard(live_->lock);live_->text.clear();live_->index=live_->count=0;}
-    const auto root=root_;job_=std::async(std::launch::async,[root,known]{games::Manager m(root);if(known)m.import_known_installations();Result r;r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;return r;});}
-void GameManagerPage::act(const std::string& action,const std::string& id){if(busy())return;error_.clear();notice_.clear();const auto root=root_;const auto live=live_;
+    const auto root=root_;const auto opening=opening_;
+    job_=std::async(std::launch::async,[root,known,opening]{games::Manager m(root,std::nullopt,opening.model_sha256,opening.run_checker);if(known)m.import_known_installations();Result r;r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;return r;});}
+// What the install / update dialog's button means, recorded in the receipt: the
+// dialog showed what the checks found and the risk paragraph, and the user went on.
+constexpr const char* kRiskConsent="acknowledged in the viewer's confirmation dialog: online, anti-cheat and anti-tamper risks are the user's own; Overglaze bypasses no protection";
+void GameManagerPage::act(const std::string& action,const std::string& id,bool late_package){if(busy())return;error_.clear();notice_.clear();const auto root=root_;const auto live=live_;const auto opening=opening_;
     {std::lock_guard guard(live->lock);live->text.clear();live->index=live->count=0;}
-    job_=std::async(std::launch::async,[root,action,id,live]{games::Manager m(root);Result r;
+    job_=std::async(std::launch::async,[root,action,id,live,opening,late_package]{games::Manager m(root,std::nullopt,opening.model_sha256,opening.run_checker);Result r;
     // Progress: the stage now running, in the table's words.
     const games::Progress progress=[live](const games::ProgressEvent& ev){if(ev.status!="start")return;
         std::string t=words("operation."+ev.operation)+" › "+words("stage."+ev.operation+"."+ev.stage);if(!ev.parent.empty())t=words("operation."+ev.parent)+" › "+t;
         std::lock_guard guard(live->lock);live->text=std::move(t);live->index=ev.index;live->count=ev.count;};
     auto after=[&]{for(const auto& e:m.list())if(e.id==id)return m.inspect(e);return games::Status{};};
-    // The success message says how THIS game is started, from its load mode.
-    if(action=="install"){m.install(id,true,true,"confirmed in the viewer dialog: offline single-player, no anti-cheat, install allowed",progress);r.message=games::render("install-done")+" "+launch_text(after());}
-    else if(action=="update"){m.update(id,true,true,"confirmed in the viewer dialog: offline single-player, no anti-cheat, update allowed",progress);r.message=games::render("update-done")+" "+launch_text(after());}
-    else if(action=="repin"){const auto retired=m.repin(id,true,true,"confirmed in the viewer dialog: offline single-player, no anti-cheat, re-adapt and install allowed",false,progress);
-        r.message=games::render("repin-done",json{{"retired",text(retired)}})+" "+launch_text(after());}
-    // The controller's root proxy, never the research root layout (see PackageOptions).
-    else if(action=="make-package"){const auto p=m.make_package(id,games::PackageOptions::controller_root_proxy());r.message=games::render("package-made-controller",json{{"package",p.name},{"route",p.route}});}
+    // The success message says how THIS game is started, from its load mode; a
+    // late-loading game also gets the launch card with the text to paste.
+    auto started=[&](std::string done){const auto s=after();
+        if(s.installed&&!s.launch_command.empty()){r.launch=Launch{s.entry.title,s.launch_via,s.launch_command};return done;}
+        return done+" "+launch_text(s);};
+    // The dialog's button is the user's risk acknowledgement for this one operation.
+    if(action=="install"){m.install(id,true,kRiskConsent,progress);r.message=started(games::render("install-done"));}
+    else if(action=="update"){m.update(id,true,kRiskConsent,progress);r.message=started(games::render("update-done"));}
+    else if(action=="repin"){const auto retired=m.repin(id,true,kRiskConsent,false,progress);
+        r.message=started(games::render("repin-done",json{{"retired",text(retired)}}));}
+    // The controller's root proxy, never the research root layout (see
+    // PackageOptions); late loading for a game whose EXE carries Denuvo.
+    else if(action=="make-package"){auto options=games::PackageOptions::for_viewer(late_package);options.allow_unsigned_modules=opening.allow_unsigned_modules;
+        const auto p=m.make_package(id,options);r.message=games::render("package-made-controller",json{{"package",p.name},{"route",p.route}});}
     else if(action=="refresh-package"){const auto p=m.refresh_package(id);r.message=games::render("package-refreshed",json{{"package",p.name}});}
-    else if(action=="uninstall"){m.uninstall(id,true,progress);r.message=games::render("uninstall-done");}
+    else if(action=="uninstall"){const auto before=after();m.uninstall(id,true,progress);r.message=games::render("uninstall-done");
+        if(before.launch_via=="steam")r.message+=" "+games::render("launch.uninstall");}
     else if(action=="forget"){m.forget(id);r.message=games::render("forgotten");}
     else throw std::runtime_error("Unknown manager action");r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;return r;});}
 void GameManagerPage::poll(){using namespace std::chrono_literals;if(!busy()||job_.wait_for(0ms)!=std::future_status::ready)return;
     std::string failed;
-    try{auto result=job_.get();if(result.discovering){found_=std::move(result.found);candidate_=0;}else{rows_=std::move(result.rows);if(result.has_storage)storage_=std::move(result.storage);if(!result.selection.empty())selected_=std::move(result.selection);else if(selected_.empty()&&!rows_.empty())selected_=rows_.front().entry.id;}if(!result.message.empty())notice_=std::move(result.message);}
+    try{auto result=job_.get();if(result.discovering){found_=std::move(result.found);candidate_=0;}else{rows_=std::move(result.rows);if(result.has_storage)storage_=std::move(result.storage);if(!result.selection.empty())selected_=std::move(result.selection);else if(selected_.empty()&&!rows_.empty())selected_=rows_.front().entry.id;}if(!result.message.empty())notice_=std::move(result.message);
+        if(result.launch){launch_=std::move(*result.launch);show_launch_=true;}}
     // A write operation that stopped part-way says where it stopped and where it
     // left the game (an update whose install failed: not installed). The list is
     // then re-read so it shows that state rather than the one before.
@@ -120,6 +138,19 @@ void GameManagerPage::draw(HWND window,float dpi){
     const float unit=ImGui::GetFrameHeight();
     const bool working=busy();
     auto begin_add=[&]{show_add_=true;found_={};*path_=0;error_.clear();};
+    // How a late-loading game is started: where to paste it, the text itself
+    // (read-only, selectable) with a copy button, and what follows from it.
+    auto launch_card=[&](const std::string& via,const std::string& command,const char* copy_id){
+        ImGui::PushID(copy_id);
+        muted_text(games::render(via=="steam"?"launch.steam":"launch.watch").c_str());gap(6*dpi);
+        std::string shown=command;
+        ImGui::SetNextItemWidth((std::max)(120*dpi,ImGui::GetContentRegionAvail().x-100*dpi));
+        ImGui::InputText("##command",shown.data(),shown.size()+1,ImGuiInputTextFlags_ReadOnly);
+        ImGui::SameLine(0,8*dpi);
+        if(ImGui::Button("复制",{92*dpi,0}))ImGui::SetClipboardText(command.c_str());
+        ImGui::PopID();mark(copy_id);
+        if(via=="steam"){gap(6*dpi);muted_text(games::render("launch.insert").c_str());muted_text(games::render("launch.remove").c_str());}
+    };
     auto tooltip=[&](const games::Action& action){
         if(!action.enabled&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("%s",games::render(action.why_not).c_str());
@@ -129,9 +160,11 @@ void GameManagerPage::draw(HWND window,float dpi){
             const auto result=ShellExecuteW(window,L"explore",status.entry.exe.parent_path().c_str(),nullptr,nullptr,SW_SHOWNORMAL);
             if(reinterpret_cast<INT_PTR>(result)<=32)error_="Windows 无法打开游戏目录";
         }else if(action.name=="make-package"||action.name=="refresh-package"){
-            act(action.name,action.name=="refresh-package"?status.package:status.entry.id);
+            // Writes only Overglaze's own folder: no dialog. A Denuvo game's
+            // package loads late (nothing in the game's root).
+            act(action.name,action.name=="refresh-package"?status.package:status.entry.id,has_risk(status,"anti-tamper"));
         }else{
-            pending_=status.entry.id;pending_title_=status.entry.title;pending_path_=text(status.entry.exe);
+            pending_=status.entry.id;pending_title_=status.entry.title;pending_path_=text(status.entry.exe);pending_status_=status;
             operation_=action.name;approved_=false;ImGui::OpenPopup("确认插件操作");
         }
     };
@@ -223,7 +256,8 @@ void GameManagerPage::draw(HWND window,float dpi){
         const ImVec4 clip{at.x+60*dpi,at.y,at.x+width-10*dpi,at.y+height};
         const float font=ImGui::GetFontSize();
         draw->AddText(ImGui::GetFont(),font,{clip.x,at.y+16*dpi},ImGui::GetColorU32(foreground),s.entry.title.c_str(),nullptr,0,&clip);
-        const std::string label=words(view.label)+(s.running?" · 运行中":view.dot?" · 新版本":"");
+        std::string label=words(view.label)+(s.running?" · 运行中":view.dot?" · 新版本":"");
+        for(const auto& risk:s.risks)label+=" · "+words("tag."+risk); // information, never a state
         draw->AddText(ImGui::GetFont(),font*.86f,{clip.x,at.y+44*dpi},ImGui::GetColorU32(ink(view.tone)),label.c_str(),nullptr,0,&clip);
         if(hovered)ImGui::SetTooltip("%s\n%s",s.entry.title.c_str(),text(s.entry.exe).c_str());
         gap(4*dpi);ImGui::PopID();
@@ -253,6 +287,11 @@ void GameManagerPage::draw(HWND window,float dpi){
         const std::string route=s.route.empty()&&s.preflight.is_object()?s.preflight.value("route","none"):s.route;
         if(!route.empty()){if(!context.empty())context+="  /  ";context+=route_title(route);}
         if(!context.empty())muted_text(context.c_str());
+        // Protections the checks found: neutral tags and one line each. They
+        // never block; the install dialog repeats them with the risk notice.
+        if(!s.risks.empty()){gap(8*dpi);
+            for(std::size_t i=0;i<s.risks.size();++i){if(i)ImGui::SameLine(0,6*dpi);product::pill(words("tag."+s.risks[i]).c_str(),ink(games::Tone::neutral));if(!i)mark("games.risk");}
+            gap(4*dpi);risk_lines(s);}
         gap(14*dpi);
         // These three preparation states get concise navigation copy. The
         // complete backend reasons, including refusals, remain in the fold.
@@ -294,7 +333,14 @@ void GameManagerPage::draw(HWND window,float dpi){
         if(has_install_path){
             gap(20*dpi);ImGui::TextUnformatted("启动方式");gap(7*dpi);
             const std::string launch=launch_text(s);
-            if(s.load_mode=="root_proxy_d3d12")muted_text("从商店启动游戏。");
+            // Before there is a package: the loading method 生成适配包 will choose.
+            if(s.state=="needs-package"){
+                muted_text(games::render("load-plan",json{{"load_mode",has_risk(s,"anti-tamper")?"late_d3d12":"root_proxy_d3d12"}}).c_str());mark("games.load-plan");
+                if(has_risk(s,"anti-tamper"))muted_text(games::render("load-late-anti-tamper").c_str());
+                gap(4*dpi);}
+            // An installed late-loading game: the text to paste stays here, to copy again.
+            if(s.installed&&!s.launch_command.empty())launch_card(s.launch_via,s.launch_command,"games.copy-launch");
+            else if(s.load_mode=="root_proxy_d3d12")muted_text("从商店启动游戏。");
             else if(s.load_mode=="root_proxy_on_insert")muted_text("首次按 Insert 加载插件并打开面板。");
             else if(!launch.empty())ImGui::TextWrapped("%s",launch.c_str());
             else muted_text("安装后启用游戏的 DLSS 光线重构、超分辨率或 DLAA。");
@@ -345,7 +391,7 @@ void GameManagerPage::draw(HWND window,float dpi){
             gap(8*dpi);
         }
         if(ImGui::CollapsingHeader("使用范围")){
-            muted_text("仅限离线单人、无反作弊、支持 DLSS 的 DX12 游戏。Denuvo 不通过桌面安装；已支持的被动共存需在命令行确认。");
+            muted_text("适合离线单人、支持 DLSS 的 DX12 游戏。联网、带反作弊或反篡改的游戏也可安装，风险自负：可能无法启动、被踢出或被处罚。Overglaze 不绕过任何保护。");
             gap(6*dpi);muted_text("适配检查不保证画质或性能。游戏更新后需重新检查；部分游戏需单独配置。");
         }
     }else{
@@ -371,16 +417,22 @@ void GameManagerPage::draw(HWND window,float dpi){
             "仅移除游戏库记录，保留游戏和采集数据。");
         const bool writes=operation_=="install"||operation_=="update"||operation_=="repin";
         gap(12*dpi);
-        // User consent is explicit and bound to the named path. A marker scan
-        // cannot certify the absence of anti-cheat; backend gates still apply.
+        // An operation that writes into the game: what the checks found, then the
+        // one risk paragraph. Pressing the button below is the user's risk
+        // acknowledgement for this operation (a reminder, not a gate); the
+        // backend gates still apply. A marker scan proves no game free of them.
         if(writes){
-            muted_text("预检不能证明没有反作弊。");
-            gap(8*dpi);
+            if(pending_status_.risks.empty())muted_text(games::render("risk-unproven").c_str());else risk_lines(pending_status_);
+            gap(6*dpi);
+            ImGui::PushStyleColor(ImGuiCol_Text,ink(games::Tone::warning));ImGui::TextWrapped("%s",games::render("risk-notice").c_str());ImGui::PopStyleColor();
+            mark("games.risk-notice");
+            gap(6*dpi);muted_text(games::render("risk-accept").c_str());gap(16*dpi);
+        }else{
+            if(operation_=="uninstall"&&pending_status_.launch_via=="steam"){muted_text(games::render("launch.uninstall").c_str());gap(8*dpi);}
+            ImGui::Checkbox(operation_=="uninstall"?"确认卸载此游戏的 Overglaze 插件":"确认移除列表记录",&approved_);
+            mark("games.approve");gap(16*dpi);
         }
-        ImGui::Checkbox(writes?"确认离线单人、无反作弊，并允许此次操作":
-            operation_=="uninstall"?"确认卸载此游戏的 Overglaze 插件":"确认移除列表记录",&approved_);
-        mark("games.approve");gap(16*dpi);
-        ImGui::BeginDisabled(!approved_||busy());
+        ImGui::BeginDisabled((!writes&&!approved_)||busy());
         if(primary_button(operation_=="install"?"安装":operation_=="update"?"更新":operation_=="repin"?"重新适配":operation_=="uninstall"?"卸载":"移除",{150*dpi,40*dpi})){act(operation_,pending_);ImGui::CloseCurrentPopup();}
         mark("games.confirm");ImGui::EndDisabled();ImGui::SameLine(0,10*dpi);
         if(ImGui::Button("取消",{100*dpi,40*dpi}))ImGui::CloseCurrentPopup();mark("games.cancel");
@@ -421,12 +473,25 @@ void GameManagerPage::draw(HWND window,float dpi){
         gap(18*dpi);ImGui::Separator();gap(14*dpi);
         ImGui::BeginDisabled(busy()||found_.executables.empty()||!found_.complete);
         if(primary_button("添加",{165*dpi,40*dpi})){
-            const auto root=root_,exe=found_.executables.at(candidate_);
-            job_=std::async(std::launch::async,[root,exe]{games::Manager m(root);const auto added=m.add(exe);Result r;r.selection=added.id;r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;r.message=games::render("registered");return r;});
+            const auto root=root_,exe=found_.executables.at(candidate_);const auto opening=opening_;
+            job_=std::async(std::launch::async,[root,exe,opening]{games::Manager m(root,std::nullopt,opening.model_sha256,opening.run_checker);const auto added=m.add(exe);Result r;r.selection=added.id;r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;r.message=games::render("registered");return r;});
             selected_.clear();*search_=0;filter_=0;ImGui::CloseCurrentPopup();
         }
         mark("games.addconfirm");ImGui::EndDisabled();ImGui::SameLine(0,10*dpi);
         if(ImGui::Button("取消",{100*dpi,40*dpi}))ImGui::CloseCurrentPopup();mark("games.addcancel");ImGui::EndPopup();
+    }
+
+    // After installing a late-loading game: how to start it, with the exact
+    // text to paste. The same card stays in that game's 启动方式 afterwards.
+    if(show_launch_){ImGui::OpenPopup("启动方式");show_launch_=false;}
+    ImGui::SetNextWindowSize({(std::min)(720*dpi,ImGui::GetIO().DisplaySize.x-40*dpi),0},ImGuiCond_Appearing);
+    if(ImGui::BeginPopupModal("启动方式",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
+        heading(launch_.via=="steam"?"设置 Steam 启动选项":"启动方式",23);gap(8*dpi);
+        heading(launch_.title.c_str(),19);gap(12*dpi);ImGui::Separator();gap(12*dpi);
+        launch_card(launch_.via,launch_.command,"games.launch-copy");
+        gap(18*dpi);
+        if(primary_button("完成",{150*dpi,40*dpi}))ImGui::CloseCurrentPopup();mark("games.launch-close");
+        ImGui::EndPopup();
     }
 }
 }

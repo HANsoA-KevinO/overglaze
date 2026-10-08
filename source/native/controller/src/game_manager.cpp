@@ -98,15 +98,40 @@ json receipt(const fs::path& file,const Entry& e){auto j=read(file);need((j.at("
     // Five, not four: the root-proxy strategy records the thin dxgi.dll in the
     // game directory in addition to the host, bridge, model and config.
     need(j.at("files").is_object()&&j.at("files").size()<=5,"无效安装文件清单");for(auto it=j.at("files").begin();it!=j.at("files").end();++it)need(owned_name(it.key())&&hash_ok(it.value().get<std::string>()),"安装清单包含非 Lab 文件");return j;}
-// The verdicts a package can be made for without an override. Written once:
-// the gate that reached make-package but not refresh-package has happened three
-// times, and a new route is exactly when a second copy would drift.
+// The verdicts a package can be made for. Written once: the gate that reached
+// make-package but not refresh-package has happened three times, and a new
+// route is exactly when a second copy would drift. Anti-tamper and anti-cheat
+// never reach the verdict (they are risks), so every DLSS route admits.
 bool admitting_verdict(const std::string& v){return v=="sl-rr-ready"||v=="sl-sr-ready"||v=="ngx-rr-ready"||v=="ngx-sr-ready";}
-// The routes that have an admission path. Written once so the Denuvo
-// passive-coexistence override covers every route that can be admitted, not
-// just sl-rr: an NGX-direct title with Denuvo must be packable once the flag is
-// said out loud. The override never relaxes anything else.
-bool admitting_route(const std::string& r){return r=="sl-rr"||r=="sl-sr"||r=="ngx-rr"||r=="ngx-sr";}
+// What an anti-cheat file's name points to. A product is named only when its
+// own files carry that name; a file matched by the generic "anticheat" marker
+// is shown by its file name, with no product claimed for it.
+std::string anticheat_product(const std::string& marker){
+    const auto file=fs::path(wide(marker)).filename();const auto name=lower_ascii(text(file));
+    auto has=[&](const char* part){return name.find(part)!=std::string::npos;};
+    if(has("easyanticheat"))return "Easy Anti-Cheat";
+    if(has("battleye")||has("beservice")||has("beclient"))return "BattlEye";
+    if(has("equ8"))return "EQU8";
+    if(has("vgk.sys")||has("vanguard"))return "Vanguard";
+    if(has("anticheatexpert"))return "Anti-Cheat Expert";
+    const auto shown=text(file);return shown.size()<=64?shown:std::string("anticheat");}
+std::vector<std::string> anticheat_products(const std::vector<std::string>& markers){std::vector<std::string> out;
+    for(const auto& m:markers){const auto n=anticheat_product(m);if(std::find(out.begin(),out.end(),n)==out.end()&&out.size()<8)out.push_back(n);}
+    return out;}
+std::vector<std::string> risk_list(bool anti_tamper,bool anticheat){std::vector<std::string> out;
+    if(anti_tamper)out.push_back("anti-tamper");if(anticheat)out.push_back("anticheat");return out;}
+// What a package records in its notes when the checks found a risk.
+std::string risk_note(const Preflight& pre){std::string found;
+    if(pre.denuvo_suspected)found="Denuvo 反篡改";
+    if(!pre.anticheat.empty()){if(!found.empty())found+="、";found+="反作弊相关文件（";
+        for(std::size_t i=0;i<pre.anticheat.size();++i){if(i)found+="、";found+=pre.anticheat[i];}found+="）";}
+    return "检测到风险："+found+"。安装、更新和重新适配时由用户确认风险；Overglaze 不隐藏自己，"
+        "不绕过、修补、欺骗、调试或转储任何保护，也不因此放宽任何身份或状态检查。";}
+// The scope a config states: V1-V3 the user's offline / no-anti-cheat
+// declaration, V4 the user's risk acknowledgement with the facts the checks found.
+bool scope_declared(const json& c){
+    if(c.value("version",0)==4)return c.at("risk").is_object()&&c.at("risk").at("acknowledged")==true;
+    return c.at("offline_single_player")==true&&c.at("no_anticheat")==true;}
 std::vector<std::string> conflicts(const fs::path& dir){std::vector<std::string> found;for(const auto* n:{"d3d12.dll","d3d11.dll","version.dll","winmm.dll","dinput8.dll","ReShade.ini","renodx-dlss5.addon64","overglaze.addon64","overglaze_preview.addon64","dlsslab.addon64","dlsslab_preview.addon64"})if(fs::exists(dir/wide(n)))found.push_back(n);return found;}
 void copy_handle(HANDLE from,const fs::path& to,const std::string& hash){need(!fs::exists(to),"目标已存在，拒绝覆盖");Pins pin;pin.parents(to.parent_path());need(handle_digest(from)==hash,"源文件身份改变");
     Handle out(CreateFileW(to.c_str(),GENERIC_READ|GENERIC_WRITE|DELETE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));need(out.valid(),"复制失败：目标占用或权限不足");
@@ -135,12 +160,14 @@ void gate(Status& s,const char* name,bool ok,const char* code,const std::string&
     record(s,name,Outcome::fail,std::move(value),code);throw Refusal(code,message,std::move(params));}
 // How the player starts a game installed with this strategy (the success
 // message and the "how to use" text follow the load mode). A root-layout
-// install (the original layout) has no subdirectory.
-Reason launch_reason(const std::string& strategy,const std::string& subdir,const fs::path& launcher){
+// install (the original layout) has no subdirectory. A late-loading Steam game
+// is started through the launch option; any other store through watch.
+Reason launch_reason(const std::string& strategy,const std::string& subdir,const fs::path& root,const std::string& store){
     if(subdir.empty())return {"launch-root-layout"};
     if(strategy=="root_proxy_on_insert")return {"launch-root-proxy-on-insert",{{"subdir",subdir}}};
     if(proxied(strategy))return {"launch-root-proxy",{{"subdir",subdir}}};
-    return {"launch-late",{{"subdir",subdir},{"launcher",text(launcher)}}};}
+    if(store=="steam")return {"launch-late",{{"subdir",subdir},{"option",steam_launch_option(root)}}};
+    return {"launch-late-watch",{{"subdir",subdir},{"command",watch_command(root)}}};}
 
 // ---------------------------------------------------------------- progress
 // Each list is the transaction's real steps, in the order the code runs them.
@@ -337,7 +364,12 @@ std::vector<Policy> load_packages(const fs::path& lab_root,std::vector<std::stri
                 if(a.contains(bridge_key)&&hash_ok(a.at(bridge_key).get<std::string>()))p.accepted_bridges.push_back(a.at(bridge_key));}
             const auto config_file=dir.path()/(legacy?identity::legacy::kInstallationFile:identity::kInstallationFile);
             if(p.config_sha256.empty()&&fs::is_regular_file(config_file))p.config_sha256=digest(config_file);
-            p.denuvo_override=m.contains("preflight")&&m.at("preflight").is_object()&&m.at("preflight").value("verdict","")=="denuvo-blocked";
+            // The risks its preflight found. A manifest written while Denuvo and
+            // anti-cheat were refusals says so through its verdict instead.
+            if(m.contains("preflight")&&m.at("preflight").is_object()){const auto& pf=m.at("preflight");const auto verdict=pf.value("verdict","");
+                std::vector<std::string> markers;if(pf.contains("anticheat_markers")&&pf.at("anticheat_markers").is_array())for(const auto& x:pf.at("anticheat_markers"))if(x.is_string())markers.push_back(x.get<std::string>());
+                p.risks=risk_list(pf.value("denuvo_suspected",false)||verdict=="denuvo-blocked",!markers.empty()||verdict=="anticheat-blocked");
+                p.anticheat=anticheat_products(markers);}
             if(m.contains("facts")&&m.at("facts").is_object())p.facts=facts_from_json(m.at("facts"),p.profile,name,p.pins.at(p.executable));
             else if(const auto* row=profiles::game(p.profile)){p.facts=profiles::Facts::from(*row);p.facts.package=name;p.facts.title=p.title;
                 for(const auto* n:{"sl.interposer.dll","sl.common.dll","sl.dlss_d.dll"})if(p.pins.contains(n))p.facts.modules[n]=p.pins.at(n);}
@@ -347,15 +379,18 @@ std::vector<Policy> load_packages(const fs::path& lab_root,std::vector<std::stri
     std::sort(out.begin(),out.end(),[](const Policy& a,const Policy& b){return a.name<b.name;});return out;}
 json policy_json(const Policy& p){json pins=json::object(),payload=json::object();for(auto& [k,v]:p.pins)pins[k]=v;for(auto& [k,v]:p.payload)payload[k]=v;
     return {{"name",p.name},{"title",p.title},{"profile",p.profile},{"route",p.route},{"track",p.track},{"legacy",p.legacy},{"loader",{{"strategy",p.loader.strategy},{"basename",p.loader.basename},{"subdir",text(p.loader.subdir)}}},{"executable",p.executable},{"game_root",text(p.game_root)},{"directory",text(p.directory)},
-        {"pins",pins},{"payload",payload},{"config_sha256",p.config_sha256},{"checker_sha256",p.checker_sha256},{"facts",facts_json(p.facts)},{"reviewed_row",p.facts.reviewed},{"denuvo_override",p.denuvo_override}};}
+        {"pins",pins},{"payload",payload},{"config_sha256",p.config_sha256},{"checker_sha256",p.checker_sha256},{"facts",facts_json(p.facts)},{"reviewed_row",p.facts.reviewed},{"risks",p.risks},{"anticheat",p.anticheat}};}
 
 // ---------------------------------------------------------------- preflight
 json Preflight::to_json()const{json c=json::array();for(const auto& x:checks)c.push_back(check_json(x));
     return {{"schema","overglaze-game-preflight-v3"},{"executable",executable},{"executable_sha256",executable_sha256},{"executable_readable",executable_readable},{"package_identity",package_identity},
     {"store",store},{"pe_valid",pe_valid},{"pe_x64",pe_x64},{"sections",sections},{"denuvo_suspected",denuvo_suspected},{"modules",modules},{"modules_signed",modules_signed},
-    {"anticheat_markers",anticheat_markers},{"loader_conflicts",loader_conflicts},{"route",route},{"verdict",verdict},{"scan_complete",scan_complete},{"checks",c},{"notes",notes},
+    {"anticheat_markers",anticheat_markers},{"anticheat_names",anticheat},{"risks",risks()},{"loader_conflicts",loader_conflicts},{"route",route},{"verdict",verdict},{"scan_complete",scan_complete},{"checks",c},{"notes",notes},
     {"scope","read-only: nothing executed, loaded or written; module presence is navigation, not compatibility; absence of markers proves nothing; a check that could not run is ok:null, never ok:true"}};}
+std::vector<std::string> Preflight::risks()const{return risk_list(denuvo_suspected,!anticheat_markers.empty());}
 std::string store_kind(const fs::path& dir,bool has_package_identity){return has_package_identity?std::string("gdk"):store_of(dir);}
+std::string steam_launch_option(const fs::path& root){return "\""+text((root/L"app"/L"overglaze_launch.exe").lexically_normal())+"\" %command%";}
+std::string watch_command(const fs::path& root){return "\""+text((root/L"app"/L"overglaze_games.exe").lexically_normal())+"\" watch";}
 Preflight preflight(const fs::path& input){
     Preflight r;const auto exe=local(input);need(fs::is_regular_file(exe)&&winpath::same_spelling(exe.extension(),L".exe"),"请选择实际游戏 EXE");const auto dir=exe.parent_path();
     r.executable=text(exe.filename());
@@ -367,7 +402,7 @@ Preflight preflight(const fs::path& input){
      if(!h.valid()){r.executable_readable=false;r.notes.push_back(GetLastError()==ERROR_ACCESS_DENIED?"EXE 读取被拒（受商店许可保护的包，如 Xbox app/GDK）":"EXE 无法打开");}
      else{r.executable_readable=true;const auto pe=pe_info(h.value);r.pe_valid=pe.valid;r.pe_x64=pe.x64;r.sections=pe.sections;pe_error=pe.error;if(!pe.valid)r.notes.push_back("PE 头无法解析: "+pe.error);
         for(const auto& s:r.sections)if(s==".xtext"||s==".xcode"||s==".xtls"||s==".sxdata")r.denuvo_suspected=true;
-        if(r.denuvo_suspected)r.notes.push_back("节表含 Denuvo 虚拟化段（.xtext/.xcode/.xtls/.sxdata）；反篡改会拒绝进程内钩子，不绕过");
+        if(r.denuvo_suspected)r.notes.push_back("节表含 Denuvo 虚拟化段（.xtext/.xcode/.xtls/.sxdata）：作为风险提示，安装时由用户确认；不绕过、不修补反篡改");
         r.executable_sha256=handle_digest(h.value);}}
     // The OS package, when Windows has one installed around this EXE, is the
     // identity for readable and unreadable EXEs alike -- the same rule the
@@ -398,19 +433,23 @@ Preflight preflight(const fs::path& input){
         }catch(const std::exception& e){r.notes.push_back(std::string(n)+": "+e.what());r.scan_complete=false;unreadable.push_back(n);}}
     bool markers_complete=true;unsigned scanned=0;
     scan_markers(dir,r.anticheat_markers,markers_complete,scanned);if(!markers_complete)r.scan_complete=false;r.loader_conflicts=conflicts(dir);
+    r.anticheat=anticheat_products(r.anticheat_markers);
+    if(!r.anticheat.empty())r.notes.push_back("发现反作弊相关文件（按文件名判断）：作为风险提示，安装时由用户确认；Overglaze 不隐藏自己，不绕过反作弊");
     // A game may ship Streamline for frame generation and still call DLSS and Ray
     // Reconstruction straight through NGX -- the Unreal DLSS plugin does exactly
     // that (Halo: Campaign Evolved ships an interposer and still calls RR through
     // NGX). What decides the route is which surface carries DLSS, not whether
     // Streamline is present at all.
     r.route=interposer&&dlss_d?"sl-rr":interposer&&dlss?"sl-sr":ngx_d?"ngx-rr":ngx?"ngx-sr":"none";
-    // The verdict ladder is unchanged. "Cannot check" stays visible in the
-    // checks below instead of passing silently; it does not by itself
-    // turn a supported game into a refused one -- the Xbox app titles that work
-    // today (Hellblade 2, A Plague Tale) are exactly the unreadable-EXE case.
+    // The verdict ladder holds only what is functional: an identity that cannot
+    // be checked, another loader in the folder, the DLSS route. Anti-tamper and
+    // anti-cheat are risks (risks(), and the checks below name what was found),
+    // shown to the user and accepted at install -- not rungs that refuse.
+    // "Cannot check" stays visible in the checks instead of passing silently;
+    // it does not by itself turn a supported game into a refused one -- the
+    // Xbox app titles that work today (Hellblade 2, A Plague Tale) are exactly
+    // the unreadable-EXE case.
     if(!r.executable_readable&&r.package_identity.is_null())r.verdict="unsupported-store";
-    else if(r.denuvo_suspected)r.verdict="denuvo-blocked";
-    else if(!r.anticheat_markers.empty())r.verdict="anticheat-blocked";
     else if(!r.loader_conflicts.empty())r.verdict="loader-conflict";
     else if(r.route=="sl-rr"){r.verdict="sl-rr-ready";
         r.notes.push_back("控制器宿主：游戏关闭光线重建、改用 DLSS 超分时，NR 自动改接在超分输出之后");}
@@ -432,7 +471,7 @@ Preflight preflight(const fs::path& input){
     else if(!r.pe_valid)add("denuvo",Outcome::unknown,pe_error,"pe-invalid");
     else if(r.denuvo_suspected){json found=json::array();for(const auto& s:r.sections)if(s==".xtext"||s==".xcode"||s==".xtls"||s==".sxdata")found.push_back(s);add("denuvo",Outcome::fail,found,"denuvo-sections");}
     else add("denuvo",Outcome::pass);
-    if(!r.anticheat_markers.empty())add("anticheat",Outcome::fail,r.anticheat_markers,"markers-found");
+    if(!r.anticheat_markers.empty())add("anticheat",Outcome::fail,r.anticheat,"markers-found");
     else if(!markers_complete)add("anticheat",Outcome::unknown,json{{"entries",scanned},{"limit",kMarkerScanEntries},{"seconds",kMarkerScanSeconds}},"scan-truncated");
     else add("anticheat",Outcome::pass,json{{"entries",scanned}});
     if(!r.loader_conflicts.empty())add("loader-conflicts",Outcome::fail,r.loader_conflicts,"conflicts-found");
@@ -471,7 +510,12 @@ std::map<std::string,std::string> Manager::published_host(const std::string& tra
     // compares against this entry instead of dxgi.dll.
     for(const auto* n:{"overglaze_controller.dll"}){const auto p=dir/wide(n);if(fs::is_regular_file(p))out[n]=digest(p);}
     return out;}
-Status Manager::inspect(const Entry& e)const{return inspect_impl(e,true);}
+Status Manager::inspect(const Entry& e)const{auto s=inspect_impl(e,true);
+    // The risks, named as facts after whatever the state says: never a refusal.
+    for(const auto& r:s.risks)s.reasons.push_back(r=="anti-tamper"?Reason{"risk-anti-tamper"}:Reason{"risk-anticheat",{{"names",s.anticheat}}});
+    // How a late-loading game is started, built from this program's own root.
+    if(s.load_mode=="late_d3d12"){s.launch_via=s.store=="steam"?"steam":"watch";s.launch_command=s.launch_via=="steam"?steam_launch_option(root_):watch_command(root_);}
+    return s;}
 namespace {
 // Lab-owned files of this package already in its game (by name only; the
 // transaction or the existing-install check decides whose they are).
@@ -497,9 +541,9 @@ bool conflict_code(const std::string& c){return c=="loader-conflict"||c=="foreig
     c=="model-missing"||c=="model-unknown-version";}
 }
 Reason Manager::refresh_refusal(const Policy& p,const Preflight& pre)const{
-    const bool denuvo=pre.verdict=="denuvo-blocked"&&admitting_route(pre.route);
-    if(!admitting_verdict(pre.verdict)&&!(denuvo&&denuvo_passive_coexistence_))
-        return denuvo?Reason{"update-needs-denuvo-flag"}:Reason{"update-refresh-refused",{{"verdict",pre.verdict}}};
+    // Anti-tamper and anti-cheat are not part of this: they are risks the
+    // user acknowledges at install, never a refusal here.
+    if(!admitting_verdict(pre.verdict))return {"update-refresh-refused",{{"verdict",pre.verdict}}};
     if(pre.executable_sha256!=p.pins.at(p.executable))return {"update-refresh-refused",{{"verdict","identity"}}};
     for(const auto& [n,pin]:p.facts.modules)if(!pre.modules.contains(n)||pre.modules.at(n).value("sha256","")!=pin)return {"update-refresh-refused",{{"verdict","module "+n}}};
     return {};}
@@ -512,9 +556,7 @@ Reason Manager::repin_refusal(const Policy& p,const fs::path& exe,bool allow_uns
     if(profiles::game(p.profile)||p.facts.reviewed)return {"repin-compiled-row",{{"profile",p.profile}}};
     if(p.game_root.empty())return {"repin-no-game-root"};
     *pre=games::preflight(exe);
-    const bool denuvo=pre->verdict=="denuvo-blocked"&&admitting_route(pre->route);
-    if(!admitting_verdict(pre->verdict)&&!(denuvo&&denuvo_passive_coexistence_))
-        return denuvo?Reason{"repin-needs-denuvo-flag"}:Reason{"repin-preflight-failed",{{"verdict",pre->verdict}}};
+    if(!admitting_verdict(pre->verdict))return {"repin-preflight-failed",{{"verdict",pre->verdict}}};
     if(!pre->modules_signed&&!allow_unsigned)return {"repin-unsigned-modules"};
     if(pre->route!=p.route)return {"repin-route-changed",{{"old",p.route},{"new",pre->route}}};
     return {};}
@@ -522,8 +564,8 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
     const auto exe=within("path-invalid",[&]{return local(e.exe);}),dir=exe.parent_path();
     s.running=within("process-check-failed",[&]{return running(exe);});
     const Policy* p=within("multiple-packages",[&]{return match(exe);});
-    if(p){s.package=p->name;s.route=p->route;s.track=p->track;s.load_mode=p->loader.strategy;}
-    const auto launcher=root_/L"app"/L"overglaze_launch.exe";
+    if(p){s.package=p->name;s.route=p->route;s.track=p->track;s.load_mode=p->loader.strategy;s.risks=p->risks;s.anticheat=p->anticheat;
+        s.store=store_kind(dir,is_package_token(p->pins.at(p->executable)));}
     // A game whose EXE or modules changed: offer the re-adaptation when this
     // package qualifies and its fresh preflight passes.
     auto changed=[&](Reason why){s.state="changed";s.install_state="game-changed";s.health=s.installed?"game-changed":"not-applicable";
@@ -531,8 +573,9 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         if(!full||!p)return;
         Preflight pre;const auto refusal=repin_refusal(*p,exe,false,&pre);
         if(!pre.executable.empty()){s.preflight=pre.to_json();for(const auto& c:pre.checks)s.checks.push_back(c);
-            s.compatibility=admitting_route(pre.route)&&(admitting_verdict(pre.verdict)||(pre.verdict=="denuvo-blocked"&&denuvo_passive_coexistence_))?"supported":
-                pre.verdict=="loader-conflict"?"supported":"unsupported";}
+            s.compatibility=admitting_verdict(pre.verdict)||pre.verdict=="loader-conflict"?"supported":"unsupported";
+            // The changed game's own risks, as found now.
+            s.risks=pre.risks();s.anticheat=pre.anticheat;}
         if(refusal.code.empty()){s.can_repin=!s.running;s.reasons.push_back({"repin-available"});}
         else{s.refusals["repin"]=refusal;s.reasons.push_back(refusal);}};
     const auto tx=store_/wide(e.id)/L"transaction.json";
@@ -612,31 +655,28 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         else if(s.update_available){for(const auto& n:newer)if(std::find(parts.begin(),parts.end(),n)==parts.end())parts.push_back(n);s.reasons.push_back({"update-available",{{"parts",parts}}});}
         else s.reasons.push_back({"installed"});
         if(s.update.package_behind_published)s.reasons.push_back({"package-behind-published",{{"published",p->track=="controller"?"app/plugin":"app/research/host"}}});
-        s.reasons.push_back(launch_reason(strategy,sub,launcher));
+        s.reasons.push_back(launch_reason(strategy,sub,root_,s.store));
         // An update that has to refresh the package re-runs the refresh gates
         // first; say now whether they would pass, rather than after an uninstall.
         if(full&&s.update.package_behind_published){const auto why=refresh_refusal(*p,games::preflight(exe));if(!why.code.empty())s.refusals["update"]=why;}
         s.can_update=s.update_available&&!s.running&&!s.refusals.contains("update");
         return s;}}
-    if(!p){const auto pre=games::preflight(exe);s.preflight=pre.to_json();s.route=pre.route;s.checks=pre.checks;
-        // A deliberate, recorded override of the anti-tamper refusal, and only
-        // for a game whose route we actually support. Every other refusal in
-        // the ladder -- unreadable EXE, anti-cheat markers, loader conflict --
-        // is untouched by it.
-        const bool denuvo_overridden=pre.verdict=="denuvo-blocked"&&denuvo_passive_coexistence_&&admitting_route(pre.route);
-        s.state=(admitting_verdict(pre.verdict)||denuvo_overridden)?"needs-package":pre.verdict;s.can_make_package=s.state=="needs-package"&&!s.running;
+    if(!p){const auto pre=games::preflight(exe);s.preflight=pre.to_json();s.route=pre.route;s.checks=pre.checks;s.store=pre.store;
+        // Denuvo and anti-cheat are risks (s.risks), never a state of their own:
+        // such a game gets the ordinary states, and the install dialog names them.
+        s.risks=pre.risks();s.anticheat=pre.anticheat;
+        s.state=admitting_verdict(pre.verdict)?"needs-package":pre.verdict;s.can_make_package=s.state=="needs-package"&&!s.running;
         s.compatibility=s.state=="needs-package"||s.state=="loader-conflict"?"supported":"unsupported";
         if(s.state=="needs-package"){s.reasons.push_back({"package-missing",{{"route",pre.route},{"store",pre.store}}});
-            if(!pre.modules_signed)s.reasons.push_back({"modules-unsigned"});if(denuvo_overridden)s.reasons.push_back({"denuvo-override"});
+            if(!pre.modules_signed)s.reasons.push_back({"modules-unsigned"});
             // A package carries the user's model hash, so it cannot be made without
             // a reviewed model in place; say which, before the button is pressed.
             const auto m=model_status();
             if(!m.known){const Reason why=m.present?Reason{"model-unknown-version",{{"hash",m.sha256}}}:Reason{"model-missing",{{"path",text(m.path)}}};
                 record(s,"local-model",Outcome::fail,m.present?json(m.sha256):json(nullptr),why.code);
                 s.can_make_package=false;s.refusals["make-package"]=why;s.reasons.push_back(why);}}
-        else if(s.state=="anticheat-blocked")s.reasons.push_back({"anticheat-blocked",{{"markers",pre.anticheat_markers}}});
         else if(s.state=="loader-conflict")s.reasons.push_back({"loader-conflict",{{"files",pre.loader_conflicts}}});
-        else s.reasons.push_back({s.state}); // denuvo-blocked | unsupported-store | no-dlss
+        else s.reasons.push_back({s.state}); // unsupported-store | no-dlss
         json unknown=json::array();for(const auto& c:pre.checks)if(c.outcome==Outcome::unknown)unknown.push_back(c.name);
         if(!unknown.empty())s.reasons.push_back({"preflight-incomplete",{{"count",unknown.size()},{"check",unknown}}});
         return s;}
@@ -680,8 +720,8 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         const auto bridge=within("file-unreadable",[&]{return digest(f.dir/f.bridge);});
         gate(s,"existing-bridge",std::find(p->accepted_bridges.begin(),p->accepted_bridges.end(),bridge)!=p->accepted_bridges.end(),"foreign-bridge","已有 NR 桥接文件身份不同",json::object(),bridge);
         auto c=within("existing-config-unsupported",[&]{return read(f.dir/f.config);});const auto v=c.value("version",0);
-        gate(s,"existing-config",(v==2&&c.size()==10)||(v==3&&(c.size()==12||c.size()==13)),"existing-config-unsupported","既有安装配置不是受支持的 V2/V3 契约",json::object(),v);
-        const bool consistent=within("existing-config-mismatch",[&]{return c.at("profile")==p->profile&&c.at("game_sha256")==p->pins.at(p->executable)&&c.at("host_sha256")==h&&c.at("bridge_sha256")==bridge&&c.at("offline_single_player")==true&&c.at("no_anticheat")==true&&c.at("in_game_controls")==true;});
+        gate(s,"existing-config",(v==2&&c.size()==10)||(v==3&&(c.size()==12||c.size()==13))||(v==4&&(c.size()==11||c.size()==12)),"existing-config-unsupported","既有安装配置不是受支持的 V2-V4 契约",json::object(),v);
+        const bool consistent=within("existing-config-mismatch",[&]{return c.at("profile")==p->profile&&c.at("game_sha256")==p->pins.at(p->executable)&&c.at("host_sha256")==h&&c.at("bridge_sha256")==bridge&&scope_declared(c)&&c.at("in_game_controls")==true;});
         gate(s,"existing-config",consistent,"existing-config-mismatch","既有安装配置与适配包不一致");
         const auto output_root=within("existing-config-mismatch",[&]{return c.at("output_root").get<std::string>();});
         gate(s,"existing-output-root",winpath::same_spelling(fs::path(wide(output_root)),root_/L"data"),"installed-by-other-copy","既有安装输出目录与当前 Lab 不匹配",json{{"output_root",output_root}},output_root);
@@ -701,7 +741,6 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         // under the new names from the published host; nothing is installed yet.
         record(s,"published",Outcome::fail,nullptr,"legacy-package");
         s.state="package-stale";s.can_refresh_package=true;s.reasons.push_back({"legacy-package"});
-        if(p->denuvo_override&&!denuvo_passive_coexistence_){s.can_refresh_package=false;s.refusals["refresh-package"]={"refresh-needs-denuvo-flag"};s.reasons.push_back({"refresh-needs-denuvo-flag"});}
         return s;}
     if(fs::exists(dir/L"nvngx_dlssnr.dll"))gate(s,"model",within("file-unreadable",[&]{return digest(dir/L"nvngx_dlssnr.dll");})==p->payload.at("nvngx_dlssnr.dll"),"model-mismatch","已有 NR 模型身份不同，不覆盖");
     if(full){
@@ -717,15 +756,11 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         if(!newer.empty()){record(s,"published",Outcome::fail,newer,"package-stale");
             s.state="package-stale";s.can_refresh_package=true;
             s.reasons.push_back({"package-stale",{{"published",p->track=="controller"?"app/plugin":"app/research/host"}}});
-            // A package made under the Denuvo override is refreshed only by someone
-            // who says it again (refresh_package re-runs that gate), so the page
-            // shows the button disabled with the reason instead of failing on click.
-            if(p->denuvo_override&&!denuvo_passive_coexistence_){s.can_refresh_package=false;s.refusals["refresh-package"]={"refresh-needs-denuvo-flag"};s.reasons.push_back({"refresh-needs-denuvo-flag"});}
             return s;}
         record(s,"published",Outcome::pass);}
     s.state="available";s.can_install=!s.running;
     s.reasons.push_back({"package-ready",{{"package",p->title},{"route",p->route}}});
-    s.reasons.push_back(launch_reason(p->loader.strategy,text(p->loader.subdir),launcher));
+    s.reasons.push_back(launch_reason(p->loader.strategy,text(p->loader.subdir),root_,s.store));
 }catch(const Refusal& r){s.state="blocked";s.reasons.clear();s.reasons.push_back({r.code,r.params});
     s.can_install=s.can_uninstall=s.can_make_package=s.can_update=s.can_repin=false;s.health=s.installed?"unknown":"not-applicable";
     s.install_state=r.code=="installed-files-modified"?"modified":r.code=="installed-by-other-copy"?"other-copy":!s.installed&&conflict_code(r.code)?"not-installed":"unknown";}
@@ -742,11 +777,16 @@ json status_json(const Status& s){json reasons=json::array(),checks=json::array(
     {"load_mode",s.load_mode.empty()?json(nullptr):json(s.load_mode)},
     {"update",{{"available",s.update_available},{"host",s.update.host},{"bridge",s.update.bridge},{"config",s.update.config},{"proxy",s.update.proxy},{"package_behind_published",s.update.package_behind_published}}},
     {"health",s.health},{"can_update",s.can_update},{"can_repin",s.can_repin},
+    {"risks",s.risks},{"anticheat",s.anticheat},{"store",s.store},
+    {"launch",s.launch_via.empty()?json(nullptr):json{{"via",s.launch_via},{"command",s.launch_command}}},
     {"reasons",reasons},{"checks",checks},{"refusals",refusals},{"presentation",presentation_json(present(s))}};}
 Policy Manager::write_package(const fs::path& exe,const std::string& name,const profiles::Facts& facts_in,const std::string& title,const Preflight& pre,json notes,bool replace,const std::string& consent,const std::string& track,const Loader& loader){
     need(plain_name(name),"适配包名必须是小写字母/数字开头的简单标识符");const auto pkg=root_/L"app"/L"adapters"/wide(name);
     need(replace||!fs::exists(pkg),"适配包目录已存在；不覆盖（刷新载荷请用 refresh-package）");
     need(track=="controller"||track=="research","适配包的 track 只能是 controller 或 research");
+    // Before anything is written: a research package's V3 config can only say
+    // no_anticheat:true (see the config below).
+    need(track=="controller"||pre.anticheat_markers.empty(),"研究轨配置（V3）只能写 no_anticheat:true，与检测到的反作弊文件不符；请改用控制器加载方式（--root-proxy 或 --late）");
     // The host comes from this package's OWN track. Taking it from a fixed
     // directory is how a research game would end up carrying the controller host.
     const auto plugin=track=="controller"?root_/L"app"/L"plugin":root_/L"app"/L"research"/L"host";
@@ -806,12 +846,25 @@ Policy Manager::write_package(const fs::path& exe,const std::string& name,const 
     // research host does, and true there installs its first-chance vectored
     // exception observer, a risk next to anti-tamper code that raises its own
     // deliberate exceptions (RE9). Packages generated or refreshed here carry
-    // false; no existing package is rewritten for it. The V3 key count is
-    // unchanged.
-    json config={{"version",3},{"profile",facts.id},{"offline_single_player",true},{"no_anticheat",true},{"game_sha256",pre.executable_sha256},{"host_sha256",host},{"bridge_sha256",bridge},
-        {"output_root",text(root_/L"data")},{"in_game_controls",true},{"exception_diagnostics",false},{"package",name},{"facts",facts_json(facts)}};
+    // false; no existing package is rewritten for it.
+    //
+    // Config version 4 (controller track): the user's risk acknowledgement and
+    // the facts the checks found replace V3's offline / no-anti-cheat
+    // declaration, so a game with anti-cheat is never recorded as having none.
+    // Every install of it needs that acknowledgement (install_impl), and its
+    // transaction records it. The research track's published host comes from
+    // the research tools and reads V1-V3 only, so a research package keeps V3
+    // -- and is refused for a game with anti-cheat files, where V3's
+    // no_anticheat:true would be false.
+    const bool v4=track=="controller";
+    json config=v4
+        ?json{{"version",4},{"profile",facts.id},{"game_sha256",pre.executable_sha256},{"host_sha256",host},{"bridge_sha256",bridge},
+            {"output_root",text(root_/L"data")},{"in_game_controls",true},{"exception_diagnostics",false},{"package",name},{"facts",facts_json(facts)},
+            {"risk",{{"acknowledged",true},{"anti_tamper",pre.denuvo_suspected},{"anticheat",pre.anticheat}}}}
+        :json{{"version",3},{"profile",facts.id},{"offline_single_player",true},{"no_anticheat",true},{"game_sha256",pre.executable_sha256},{"host_sha256",host},{"bridge_sha256",bridge},
+            {"output_root",text(root_/L"data")},{"in_game_controls",true},{"exception_diagnostics",false},{"package",name},{"facts",facts_json(facts)}};
     // Only stated when it is not the original layout, so a root package stays the
-    // 12-key config every existing installation checker already accepts.
+    // 12-key V3 config every existing installation checker already accepts.
     if(!loader.root())config["loader"]={{"strategy",loader.strategy},{"basename",loader.basename},{"subdir",text(loader.subdir)}};
     save(pkg/L"overglaze.install.json",config);const auto config_sha=digest(pkg/L"overglaze.install.json");
     json pins=json::object();pins[facts.executable]=pre.executable_sha256;for(const auto& [k,v]:facts.modules)pins[k]=v;
@@ -826,16 +879,14 @@ Policy Manager::write_package(const fs::path& exe,const std::string& name,const 
     policies_=load_packages(root_,&package_notes_);for(const auto& p:policies_)if(p.name==name)return p;throw std::runtime_error("适配包写入后无法重新加载");}
 Policy Manager::make_package(const std::string& id,const PackageOptions& opt){
     Writer lock(store_);const auto e=find(id);const auto exe=local(e.exe);const auto pre=games::preflight(exe);
-    // The same deliberate override inspect() honours, re-checked here so that a
-    // package for an anti-tamper game can only be produced by someone who said so
-    // on the command line. It is recorded in the manifest's notes below, and it
-    // changes nothing else: this package is byte-for-byte the same shape as any
-    // other, and Lab still never patches, spoofs, debugs or dumps the protection.
-    const bool denuvo_overridden=pre.verdict=="denuvo-blocked"&&denuvo_passive_coexistence_&&admitting_route(pre.route);
+    // A package writes only Overglaze's own folder, so anti-tamper and
+    // anti-cheat do not stop it: they are recorded (notes, config) and the user
+    // acknowledges them at install. The package is the same shape as any other,
+    // and Overglaze never patches, spoofs, debugs or dumps a protection.
     // There is no observation-only override for an "unsupported-route" verdict:
     // every DLSS route the preflight classifies is admitting, so no verdict could
     // reach it.
-    need(admitting_verdict(pre.verdict)||denuvo_overridden,"预检未通过（"+pre.verdict+"）；不生成适配包");
+    need(admitting_verdict(pre.verdict),"预检未通过（"+pre.verdict+"）；不生成适配包");
     need(pre.modules_signed||opt.allow_unsigned_modules,"Streamline 模块签名未通过校验；如确认为测试夹具请显式允许");
     const auto* row=profiles::executable(text(exe.filename()),pre.executable_sha256);
     std::string name=!opt.name.empty()?opt.name:row?package_from_settings(row->settings_file):derive_package_name(exe);
@@ -847,8 +898,7 @@ Policy Manager::make_package(const std::string& id,const PackageOptions& opt){
         notes.push_back(opt.loader.late_host()
             ?"晚加载：会错过游戏启动时的 CreateFeature，而深度方向只在创建参数里——注入后需切一次 DLSS 档位，之前每帧都是有名字的跳帧。"
             :"根目录代理：游戏启动时的 CreateFeature 会被看到，不需要切档。");}
-    if(denuvo_overridden)notes.push_back("EXE 带 Denuvo 反篡改；操作者以 --denuvo-passive-coexistence 显式接受被动共存。"
-        "本包与其他适配包在行为上没有任何差别：Lab 不修补／欺骗／调试／dump 反篡改，也不因此放宽任何身份或状态检查。");
+    if(!pre.risks().empty())notes.push_back(risk_note(pre));
     if(row){facts=profiles::Facts::from(*row);notes.push_back("facts taken from the reviewed compiled row "+std::string(row->id)+"; options ignored");}
     else{facts.id=name+"-rr-v1";facts.viewport=opt.viewport;facts.linear_depth=opt.linear_depth;facts.native_evaluate_host_rebind=opt.native_evaluate_host_rebind;
         facts.binding_preservation=opt.binding_preservation;facts.default_exposure_stops=opt.default_exposure_stops;
@@ -885,11 +935,9 @@ Policy Manager::refresh_package(const std::string& name,const std::string& strat
     // installs in one operation.
     if(lab_files_present(*p))throw Refusal("refresh-would-break-installed","这款游戏已装插件：单独刷新适配包会让已装文件失效（游戏内插件启动时会拒绝）；请用 update，它依次卸载、刷新、安装");
     const auto exe=local(p->game_root/wide(p->executable));const auto pre=games::preflight(exe);
-    // Same deliberate override as make_package: a package that already exists for
-    // an anti-tamper game can still be refreshed, but only by someone who says so
-    // again on this command line. The EXE identity check is never relaxed. One
-    // function decides it, for this call and for update()'s check before it
-    // uninstalls anything.
+    // The EXE identity check is never relaxed. One function decides it, for
+    // this call and for update()'s check before it uninstalls anything.
+    // Anti-tamper and anti-cheat are not part of it (risks, acknowledged at install).
     if(const auto why=refresh_refusal(*p,pre);!why.code.empty()){
         if(why.params.value("verdict","").rfind("module ",0)==0)throw Refusal(why.code,"游戏模块身份与适配包不同: "+why.params.value("verdict","").substr(7),why.params);
         throw Refusal(why.code,"游戏预检失败或 EXE 身份与适配包不同；刷新只更新 Lab 载荷",why.params);}
@@ -926,12 +974,14 @@ template<class F> void reported(const Manager& m,const std::string& operation,co
     catch(const std::exception& ex){const auto after=measured_install_state(m,id);
         throw OperationError(operation,failed,after,Reason{"operation-failed",{{"operation",operation},{"stage",failed},{"message",ex.what()}}},ex.what());}}
 }
-void Manager::install(const std::string& id,bool offline,bool no_anticheat,const std::string& consent,const Progress& progress){
-    reported(*this,"install",id,progress,[&](const Progress& spy){install_impl(id,offline,no_anticheat,consent,spy,{});});}
-void Manager::install_impl(const std::string& id,bool offline,bool no_anticheat,const std::string& consent,const Progress& progress,const std::string& parent){
+void Manager::install(const std::string& id,bool risk_accepted,const std::string& consent,const Progress& progress){
+    reported(*this,"install",id,progress,[&](const Progress& spy){install_impl(id,risk_accepted,consent,spy,{});});}
+void Manager::install_impl(const std::string& id,bool risk_accepted,const std::string& consent,const Progress& progress,const std::string& parent){
     Steps steps(progress,"install",parent);try{
     steps.enter("check");
-    need(offline&&no_anticheat,"必须明确确认离线单人、无反作弊，并允许安装");need(!consent.empty()&&consent.size()<=1024,"安装需要记录本次确认文字");
+    // The user's own risk acknowledgement, for every game: the checks can name
+    // what they found but never prove a game free of anti-cheat or online play.
+    need(risk_accepted,"安装前需确认风险：联网或带反作弊的游戏可能无法启动、被踢出或被处罚；Overglaze 不绕过任何保护");need(!consent.empty()&&consent.size()<=1024,"安装需要记录本次确认文字");
     Writer writer(store_);const auto e=find(id);const auto s=inspect(e);need(s.can_install,"当前状态不允许安装；请重新检查并退出游戏");const Policy* p=match(local(e.exe));need(p!=nullptr,"无匹配适配包");
     steps.enter("pin-game");
     const auto dir=e.exe.parent_path();Pins pins;pins.parents(dir);pins.parents(root_/L"app");
@@ -1001,7 +1051,8 @@ void Manager::install_impl(const std::string& id,bool offline,bool no_anticheat,
     need(!fs::exists(lab_dir/L"overglaze.install.json"),"目标配置已存在");copy_new(p->directory/L"overglaze.install.json",staging/L"overglaze.install.json",p->config_sha256);files["overglaze.install.json"]=p->config_sha256;
     steps.enter("record-transaction");
     json j={{"schema","overglaze-install-transaction-v1"},{"id",id},{"exe",text(e.exe)},{"state","installing"},{"files",files},{"recovery",text(staging)},{"game_started",false},{"package",p->name},{"consent",consent},
-        {"loader_subdirectory",text(p->loader.subdir)},{"loader_basename",p->loader.basename},{"strategy",p->loader.strategy}};save(tx,j);
+        {"loader_subdirectory",text(p->loader.subdir)},{"loader_basename",p->loader.basename},{"strategy",p->loader.strategy},
+        {"risk_acknowledged",true},{"risks",p->risks}};save(tx,j);
     steps.enter("activate");
     // Activate the loader LAST, after its config/bridge/model are durable.
     // The proxy is activated after the host, because it is what the game
@@ -1056,7 +1107,7 @@ void Manager::install_impl(const std::string& id,bool offline,bool no_anticheat,
     steps.enter("commit");
     j["state"]="installed";save(tx,j);
     json after=json::object();for(const auto& n:{p->loader.basename,std::string("overglaze_nvngx.dll"),std::string("overglaze.install.json"),std::string("nvngx_dlssnr.dll")})after[n]=digest(lab_dir/wide(n));json game_pins=json::object();for(auto& [n,h]:p->pins)game_pins[n]=h;
-    save(docs_receipt,{{"version",1},{"state","installed"},{"game_directory",text(dir)},{"profile",p->profile},{"package",p->name},{"adopted",false},{"consent",consent},
+    save(docs_receipt,{{"version",1},{"state","installed"},{"game_directory",text(dir)},{"profile",p->profile},{"package",p->name},{"adopted",false},{"consent",consent},{"risk_acknowledged",true},{"risks",p->risks},
         {"before","all owned targets absent (model reused only if byte-identical)"},{"after",after},{"game_pins",game_pins},{"nr_default","off"},{"heavy_sampling",false},
         {"game_started_by_installer",false},{"runtime_accepted",false},{"installer","overglaze-games native controller"},{"transaction",text(tx)},{"installed_at",now_utc()}});
     steps.enter("cleanup-staging");
@@ -1138,14 +1189,14 @@ void Manager::uninstall_impl(const std::string& id,bool confirmed,const Progress
     steps.done(json{{"recovery",text(recovery)}});
     }catch(const std::exception& ex){steps.fail(ex.what());throw;}
 }
-void Manager::update(const std::string& id,bool offline,bool no_anticheat,const std::string& consent,const Progress& progress){
+void Manager::update(const std::string& id,bool risk_accepted,const std::string& consent,const Progress& progress){
     Steps steps(progress,"update",{});bool uninstalled=false;std::string recovery;
     try{
         steps.enter("check");
         // The install's own confirmations are checked BEFORE anything is
         // uninstalled; an update that would refuse at its install step must not
         // first take the working plugin away.
-        need(offline&&no_anticheat,"必须明确确认离线单人、无反作弊，并允许安装");need(!consent.empty()&&consent.size()<=1024,"安装需要记录本次确认文字");
+        need(risk_accepted,"安装前需确认风险：联网或带反作弊的游戏可能无法启动、被踢出或被处罚；Overglaze 不绕过任何保护");need(!consent.empty()&&consent.size()<=1024,"安装需要记录本次确认文字");
         const auto e=find(id);const auto s=inspect(e);
         need(s.state=="installed"&&s.update_available&&!s.running,"没有可用更新，或游戏正在运行／文件身份不符");
         std::string package;{const Policy* p=match(local(e.exe));need(p!=nullptr,"无匹配适配包");package=p->name;}
@@ -1162,7 +1213,7 @@ void Manager::update(const std::string& id,bool offline,bool no_anticheat,const 
         // leaving "package refreshed, game not updated" behind.
         steps.enter("uninstall");uninstall_impl(id,true,progress,"update");uninstalled=true;recovery=recovery_of(store_/wide(id)/L"transaction.json");
         if(refresh){steps.enter("refresh-package");refresh_package(package);}else steps.skip("refresh-package");
-        steps.enter("install");install_impl(id,offline,no_anticheat,consent,progress,"update");
+        steps.enter("install");install_impl(id,risk_accepted,consent,progress,"update");
         steps.done();
     }catch(const std::exception& ex){
         const auto stage=steps.where().empty()?std::string("check"):steps.where();steps.fail(ex.what());
@@ -1186,11 +1237,11 @@ fs::path Manager::retire_package(const Policy& p){
     need(MoveFileExW(p.directory.c_str(),target.c_str(),MOVEFILE_WRITE_THROUGH)!=FALSE,"无法把旧适配包移到 adapters-retired（文件占用或权限不足）；未继续");
     policies_=load_packages(root_,&package_notes_);
     return target;}
-fs::path Manager::repin(const std::string& id,bool offline,bool no_anticheat,const std::string& consent,bool allow_unsigned_modules,const Progress& progress){
+fs::path Manager::repin(const std::string& id,bool risk_accepted,const std::string& consent,bool allow_unsigned_modules,const Progress& progress){
     Steps steps(progress,"repin",{});bool uninstalled=false;std::string recovery;fs::path retired;bool package_made=false;
     try{
         steps.enter("check");
-        need(offline&&no_anticheat,"必须明确确认离线单人、无反作弊，并允许安装");need(!consent.empty()&&consent.size()<=1024,"安装需要记录本次确认文字");
+        need(risk_accepted,"安装前需确认风险：联网或带反作弊的游戏可能无法启动、被踢出或被处罚；Overglaze 不绕过任何保护");need(!consent.empty()&&consent.size()<=1024,"安装需要记录本次确认文字");
         const auto e=find(id);const auto exe=local(e.exe);const auto s=inspect(e);
         need(s.state=="changed","游戏版本没有变化，不需要重新适配");need(!s.running,"游戏仍在运行");
         Policy old;{const Policy* p=match(exe);need(p!=nullptr,"无匹配适配包；请先生成适配包");old=*p;}
@@ -1200,7 +1251,6 @@ fs::path Manager::repin(const std::string& id,bool offline,bool no_anticheat,con
         steps.enter("preflight");
         Preflight pre;
         if(const auto why=repin_refusal(old,exe,allow_unsigned_modules,&pre);!why.code.empty())throw Refusal(why.code,render(why),why.params);
-        const bool denuvo_overridden=pre.verdict=="denuvo-blocked";
         if(s.installed||s.can_uninstall){steps.enter("uninstall");uninstall_impl(id,true,progress,"repin");uninstalled=true;recovery=recovery_of(store_/wide(id)/L"transaction.json");}
         else steps.skip("uninstall");
         {Writer lock(store_);
@@ -1212,10 +1262,9 @@ fs::path Manager::repin(const std::string& id,bool offline,bool no_anticheat,con
          json notes=json::array();try{auto m=read(retired/L"package.json");if(m.contains("notes")&&m.at("notes").is_array())notes=m.at("notes");}catch(...){}
          notes.push_back("repinned "+now_utc()+": "+old.executable+" "+old.pins.at(old.executable).substr(0,16)+"… -> "+pre.executable_sha256.substr(0,16)+
              "…; full preflight re-run; previous package moved to app/adapters-retired/"+text(retired.filename()));
-         if(denuvo_overridden)notes.push_back("EXE 带 Denuvo 反篡改；操作者以 --denuvo-passive-coexistence 显式接受被动共存。"
-             "本包与其他适配包在行为上没有任何差别：Lab 不修补／欺骗／调试／dump 反篡改，也不因此放宽任何身份或状态检查。");
+         if(!pre.risks().empty())notes.push_back(risk_note(pre));
          write_package(exe,old.name,old.facts,old.title,pre,std::move(notes),false,old.consent,"controller",old.loader);package_made=true;}
-        steps.enter("install");install_impl(id,offline,no_anticheat,consent,progress,"repin");
+        steps.enter("install");install_impl(id,risk_accepted,consent,progress,"repin");
         steps.done(json{{"retired",text(retired)}});
         return retired;
     }catch(const std::exception& ex){
@@ -1254,7 +1303,7 @@ json Manager::plan_install(const std::string& id)const{
     std::error_code ge,de;const auto game_space=fs::space(dir,ge);const auto data_space=fs::space(root_/L"data",de);
     json created=json::array();if(!p->loader.subdir.empty()){std::error_code ec;if(!fs::exists(lab_dir,ec))created.push_back(text(lab_dir));}
     out["package"]=p->name;out["load_mode"]=p->loader.strategy;out["track"]=p->track;
-    out["launch"]=reason_json(launch_reason(p->loader.strategy,text(p->loader.subdir),root_/L"app"/L"overglaze_launch.exe"));
+    out["launch"]=reason_json(launch_reason(p->loader.strategy,text(p->loader.subdir),root_,store_kind(dir,is_package_token(p->pins.at(p->executable)))));
     out["files"]=files;out["conflicts"]=conflict;out["directories_created"]=created;
     out["records"]={{"transaction",text(box/L"transaction.json")},{"receipt",text(own_receipt_file(box))},{"staging",text(box/L"package-{GUID}")},
         {"legacy_receipt_read_only",text(legacy_receipt_file(root_,p->name))}};
@@ -1434,8 +1483,8 @@ json model_json(const ModelStatus& m){json known=json::array();for(const auto& v
         {"known",m.known},{"label",m.label.empty()?json(nullptr):json(m.label)},{"error",m.error.empty()?json(nullptr):json(m.error)},
         {"reason",reason_json({code,!m.present?json{{"path",text(m.path)}}:!m.known?json{{"hash",m.sha256}}:json::object()})},{"known_versions",known},
         {"scope","read-only. This project does not include or redistribute nvngx_dlssnr.dll; the user supplies their own copy. Only reviewed versions are used."}};}
-void Manager::migrate(const std::string& id,bool offline,bool no_anticheat,const std::string& consent,const Progress& progress){
+void Manager::migrate(const std::string& id,bool risk_accepted,const std::string& consent,const Progress& progress){
     {const auto s=inspect(find(id));
      if(s.install_state!="legacy")throw Refusal("migrate-not-legacy","这款游戏没有旧版（DLSS Lab）安装，不需要迁移",json{{"install",s.install_state}});}
-    update(id,offline,no_anticheat,consent,progress);}
+    update(id,risk_accepted,consent,progress);}
 }

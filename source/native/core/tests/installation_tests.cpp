@@ -13,7 +13,8 @@ int wmain(int argc,wchar_t** argv){try{
         if(std::filesystem::file_size(p)>16384)throw std::runtime_error("Config exceeds bound");
         std::ifstream file(p);const auto config=lab::json::parse(file);
         const auto* profile=lab::profiles::game(config.at("profile").get<std::string>());
-        const bool data_driven=config.value("version",0)==3;
+        // V3 and V4 carry their facts (and executable) in the config itself.
+        const bool data_driven=config.value("version",0)==3||config.value("version",0)==4;
         if(!profile&&!data_driven)throw std::runtime_error("Unknown installation profile");
         const std::string exe_name=data_driven?config.at("facts").at("executable").get<std::string>():std::string(profile->executable);
         // The loader sits beside this config and is named by the config itself. A
@@ -160,6 +161,34 @@ int wmain(int argc,wchar_t** argv){try{
      rr["facts"]["modules"]=lab::json{{"sl.interposer.dll",std::string(64,'e')}};reject(rr,aw_exe,aw_host);
      auto sr=rr;sr["facts"]["route"]="sl-sr";sr["facts"]["capture_origin"]="halo-controlled-sr-stage";
      sr["facts"]["modules"]=lab::json{{"nvngx_dlss.dll",std::string(64,'e')}};reject(sr,aw_exe,aw_host);}
+    // ---- config version 4: the user's risk acknowledgement and the facts the
+    // checks found replace V3's offline / no-anti-cheat declaration. The host
+    // accepts both shapes: V3 is every plugin installed before V4 existed.
+    {auto v4=v3;v4["version"]=4;v4.erase("offline_single_player");v4.erase("no_anticheat");
+     v4["risk"]={{"acknowledged",true},{"anti_tamper",false},{"anticheat",lab::json::array()}};
+     {const auto parsed=lab::parse_installation(v4,aw_exe,aw_host);
+      if(!parsed.facts.reviewed||parsed.package!="alanwake2"||!parsed.exception_diagnostics)throw std::runtime_error("V4 parses as V3 does");}
+     if(lab::parse_installation(v3,aw_exe,aw_host).package!="alanwake2")throw std::runtime_error("V3 still accepted next to V4");
+     // A game recorded truthfully with Denuvo and an anti-cheat is accepted.
+     {auto risky=v4;risky["risk"]={{"acknowledged",true},{"anti_tamper",true},{"anticheat",{"Easy Anti-Cheat","BattlEye"}}};lab::parse_installation(risky,aw_exe,aw_host);}
+     {auto late=v4;late["loader"]={{"strategy","late_d3d12"},{"basename","overglaze_controller.dll"},{"subdir","overglaze"}};
+      auto late_host=aw_host;late_host["path"]="D:\\Games\\AlanWake2\\overglaze\\overglaze_controller.dll";
+      if(!lab::parse_installation(late,aw_exe,late_host).loader.late_host())throw std::runtime_error("V4 carries the loader block");}
+     {auto bad=v4;bad["risk"]["acknowledged"]=false;reject(bad,aw_exe,aw_host);}
+     {auto bad=v4;bad.erase("risk");reject(bad,aw_exe,aw_host);}
+     {auto bad=v4;bad["risk"].erase("anticheat");reject(bad,aw_exe,aw_host);}
+     {auto bad=v4;bad["risk"]["extra"]=1;reject(bad,aw_exe,aw_host);}
+     {auto bad=v4;bad["risk"]["anticheat"]=lab::json::array({1});reject(bad,aw_exe,aw_host);}
+     {auto bad=v4;bad["risk"]["anticheat"]=lab::json::array({""});reject(bad,aw_exe,aw_host);}
+     {auto bad=v4;bad["risk"]["anti_tamper"]="no";reject(bad,aw_exe,aw_host);}
+     {auto bad=v4;bad["risk"]="accepted";reject(bad,aw_exe,aw_host);}
+     // The two shapes do not mix: V3's declaration in a V4 config, or a risk
+     // block in a V3 config, is neither contract.
+     {auto bad=v4;bad["offline_single_player"]=true;reject(bad,aw_exe,aw_host);}
+     {auto bad=v3;bad["risk"]=v4["risk"];reject(bad,aw_exe,aw_host);}
+     {auto bad=v4;bad["version"]=5;reject(bad,aw_exe,aw_host);}
+     // V4 is a data-driven contract: a compiled row's V2 shape cannot claim it.
+     {auto bad=v2;bad["version"]=4;bad.erase("offline_single_player");bad.erase("no_anticheat");bad["risk"]=v4["risk"];reject(bad,exe,host);}}
     // ---- the loader block: where this installation's own files live.
     // Absent means the original layout, and it must stay byte-for-byte the same
     // decision as before the key existed.
