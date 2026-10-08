@@ -56,11 +56,10 @@ NR stops only on a fault that can't be skipped safely. The panel shows the reaso
 
 ## Installation is refused
 
-The Games page shows the reason for each refused action; hover over a disabled button to see it. Common reasons:
+The Games page shows the reason for each refused action; hover over a disabled button to see it. Anti-cheat and Denuvo findings are not refusals: they are shown as risks and named again in the install confirmation (see [POLICY.md](../POLICY.md)). Common reasons:
 
 | Reason | What to do |
 |---|---|
-| Anti-cheat or Denuvo found | Not supported by default. See [POLICY.md](../POLICY.md). |
 | Another injector in the folder | Remove the other tool (ReShade, another `dxgi.dll` or proxy DLL) first. Overglaze doesn't install alongside them. |
 | No usable DLSS path | The game has no DLSS Ray Reconstruction or Super Resolution that Overglaze can use. |
 | Unsigned NVIDIA modules | The game's Streamline or DLSS modules don't carry a valid signature. Overglaze won't hook them. |

@@ -24,7 +24,7 @@ When a game offers both, Overglaze inserts NR after Ray Reconstruction; otherwis
 | Senua's Saga: Hellblade II | NGX direct · Super Resolution | Proxy DLL | Xbox app version. Display-resolution motion vectors and the letterboxed image are handled. NR together with frame generation is not yet confirmed. |
 | CONTROL Resonant | Streamline · Ray Reconstruction | Proxy DLL | Set up entirely from the Games page. |
 | A Plague Tale: Resonance | Streamline · Super Resolution | Proxy DLL | Xbox app version. |
-| Resident Evil Requiem | Streamline · Ray Reconstruction | Late load (Steam launch option) | Carries Denuvo Anti-Tamper: uses a passive-coexistence recipe, set up from the command line with an explicit opt-in (see [POLICY.md](POLICY.md)). The game refuses any proxy DLL in its folder. NR together with frame generation is not yet confirmed. |
+| Resident Evil Requiem | Streamline · Ray Reconstruction | Late load (Steam launch option) | Carries Denuvo Anti-Tamper: passive coexistence, set up from the Game Library like any other game; the install confirmation names the risk (see [POLICY.md](POLICY.md)). The game refuses any proxy DLL in its folder, so the Game Library loads it late and shows the Steam launch option to paste. NR together with frame generation is not yet confirmed. |
 
 ## Experimental
 
@@ -37,15 +37,18 @@ Each of these has a recipe (or a known DLSS path), but nobody has confirmed NR w
 | DOOM: The Dark Ages | Streamline · Ray Reconstruction | Proxy DLL | Xbox app version. Recipe only, never launched. |
 | Clair Obscur: Expedition 33 | NGX direct · Ray Reconstruction | Proxy DLL | Xbox app version. Recipe only, never launched. |
 | Indiana Jones and the Great Circle | Streamline · Ray Reconstruction | Proxy DLL | Xbox app version. Recipe only, never launched. |
-| LEGO Batman: Legacy of the Dark Knight | NGX direct · Ray Reconstruction | Proxy DLL | Carries Denuvo Anti-Tamper: passive-coexistence recipe, explicit opt-in. Recipe only, never launched. |
-| Onimusha: Way of the Sword | Streamline · Ray Reconstruction | Late load | Carries Denuvo Anti-Tamper: passive-coexistence recipe, explicit opt-in. Recipe only, never launched. |
-| PRAGMATA | Streamline · Ray Reconstruction | Late load | Carries Denuvo Anti-Tamper: passive-coexistence recipe, explicit opt-in. Recipe only, never launched. |
+| LEGO Batman: Legacy of the Dark Knight | NGX direct · Ray Reconstruction | Late load | Carries Denuvo Anti-Tamper: passive coexistence; the Game Library loads it late and the install confirmation names the risk. Late load on NGX direct misses the game's start-up DLSS creation: switch the DLSS mode once after loading. Never launched. |
+| Onimusha: Way of the Sword | Streamline · Ray Reconstruction | Late load | Carries Denuvo Anti-Tamper: passive coexistence; the install confirmation names the risk. Never launched. |
+| PRAGMATA | Streamline · Ray Reconstruction | Late load | Carries Denuvo Anti-Tamper: passive coexistence; the install confirmation names the risk. Never launched. |
 
 ## Not supported
 
-- Games with anti-cheat, and online or competitive modes of any game.
 - Games without DLSS Ray Reconstruction or Super Resolution, and non-DX12 games.
 - Games where DLSS is off. Turn on Ray Reconstruction, Super Resolution or DLAA in the game's settings.
+
+## Online games and anti-cheat
+
+Overglaze is best suited to offline single-player games. Online games and games with anti-cheat are not refused: the check names what it found, and the install confirmation asks you to acknowledge the risk. Such games may refuse to start, kick you, or penalise or ban your account. Overglaze never hides from or bypasses any protection. None of them is confirmed here, and none is listed above.
 
 ## Frame generation
 

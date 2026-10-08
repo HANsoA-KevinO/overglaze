@@ -27,7 +27,7 @@ Overglaze inserts the NR model, often called "DLSS 5", into games that already u
 
 - **Not an official integration.** Overglaze loads the model directly rather than through NVIDIA's own integration path, and its input preparation and colour handling are its own. Results are not equivalent to a game that ships NR officially.
 - **Not an upscaler or frame generator.** It needs the game's own DLSS Ray Reconstruction or Super Resolution to be on, and does not add DLSS to games that lack it.
-- **Not for online games or games with anti-cheat.** See [POLICY.md](POLICY.md).
+- **Best suited to offline single-player games.** Online games and games with anti-cheat can be installed at your own risk: they may refuse to start, kick you, or penalise or ban your account. Overglaze never hides from or bypasses any protection. See [POLICY.md](POLICY.md).
 - **Not a model download, and not a way to run NR on other GPUs.**
 - **No guarantee of image quality.** Some games change a lot, some very little. When a game's inputs don't match what the model expects, you can see noise or ghosting.
 
@@ -56,18 +56,20 @@ Overglaze checks the file's SHA-256 against the versions it knows and refuses an
 1. **Get the program.** Run the Setup and choose a local installation folder, or extract the whole portable ZIP. Open Overglaze from its shortcut or portable launcher.
 2. **Import your model.** Select your own model DLL in the initial configuration screen or Settings. It is verified and copied into the application's models folder. Manual placement also works.
 3. **Add a game.** On the Game Library page, choose *Add game* and paste the game's install folder or its EXE. A read-only check runs: store, NVIDIA modules and their signatures, anti-cheat and Denuvo markers, other injectors in the folder, and which DLSS path the game uses.
-4. **Install.** Close the game. Select it in the library, choose *Prepare installation* to generate the adapter package, then choose *Install* and review the confirmation. Overglaze writes only its own files and records exactly what it wrote, so it can remove exactly those files later.
+4. **Install.** Close the game. Select it in the library, choose *Prepare installation* to generate the adapter package, then choose *Install*. The confirmation names any anti-cheat or anti-tamper the check found and the risks of online and protected games; choosing *Install* there is your acknowledgement. Overglaze writes only its own files and records exactly what it wrote, so it can remove exactly those files later.
 5. **Play.** Start the game the usual way and turn on DLSS: Ray Reconstruction if the game offers it, otherwise Super Resolution or DLAA. Press **Insert** to open the panel and enable NR.
 
 ### Games that need late loading
 
-Some games refuse a proxy DLL in their folder. For those, Overglaze loads into the game after it has started, and nothing is placed in the game folder's root. You set these games up with the command-line tool `overglaze_games.exe` (see [docs/ADDING-A-GAME.md](docs/ADDING-A-GAME.md)). For Steam games, set this launch option:
+Some games refuse a proxy DLL in their folder. For those, Overglaze loads into the game after it has started, and nothing is placed in the game folder's root. The Game Library uses late loading for every game whose EXE carries Denuvo Anti-Tamper; other games can be switched to it from the command line (see [docs/ADDING-A-GAME.md](docs/ADDING-A-GAME.md)).
+
+After such an install, the Game Library shows the exact Steam launch option to paste, with a copy button; it stays in the game's details. It has this form:
 
 ```
 "<Overglaze folder>\app\overglaze_launch.exe" %command%
 ```
 
-The game starts as usual. The first time you press Insert in the game, Overglaze loads and opens the panel.
+Set it in Steam under Library → right-click the game → Properties → General → Launch Options. The game starts as usual; the first time you press Insert in the game, Overglaze loads and opens the panel. For games not started from Steam, the Game Library shows the `overglaze_games watch` command instead.
 
 ### Removing Overglaze
 
@@ -107,8 +109,8 @@ More games are listed as experimental. Notes, store versions and the meaning of 
 
 ## Policy in short
 
-- Offline single-player games only. Overglaze refuses to install when it finds known anti-cheat or Denuvo markers. Not finding them doesn't prove they aren't there, so your own confirmation is what counts.
-- It never patches, spoofs, debugs or dumps DRM. For four Denuvo titles, opt-in "passive coexistence" recipes only switch off Overglaze's own behaviours that could trigger the protection. You use them at your own risk.
+- Best suited to offline single-player games. When the check finds anti-cheat files or Denuvo Anti-Tamper, it says so; it does not refuse. Online games and games with anti-cheat may refuse to start, kick you, or penalise or ban your account. Every install asks you to acknowledge that risk, whatever the check found: not finding a protection doesn't prove it isn't there.
+- It never hides from, patches, spoofs, debugs or dumps anti-cheat, DRM or anti-tamper software. For Denuvo games it only switches off its own behaviours that could trigger the protection ("passive coexistence") and loads late. You use it at your own risk.
 - It never modifies NVIDIA files, and refuses model files it doesn't recognise.
 - It changes no driver, system or security settings. No network access, no telemetry.
 - Installs are reversible. Overglaze writes only its own files and removes them by their recorded hashes.

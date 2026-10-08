@@ -2,6 +2,20 @@
 
 All notable changes to Overglaze are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.2.0-preview.4] - unreleased
+
+### Changed
+
+- Denuvo Anti-Tamper and anti-cheat are now risks the user is told about, not refusals. The check still names what it found: Denuvo sections in the EXE, and anti-cheat files by the product their names point to (Easy Anti-Cheat, BattlEye, EQU8, Vanguard, Anti-Cheat Expert) or by file name. Games with either get the ordinary states and actions, with a neutral tag on the Games page. Other loaders in the game folder and an unidentifiable store package are still refused.
+- One risk acknowledgement replaces the offline / no-anti-cheat declaration. In the desktop program, the install, update and re-adapt confirmation lists what the check found and states that online or anti-cheat games may not start, may kick you or penalise or ban your account, and that Overglaze never hides from or bypasses any protection; choosing *Install* or *Update* is the acknowledgement. There is no extra checkbox. On the command line it is `--accept-risk`; `--offline --no-anticheat` and `--denuvo-passive-coexistence` remain accepted as aliases. The transaction records the acknowledgement and the risks found.
+- Games whose EXE carries Denuvo are set up from the Games page like any other game. *Generate adapter package* gives them late loading (nothing in the game folder's root; Resident Evil Requiem crashes with any `dxgi.dll` there) and shows the planned loading method beforehand. Every other game keeps the proxy DLL.
+- After installing a late-loading game, the Games page shows the exact Steam launch option, built from the program's own folder, with a copy button and where to set it in Steam; it stays in the game's details. Games not started from Steam get the `overglaze_games watch` command instead. Uninstalling such a game reminds you to remove the launch option.
+
+### Installation configuration
+
+- Packages generated for the controller now write configuration version 4: the user's risk acknowledgement and the facts the check found (`risk`: `acknowledged`, `anti_tamper`, `anticheat`) replace version 3's `offline_single_player` / `no_anticheat`, so a game with anti-cheat is never recorded as having none. The in-game host and the install checker accept versions 3 and 4, so plugins installed by earlier versions keep working unchanged. Research-track packages still write version 3 and are refused for games with anti-cheat files.
+- After updating the application, installed games show *update available*; *Update plugin* rewrites their package with version 4. Until then they keep working as installed.
+
 ## [0.2.0-preview.3] - 2026-10-07
 
 ### Changed

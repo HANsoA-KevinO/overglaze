@@ -2,17 +2,19 @@
 
 This page says what Overglaze will and won't do, and where the limits of its own checks are. It is not legal advice.
 
-## Offline single-player games only
+## Offline single-player games, others at your own risk
 
-Overglaze is meant for DX12 single-player games played offline. It must not be used in online or competitive modes, or in any game protected by anti-cheat software.
+Overglaze is best suited to DX12 single-player games played offline. It only post-processes the image the game renders; it does not change game content.
+
+Online games, games with online or competitive modes, and games protected by anti-cheat software can still be installed, **at your own risk**. They may refuse to start, kick you from a session, or penalise or ban your account. Overglaze does nothing to avoid that: it never hides from, disables, patches or spoofs anti-cheat software.
 
 ## Anti-cheat and anti-tamper checks
 
 Before installing, Overglaze runs a read-only check of the game:
 
-- **Anti-cheat:** it scans the game folder for file names of known anti-cheat systems (for example Easy Anti-Cheat, BattlEye, EQU8, Vanguard). If it finds one, it refuses to install.
-- **Denuvo Anti-Tamper:** it reads the game EXE's section table and looks for section names that Denuvo-protected executables are known to carry. If it finds them, it refuses to install unless you explicitly opt in to a passive-coexistence recipe (see below).
-- **Other injectors:** it looks for other proxy DLLs and injection tools in the game folder (for example ReShade or another `dxgi.dll`, `d3d12.dll`, `version.dll`, `winmm.dll` or `dinput8.dll`). It does not install alongside them.
+- **Anti-cheat:** it scans the game folder for file names of known anti-cheat systems and names what the file names point to (for example Easy Anti-Cheat, BattlEye, EQU8, Vanguard, Anti-Cheat Expert). A finding is shown as a risk, not a refusal.
+- **Denuvo Anti-Tamper:** it reads the game EXE's section table and looks for section names that Denuvo-protected executables are known to carry. A finding is shown as a risk, not a refusal, and the desktop program then loads Overglaze late (see below).
+- **Other injectors:** it looks for other proxy DLLs and injection tools in the game folder (for example ReShade or another `dxgi.dll`, `d3d12.dll`, `version.dll`, `winmm.dll` or `dinput8.dll`). It does not install alongside them. This one is a refusal, because two loaders in one folder do not work together.
 
 **Not detected does not mean not present.**
 
@@ -20,7 +22,12 @@ Before installing, Overglaze runs a read-only check of the game:
 - The folder scan is bounded in size and time. If it stops early, the anti-cheat check returns "unknown".
 - Marker lists are incomplete by nature. Protection that leaves no files in the game folder can't be found this way.
 
-So the checks can only refuse; they can never certify a game as safe. **Your explicit confirmation governs.** Installing requires you to confirm that the game is played offline, single-player, and without anti-cheat. On the command line this means passing `--offline --no-anticheat --consent "<text>"`. If you are not sure, don't install.
+So the checks can name a risk; they can never certify a game as safe. **Your explicit acknowledgement governs.** Every install, update and re-adaptation asks you to acknowledge the risks above, whatever the check found:
+
+- In the desktop program, the confirmation dialog lists what the check found and the risks; choosing *Install* or *Update* there is your acknowledgement.
+- On the command line, pass `--accept-risk --consent "<text>"`. The older `--offline --no-anticheat` and `--denuvo-passive-coexistence` are still accepted as aliases.
+
+The acknowledgement and what the check found are recorded with the install. The installed configuration records the facts the check found (anti-tamper, anti-cheat names) and your acknowledgement; it never states that a game has no anti-cheat. If you are not sure, don't install.
 
 ## DRM
 
@@ -40,7 +47,7 @@ The repository includes recipes for four titles that carry Denuvo Anti-Tamper:
 - The in-game component installs no exception handlers of its own.
 - Where a game rejects a proxy DLL in its folder, the recipe loads Overglaze after the game has started instead. Overglaze does not rename itself or otherwise disguise a proxy DLL to get past a game's checks.
 
-These recipes are never used by default. The desktop program refuses these games. The command-line tool accepts them only with the explicit flag `--denuvo-passive-coexistence`, and you have to give the flag again for every package, refresh, update and re-adaptation. The flag does not relax any identity, signature or state check. It only records that you knowingly chose to go ahead. **You use these recipes at your own risk.**
+The desktop program handles a game with Denuvo like any other game: it shows the finding, generates a late-loading package (nothing in the game folder's root), and names the anti-tamper in the install confirmation, where choosing *Install* is your acknowledgement. Your acknowledgement does not relax any identity, signature or state check, and Overglaze treats the protection no differently with it. It only records that you knowingly chose to go ahead. **You use Overglaze with these games at your own risk.**
 
 ## NVIDIA software
 
