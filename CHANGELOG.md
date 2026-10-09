@@ -2,7 +2,7 @@
 
 All notable changes to Overglaze are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.2.0-preview.4] - unreleased
+## [0.2.0-preview.4] - 2026-10-09
 
 ### Added
 
@@ -17,6 +17,13 @@ All notable changes to Overglaze are listed here. The format follows [Keep a Cha
 - Automatic exposure (panel *自动测光*, `exposure_auto`) now prefers the game's own exposure: the exposure texture, pre-exposure and exposure scale the game hands DLSS (Streamline exposure tag or NGX `ExposureTexture`), applied as log2(E × scale / pre-exposure). The value is read on the GPU with one frame of latency and only trusted while the game-exposed log-average lies in 2^−7.19 … 2^−0.42, with hysteresis. When the game passes none (for example 007 First Light, or NGX features created with DLSS AutoExposure such as Halo: Campaign Evolved) or its value is implausible, Overglaze's own metering is used as before. The EV slider stays an offset either way; manual exposure is unchanged. The panel shows the source on one line under the exposure controls, and `nr_runtime.settings` reports `exposure_source`, `exposure_fallback` (by name), the game's raw values and per-reason counts (see [CONTROL-PROTOCOL.md](docs/CONTROL-PROTOCOL.md#automatic-exposure)).
 - Live ABI 25 between the in-game host and the bridge (the frame carries the game's exposure, the status its source; the settings carry edit extrapolation, the status the factor applied). Both ship in the same package; installed games pick it up with *Update plugin*.
 - New setting **允许使用未识别的模型** (Settings; `--allow-unrecognized-model` on the command line for `import-model`, `make-package`, `refresh-package`, `install`, `update`, `migrate` and `repin`), off by default. Overglaze verifies only the original model; with the setting on, a model whose SHA-256 is not a known version can be imported (never over a different file already in `app\models`), packaged and installed. The model status shows its SHA-256 with *未识别 · 非原版 · 风险自负* and a one-line warning — an unrecognized model may not run, may look different from the original, or may carry security risks — which the install and update confirmation repeats. With the setting off, nothing changes. The known-version table still lists the original model only. README and docs/MODEL.md now say the program is tested only on the RTX 50 series and that other GPUs need a model that runs on them, as an explicit opt-in at your own risk.
+
+### Fixed
+
+- The desktop window is sized and centred for the monitor it opens on, at that monitor's scale. Opened on a 200% monitor it used to get a 100% size and its content overlapped until the window was resized.
+- The add-game, plugin confirmation, launch option, model setup and settings dialogs no longer shrink a pixel per frame at fractional scales such as 125%.
+- Adding a game by folder works for large games and Xbox app packages. The scan skips an Unreal project's asset folders (Content beside Binaries, Paks, Movies, Saved, ...), walks an Xbox package's root Content folder, lists the EXE beside DLSS modules first and selects it, still offers what a partial scan found, and says so when it finds no EXE. Choosing an Unreal bootstrap EXE at a game's root offers the game's own `<Project>-Win64-Shipping.exe` first; for a bootstrap already in the library, the check names the EXE to add instead.
+- NGX direct: render-resolution motion vectors padded differently from depth (Wuthering Waves: 1705-wide motion beside 1708-wide depth, render subrect 1705) were refused on every frame, so NR stayed at *waiting for a usable frame*. Motion that covers the render region and is no larger than the depth resource is now accepted; both are cropped to the region.
 
 ### Installation configuration
 

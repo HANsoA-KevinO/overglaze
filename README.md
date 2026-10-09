@@ -8,11 +8,11 @@ Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Ren
 
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
-## 0.2.0-preview.3
+## 0.2.0-preview.4
 
-This preview uses shorter, direct interface labels and removes slogans and repeated help. The desktop game library provides search, status filters, game actions and expandable checks. Settings shows the local model status. The in-game panel groups the NR controls and keeps read-backs and troubleshooting details under Advanced & Diagnostics.
+Denuvo and anti-cheat are now risk notices instead of refusals: the install confirmation names what the check found, and installing is your acknowledgement. Denuvo games are set up from the Games page with late loading, and the page gives you the Steam launch option to paste. Automatic exposure prefers the game's own DLSS exposure and falls back to Overglaze's metering. The panel adds edit extrapolation (*外推*, ×1–×4). An unrecognized model can be allowed in Settings, off by default and at your own risk. Fixes cover window sizing on high-scale monitors, finding the game EXE in large and Xbox app folders, and NGX games whose motion vectors are padded differently from depth.
 
-The Windows Setup adds a selectable installation folder, shortcuts, update/uninstall handling and first-launch model import. Settings, models and saved captures are retained across updates; game plugins are updated separately in Game Library. See [Windows installer](docs/INSTALLER.md). The portable ZIP remains available with licence texts and file checksums. The model is still supplied by you. This preview does not add game certifications or new image-quality, performance or stability results.
+After updating the application, choose *Update plugin* for each installed game. The model is still supplied by you. This preview does not add game certifications or new image-quality, performance or stability results. See [CHANGELOG.md](CHANGELOG.md).
 
 ## What it does
 
