@@ -66,8 +66,13 @@ int wmain(int argc,wchar_t** argv){
             if(i==0){RECT client{};need(GetClientRect(window,&client)!=FALSE,"Read client size");
                 need(client.right!=1280&&client.bottom!=800,"Exercise stretched buffer, not 1:1 client coordinates");
                 auto point=[&](const lab::json& rect,float fraction){return POINT{LONG(std::lround((rect[0].get<float>()+rect[2].get<float>()*fraction)*client.right/1280.f)),LONG(std::lround((rect[1].get<float>()+rect[3].get<float>()*.5f)*client.bottom/800.f))};};
-                const auto p=point(status["controls"]["nr_toggle"],.05f);const auto x=p.x,y=p.y;
-                for(bool on:{true,false}){SendMessageW(window,WM_MOUSEMOVE,0,MAKELPARAM(x,y));SendMessageW(window,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(x,y));gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();
+                for(bool on:{true,false}){
+                    // Hit-test where the toggle is now. The panel's content follows the
+                    // controller's state, and when it is about as tall as this 800 px
+                    // surface its scrollbar (and so the toggle's x) settles a frame late.
+                    for(unsigned settle=0;settle<2;++settle){gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();}
+                    const auto p=point(overlay.snapshot()["controls"]["nr_toggle"],.05f);const auto x=p.x,y=p.y;
+                    SendMessageW(window,WM_MOUSEMOVE,0,MAKELPARAM(x,y));SendMessageW(window,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(x,y));gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();
                     SendMessageW(window,WM_LBUTTONUP,0,MAKELPARAM(x,y));gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();
                     need(controller.status()["nr_lifecycle"]["desired_mode"]==(on?"on":"off"),"Real ImGui checkbox updates local controller intent");}
                 result["checkbox_input_verified"]=true;
