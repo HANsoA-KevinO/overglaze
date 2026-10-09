@@ -585,6 +585,9 @@ struct Live {
         }
         colors.exposure=std::exp2(applied_exposure_stops);
         pipeline->set_compare_split(status.requested_settings.compare_split!=0);
+        // Edit extrapolation (ABI25) acts on the composite only; the DLL never
+        // reads it, and NR keeps its own output as history.
+        pipeline->set_extrapolation(status.requested_settings.applied_extrapolation());
         const bool style_changed=last_evaluated_style!=status.requested_settings.style;
         auto source=pipeline_source(f);source.history_reset_requested=needs_reset||style_changed||f.reset!=0;
         if(source.history_reset_requested)meter_snap=true; // the reading retired with this frame snaps the controller
@@ -618,6 +621,9 @@ struct Live {
             boundary_settings.values.exposure_stops=status.requested_settings.exposure_stops;
             boundary_settings.values.exposure_auto=status.requested_settings.exposure_auto;status.applied_exposure_stops=applied_exposure_stops;
             boundary_settings.values.compare_split=status.requested_settings.compare_split;
+            boundary_settings.values.extrapolate=status.requested_settings.extrapolate;
+            boundary_settings.values.extrapolate_factor=status.requested_settings.extrapolate_factor;
+            status.applied_extrapolate=status.requested_settings.extrapolate;status.applied_extrapolate_factor=pipeline->extrapolation();
             // ABI22 optional controls: an unread Skin/UseAutoMask mirrors the request
             // (like exposure) and is flagged unread; a read value is kept and matched.
             if(!boundary_settings.skin_observed)boundary_settings.values.skin=status.requested_settings.skin;

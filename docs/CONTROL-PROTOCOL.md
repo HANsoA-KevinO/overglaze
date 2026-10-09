@@ -71,8 +71,12 @@ There is one writer at a time.
 | `exposure_stops` | number, −12 to 10 | Overglaze's input exposure, in stops. With auto on, an offset. |
 | `exposure_auto` | boolean or 0/1 | Automatic exposure: the game's own exposure when it passes a usable one, otherwise Overglaze's metering |
 | `compare_split` | boolean or 0/1 | Diagnostic split screen: left original, right NR |
+| `extrapolate` | boolean or 0/1 | Edit extrapolation: what is written back is this NR pass's change multiplied by `extrapolate_factor` (below). Overglaze's composite, not a model parameter |
+| `extrapolate_factor` | number, 1–4 (default 2) | The multiplier n. Kept while `extrapolate` is off |
 
 The protocol does not link `skin` and `automask`; the panel turns AutoMask on when Skin is moved, but a client must set both itself. Settings sent while NR is off are staged, and applied when NR next turns on.
+
+With `extrapolate` on, NR still runs once per frame and keeps its own output as its history. Only what is composited back changes: in the NR API domain (the encoded image Overglaze hands the model, C, and the model's output in that domain, N), per channel, N' = clamp(C + n·(N − C), 0, 1); N' then goes through the usual ratio transfer onto the working colour. Off, or n = 1, is exactly the plain composite. This is outside what the model was designed for: sharpening overshoot and fine grain are amplified with the rest.
 
 Image capture and diagnostic methods are not part of this release and answer `unsupported`.
 
@@ -91,6 +95,7 @@ Image capture and diagnostic methods are not part of this release and answer `un
 | `nr_runtime.history_gaps`, `discarded_recordings` | History resets after sequence breaks, and frames the game itself discarded |
 | `nr_runtime.settings.observed` | Values the model actually read on the latest frame |
 | `nr_runtime.settings.applied_exposure_stops` | Exposure actually applied (useful with automatic exposure) |
+| `nr_runtime.settings.applied_extrapolate`, `applied_extrapolate_factor` | Edit extrapolation on the latest NR frame: whether it was on, and the factor the composite actually used (1 = plain composite) |
 | `nr_runtime.settings.exposure_source` | Where automatic exposure took its gain on the latest NR frame: `game`, `meter`, or `manual` when automatic exposure is off |
 | `nr_runtime.settings.exposure_fallback` | With `meter`: why the game's exposure was not used, by name (below); otherwise null |
 | `nr_runtime.settings.game_exposure` | The game's latest values: `texture_value` (E), `pre_exposure`, `exposure_scale`, `stops` = log2(E × scale / pre-exposure), `exposed_log2_luminance` (the plausibility input) and `trusted_log2_window`; null where not read |

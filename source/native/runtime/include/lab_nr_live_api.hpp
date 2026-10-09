@@ -19,7 +19,7 @@ namespace lab::live {
 // preparation probes, boundary audit) lives in the separately versioned
 // lab_nr_live_research_api.hpp, which only the research bridge implements.
 // A host asks LabNrLiveCapabilities which variant it loaded before using them.
-inline constexpr unsigned version=24; // 24: the game's exposure (texture, pre-exposure, scale) in Frame, auto exposure's source in Status; 23: frame regions (crop) and display-resolution motion; 22: Tone/Structure 0..2, Skin + UseAutoMask in Settings and read receipts; 13: exposure_stops; 14: skip counters; 15: auto exposure; 16: compare split, unlimited skips; 17: history gaps; 18: capture collector availability; 19: discarded recordings, submission skips; 20: research collectors split out, capabilities; 21: render-queue handoff, named completion-signal reasons, signal_retries
+inline constexpr unsigned version=25; // 25: edit extrapolation (extrapolate, extrapolate_factor) in Settings, the applied factor in Status; 24: the game's exposure (texture, pre-exposure, scale) in Frame, auto exposure's source in Status; 23: frame regions (crop) and display-resolution motion; 22: Tone/Structure 0..2, Skin + UseAutoMask in Settings and read receipts; 13: exposure_stops; 14: skip counters; 15: auto exposure; 16: compare split, unlimited skips; 17: history gaps; 18: capture collector availability; 19: discarded recordings, submission skips; 20: research collectors split out, capabilities; 21: render-queue handoff, named completion-signal reasons, signal_retries
 enum class State:unsigned {waiting_frame,probing_queue,preparing,ready,failed,stopped,draining,waiting_rebuild_frame};
 // ABI24. Why a frame carries no usable game exposure, or why auto exposure used
 // the GPU meter instead of the game's value. Never a reason to skip a frame or
@@ -116,6 +116,9 @@ struct Status {
     // Host exposure actually applied to the last recorded ON frame (log2 gain,
     // includes the user offset in auto mode) and the GPU meter reading it used.
     float applied_exposure_stops=0,metered_log2_luminance=0;unsigned meter_samples=0,meter_reserved=0;
+    // ABI25. Edit extrapolation on the last recorded ON frame: the switch as
+    // applied, and the factor the composite actually used (1 = plain composite).
+    float applied_extrapolate_factor=1;unsigned applied_extrapolate=0;
     char rebuild_reason[64]{};
     nr::Settings requested_settings{},observed_settings{};
     std::uint64_t settings_requested_revision=0,settings_observed_revision=0,settings_frame=0;

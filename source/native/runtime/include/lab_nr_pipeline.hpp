@@ -139,6 +139,8 @@ public:
         }catch(...){stage_=Stage::failed;throw;}
     }
     void set_compare_split(bool v){owner();codec_.set_compare_split(v);}
+    void set_extrapolation(float factor){owner();codec_.set_extrapolation(factor);}
+    float extrapolation() const {owner();return codec_.extrapolation();}
     bool ready() const {owner();return stage_==Stage::idle;}
     std::uint64_t off_frames() const {owner();return runner_.off_frames();}
     std::uint64_t on_frames() const {owner();return runner_.on_frames();}

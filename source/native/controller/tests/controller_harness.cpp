@@ -636,6 +636,26 @@ int wmain(int argc,wchar_t** argv){
                 {"evaluates_without_caller_index",numbered["nr_runtime"].value("evaluates",0ULL)-before_numbered}};
         }
 
+        // Edit extrapolation (Live ABI25) through the real bridge: requested like
+        // any panel setting, applied by the composite with real NR, reported as
+        // the factor the composite used, and the settings receipt (observed ==
+        // requested, the two composite-only keys included) still matches. Then
+        // off again: the plain composite, factor 1.
+        report["extrapolation"]=json::array();
+        for(const float factor:{3.f,1.f}){
+            const bool extrapolate=factor!=1.f;
+            s=status_now();const auto before=s["nr_runtime"].value("evaluates",0ULL);
+            need(lab::pipe_request(GetCurrentProcessId(),request("SetNrSettings",{{"tone",1},{"structure",1},{"extrapolate",extrapolate},{"extrapolate_factor",3.f}},s)).value("ok",false),
+                 "Request edit extrapolation");
+            const auto applied=await([&](const json& st){const auto& r=st.at("nr_runtime");const auto set=r.value("settings",json::object());const auto o=set.value("observed",json());
+                return r.value("evaluates",0ULL)>before+2&&set.value("applied_extrapolate",!extrapolate)==extrapolate&&set.value("applied_extrapolate_factor",0.f)==factor&&
+                    o.is_object()&&o.value("extrapolate",2u)==(extrapolate?1u:0u)&&o.value("extrapolate_factor",0.f)==3.f&&
+                    st.at("nr_frame_control").value("state","")=="applied";},"the bridge to apply and acknowledge edit extrapolation",submit_frame,40);
+            const auto& r=applied["nr_runtime"];
+            need(r.value("state","")=="ready"&&r.value("error","").empty()&&r.value("execution_mode","")=="on","Edit extrapolation never stops NR: "+r.value("error",""));
+            report["extrapolation"].push_back({{"requested",extrapolate},{"applied_factor",r["settings"].value("applied_extrapolate_factor",0.f)},{"evaluates",r.value("evaluates",0ULL)}});
+        }
+
         // Compute-only: the conversion, NR and composite all run, but the game's
         // colour is never written back. It is the controller's own diagnostic
         // mode, and without enable_nr_compute_only() the request is refused, so

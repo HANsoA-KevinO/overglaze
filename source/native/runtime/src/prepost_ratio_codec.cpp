@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 #include "lab_prepost_ratio_codec.hpp"
 #include "lab_prepost_ratio_shader.hpp"
+#include "lab_nr_settings.hpp"
 #include <wrl/client.h>
 #include <d3dcompiler.h>
 #include <thread>
@@ -21,6 +22,15 @@ bool supported_color_format(DXGI_FORMAT f,bool game_facing) noexcept {
     if(f==DXGI_FORMAT_R16G16B16A16_FLOAT||f==DXGI_FORMAT_R32G32B32A32_FLOAT)return true;
     return game_facing&&f==DXGI_FORMAT_R11G11B10_FLOAT;
 }
+// The root constants: the caller's constants, then the codec's own block
+// (cbuffer Extrapolate + padding to a whole 16-byte register).
+struct ShaderConstants {
+    PrePostColorConstants base{};
+    float extrapolate=1;std::uint32_t pad[3]{};
+};
+static_assert(sizeof(ShaderConstants)==144);
+constexpr UINT shader_constant_count=sizeof(ShaderConstants)/4;
+constexpr unsigned srv_count=5,uav_count=3,descriptors_per_pass=srv_count+uav_count;
 ComPtr<IUnknown> identity(IUnknown* v) {
     if(!v)throw std::logic_error("Null pre/post codec object");
     ComPtr<IUnknown> result;hr(v->QueryInterface(IID_PPV_ARGS(&result)));return result;
@@ -59,15 +69,16 @@ struct PrePostColorCodec::Impl {
     enum class Stage { idle, prepared, recorded, pending } stage=Stage::idle;
     unsigned width=0,height=0,stride=0;
     bool first_prepare=true,first_composite=true,compare_split=false;unsigned guard_flags=0;
+    float extrapolation=1.f; // set_extrapolation; recorded into the next prepare
     std::uint64_t fence_value=0,pre_count=0,post_count=0;
-    PrePostColorConstants constants{};
+    ShaderConstants constants{};
     void check_owner() const {access.require();}
     void dispatch(unsigned pass) {
         ID3D12DescriptorHeap* heaps[]{heap.Get()};commands->SetDescriptorHeaps(1,heaps);
         commands->SetComputeRootSignature(root.Get());commands->SetPipelineState(pipelines[pass].Get());
-        auto h=heap->GetGPUDescriptorHandleForHeapStart();h.ptr+=pass*7ULL*stride;
-        commands->SetComputeRootDescriptorTable(0,h);h.ptr+=4ULL*stride;commands->SetComputeRootDescriptorTable(1,h);
-        commands->SetComputeRoot32BitConstants(2,32,&constants,0);commands->Dispatch((width+7)/8,(height+7)/8,1);
+        auto h=heap->GetGPUDescriptorHandleForHeapStart();h.ptr+=pass*UINT64(descriptors_per_pass)*stride;
+        commands->SetComputeRootDescriptorTable(0,h);h.ptr+=UINT64(srv_count)*stride;commands->SetComputeRootDescriptorTable(1,h);
+        commands->SetComputeRoot32BitConstants(2,shader_constant_count,&constants,0);commands->Dispatch((width+7)/8,(height+7)/8,1);
     }
     ~Impl() {
         // Incomplete/abandoned submission is a fatal host-context error. Keep
@@ -110,10 +121,10 @@ PrePostColorCodec::PrePostColorCodec(ID3D12Device* device,const PrePostColorInpu
         D3D12_FEATURE_DATA_FORMAT_SUPPORT support{f};hr(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT,&support,sizeof(support)));
         if(!(support.Support1&D3D12_FORMAT_SUPPORT1_SHADER_LOAD) || !(support.Support2&D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE))throw std::logic_error("Pre/post format support missing");
     }
-    D3D12_DESCRIPTOR_RANGE ranges[]={{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,4,0,0,0},{D3D12_DESCRIPTOR_RANGE_TYPE_UAV,3,0,0,0}};
+    D3D12_DESCRIPTOR_RANGE ranges[]={{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,srv_count,0,0,0},{D3D12_DESCRIPTOR_RANGE_TYPE_UAV,uav_count,0,0,0}};
     D3D12_ROOT_PARAMETER params[3]{};
     for(unsigned i=0;i<2;++i){params[i].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;params[i].DescriptorTable={1,&ranges[i]};}
-    params[2].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;params[2].Constants={0,0,32};
+    params[2].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;params[2].Constants={0,0,shader_constant_count};
     D3D12_ROOT_SIGNATURE_DESC rd{3,params,0,nullptr,D3D12_ROOT_SIGNATURE_FLAG_NONE};ComPtr<ID3DBlob> blob,error;
     hr(D3D12SerializeRootSignature(&rd,D3D_ROOT_SIGNATURE_VERSION_1,&blob,&error));
     hr(device->CreateRootSignature(0,blob->GetBufferPointer(),blob->GetBufferSize(),IID_PPV_ARGS(&s.root)));
@@ -125,7 +136,7 @@ PrePostColorCodec::PrePostColorCodec(ID3D12Device* device,const PrePostColorInpu
         D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};pd.pRootSignature=s.root.Get();pd.CS={blob->GetBufferPointer(),blob->GetBufferSize()};
         hr(device->CreateComputePipelineState(&pd,IID_PPV_ARGS(&s.pipelines[i])));
     }
-    D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.NumDescriptors=14;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.NumDescriptors=2*descriptors_per_pass;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     hr(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&s.heap)));s.stride=device->GetDescriptorHandleIncrementSize(hd.Type);
     auto h=s.heap->GetCPUDescriptorHandleForHeapStart();
     // Each view carries its own texture's format; roles 0 and 3 may differ from
@@ -137,6 +148,9 @@ PrePostColorCodec::PrePostColorCodec(ID3D12Device* device,const PrePostColorInpu
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};uav.ViewDimension=D3D12_UAV_DIMENSION_TEXTURE2D;
     for(unsigned pass=0;pass<2;++pass) {
         const unsigned inputs[]{0,2,4,5};for(auto i:inputs){srv.Format=role_format(i);device->CreateShaderResourceView(s.textures[i].Get(),&srv,h);h.ptr+=s.stride;}
+        // t4: the prepared NR input C, read by Composite only for extrapolation.
+        // Prepare writes that texture as u0, so its own table holds a null view.
+        srv.Format=role_format(1);device->CreateShaderResourceView(pass?s.textures[1].Get():nullptr,&srv,h);h.ptr+=s.stride;
         const unsigned outputs[]{pass?3U:1U,4,5};
         for(unsigned i=0;i<3;++i){uav.Format=role_format(outputs[i]);device->CreateUnorderedAccessView(pass&&i?nullptr:s.textures[outputs[i]].Get(),nullptr,&uav,h);h.ptr+=s.stride;}
     }
@@ -150,7 +164,10 @@ void PrePostColorCodec::validate_prepare(ID3D12GraphicsCommandList* commands,con
 }
 void PrePostColorCodec::prepare(ID3D12GraphicsCommandList* commands,const PrePostColorConstants& c) {
     validate_prepare(commands,c);auto& s=*impl_;
-    s.constants=c;s.constants.reserved=s.guard_flags|(s.compare_split?4u:0u);s.commands=commands;s.stage=Impl::Stage::prepared;
+    // Extrapolation is entered only for a factor other than 1, so 1 (and off)
+    // runs exactly the plain composite.
+    s.constants.base=c;s.constants.base.reserved=s.guard_flags|(s.compare_split?4u:0u)|(s.extrapolation!=1.f?8u:0u);
+    s.constants.extrapolate=s.extrapolation;s.commands=commands;s.stage=Impl::Stage::prepared;
     for(unsigned i:{1U,4U,5U})if(!s.first_prepare)transition(commands,s.textures[i].Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     s.dispatch(0);
     for(unsigned i:{1U,4U,5U})transition(commands,s.textures[i].Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -190,6 +207,10 @@ void PrePostColorCodec::discard_recorded() {
 }
 void PrePostColorCodec::set_compare_split(bool v){impl_->check_owner();if(impl_->stage!=Impl::Stage::idle)throw std::logic_error("Compare split changes only between frames");impl_->compare_split=v;}
 bool PrePostColorCodec::compare_split() const {impl_->check_owner();return impl_->compare_split;}
+void PrePostColorCodec::set_extrapolation(float factor){impl_->check_owner();
+    if(!std::isfinite(factor)||factor<Settings::min_extrapolate_factor||factor>Settings::max_extrapolate_factor)throw std::logic_error("Extrapolation factor must be finite 1..4");
+    if(impl_->stage!=Impl::Stage::idle)throw std::logic_error("Extrapolation changes only between frames");impl_->extrapolation=factor;}
+float PrePostColorCodec::extrapolation() const {impl_->check_owner();return impl_->extrapolation;}
 std::uint64_t PrePostColorCodec::prepare_count() const {impl_->check_owner();return impl_->pre_count;}
 std::uint64_t PrePostColorCodec::composite_count() const {impl_->check_owner();return impl_->post_count;}
 }

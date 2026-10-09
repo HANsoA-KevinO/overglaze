@@ -31,6 +31,13 @@ int main(){try{
     need(c.handle_embedded("SetNrSettings",{{"tone",1},{"structure",1},{"exposure_stops",-13}},1)["error"]["code"]=="bad_config","Reject out-of-range exposure");
     need(c.handle_embedded("SetNrSettings",{{"tone",1},{"structure",1},{"style",2}},1)["ok"]==true&&c.status()["nr_settings_request"]["values"]["exposure_stops"]==4.5,"Omitted exposure keeps the staged value");
     need(c.handle_embedded("SetNrSettings",{{"tone",1},{"structure",1},{"exposure_stops",0}},1)["ok"]==true,"Restore default exposure for the remaining checks");
+    // ABI25 edit extrapolation: staged while OFF like every panel setting.
+    need(c.status()["nr_settings_request"]["values"]["extrapolate"]==0&&c.status()["nr_settings_request"]["values"]["extrapolate_factor"]==2.0,"Extrapolation off by default at factor 2");
+    need(c.handle_embedded("SetNrSettings",{{"tone",1},{"structure",1},{"extrapolate",true},{"extrapolate_factor",3.5}},1)["ok"]==true,"Stage extrapolation while OFF");
+    for(const auto& bad:{lab::json{{"extrapolate_factor",4.5}},lab::json{{"extrapolate_factor",.5}},lab::json{{"extrapolate",3}}}){
+        auto p=bad;p["tone"]=1;p["structure"]=1;const auto revision=c.status()["revision"];
+        need(c.handle_embedded("SetNrSettings",p,1)["error"]["code"]=="bad_config"&&c.status()["revision"]==revision,"Out-of-range extrapolation rejected without mutation");}
+    need(c.status()["nr_settings_request"]["values"]["extrapolate"]==1&&c.status()["nr_settings_request"]["values"]["extrapolate_factor"]==3.5,"Extrapolation staged");
     for(const auto& style:{lab::json(-1),lab::json(3),lab::json(.5),lab::json(1.0),lab::json(true),lab::json("A"),lab::json(4294967296ULL)}){
         const auto revision=c.status()["revision"];
         need(c.handle_embedded("SetNrSettings",{{"tone",1},{"structure",1},{"style",style}},1)["error"]["code"]=="bad_config","Reject guessed, fractional or out-of-range Style");
@@ -43,7 +50,8 @@ int main(){try{
     need(!c.take_nr_preparation(6000)&&!c.take_nr_mode_request(6000),"Editing OFF never starts NR");
     need(c.handle_embedded("SetNrMode",{{"mode","on"}},6001)["ok"]==true&&c.take_nr_preparation(6002),"Local first ON prepares once");
     c.enable_nr_frame_control("game-rr-experimental-nr",true,true);c.publish_nr_runtime(runtime());
-    auto action=c.take_nr_mode_request(6003);need(action&&action->at("settings")["tone"]==.25f,"First ON carries staged values");ack(c,*action,10);
+    auto action=c.take_nr_mode_request(6003);need(action&&action->at("settings")["tone"]==.25f,"First ON carries staged values");
+    need(action->at("settings")["extrapolate"]==1&&action->at("settings")["extrapolate_factor"]==3.5,"First ON carries the staged extrapolation");ack(c,*action,10);
     c.frame_boundary(11,600000);need(c.status()["nr_lifecycle"]["desired_mode"]=="on"&&!c.take_nr_mode_request(600001),"Hidden panel needs no heartbeat");
     auto claim=external(c,"TakeControl");auto accepted=c.handle(claim,600002);
     need(accepted["ok"]==true&&c.handle(claim,600003)==accepted,"External takeover idempotent");

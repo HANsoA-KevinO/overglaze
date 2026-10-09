@@ -34,10 +34,12 @@ json bound_status(json data,std::size_t limit,const char* channel){
     if(data.dump().size()>limit)return {{"state","failed"},{"error",std::string(channel)+"-report-size"},{"clipped",clipped},{"limit",limit}};
     return data;
 }
+constexpr char bad_settings_message[]="Tone/Structure must be finite 0..2; optional Style must be integer 0, 1 or 2; optional exposure_stops must be finite -12..10; "
+    "optional skin must be finite 0..2; optional exposure_auto, compare_split, automask and extrapolate must be a boolean or 0/1; optional extrapolate_factor must be finite 1..4";
 bool parse_settings(const json& p,const json& previous,json& result){
     if(!p.is_object()||!p.contains("tone")||!p.contains("structure"))return false;
     const std::size_t expected=2u+(p.contains("style")?1u:0u)+(p.contains("exposure_stops")?1u:0u)+(p.contains("exposure_auto")?1u:0u)+(p.contains("compare_split")?1u:0u)
-        +(p.contains("skin")?1u:0u)+(p.contains("automask")?1u:0u);
+        +(p.contains("skin")?1u:0u)+(p.contains("automask")?1u:0u)+(p.contains("extrapolate")?1u:0u)+(p.contains("extrapolate_factor")?1u:0u);
     if(p.size()!=expected)return false;
     for(const char* k:{"tone","structure"}){if(!p[k].is_number())return false;const auto v=p[k].get<double>();if(!std::isfinite(v)||v<0||v>nr::Settings::max_tone_structure)return false;}
     unsigned style=previous.value("style",0u);
@@ -67,8 +69,18 @@ bool parse_settings(const json& p,const json& previous,json& result){
         if(a.is_boolean())automask=a.get<bool>()?1u:0u;
         else if(a.is_number_integer()&&a>=0&&a<=1)automask=a.get<unsigned>();
         else return false;}
+    // ABI25: edit extrapolation, a composite setting the DLL never reads. Each
+    // optional; omitted keeps the current value. The factor is kept while off.
+    unsigned extrapolate=previous.value("extrapolate",0u);
+    if(p.contains("extrapolate")){const auto& a=p["extrapolate"];
+        if(a.is_boolean())extrapolate=a.get<bool>()?1u:0u;
+        else if(a.is_number_integer()&&a>=0&&a<=1)extrapolate=a.get<unsigned>();
+        else return false;}
+    float extrapolate_factor=previous.value("extrapolate_factor",2.f);
+    if(p.contains("extrapolate_factor")){if(!p["extrapolate_factor"].is_number())return false;const auto v=p["extrapolate_factor"].get<double>();
+        if(!std::isfinite(v)||v<nr::Settings::min_extrapolate_factor||v>nr::Settings::max_extrapolate_factor)return false;extrapolate_factor=static_cast<float>(v);}
     result={{"tone",p["tone"].get<float>()},{"structure",p["structure"].get<float>()},{"style",style},{"exposure_stops",exposure_stops},{"exposure_auto",exposure_auto},{"compare_split",compare_split},
-        {"skin",skin},{"automask",automask}};return true;
+        {"skin",skin},{"automask",automask},{"extrapolate",extrapolate},{"extrapolate_factor",extrapolate_factor}};return true;
 }
 }
 Controller::Controller(bool synthetic) : synthetic_(synthetic), session_(uuid()) {
@@ -633,7 +645,7 @@ json Controller::handle_impl(json request, std::uint64_t now,bool embedded) {
             }else if(staged_settings){
                 const auto& params=request.at("params");
                 json parsed;if(!parse_settings(params,desired_settings_,parsed))
-                    return fail("bad_config","Tone/Structure must be finite 0..1; optional Style must be integer 0, 1 or 2; optional exposure_stops must be finite -12..10; optional exposure_auto must be a boolean or 0/1");
+                    return fail("bad_config",bad_settings_message);
                 desired_settings_=std::move(parsed);
                 settings_revision_=revision_+1;
                 if(nr_desired_on_)set_nr_intent_locked(nr_desired_on_,id);
@@ -690,7 +702,7 @@ json Controller::handle_impl(json request, std::uint64_t now,bool embedded) {
                     if(!nr_settings_enabled_)return fail("unsupported","No dynamically verified settings backend");
                     if(!nr::executes(nr_status_.value("observed_mode","")))return fail("nr_off","Enable NR first; settings need an actual Evaluate receipt");
                     json parsed;if(!parse_settings(params,desired_settings_,parsed))
-                        return fail("bad_config","Tone/Structure must be finite 0..1; optional Style must be integer 0, 1 or 2; optional exposure_stops must be finite -12..10; optional exposure_auto must be a boolean or 0/1");
+                        return fail("bad_config",bad_settings_message);
                     desired_settings_=parsed;
                     nr_pending_=json{{"mode",nr_status_.at("observed_mode")},{"settings",parsed},
                         {"revision",revision_+1},{"request_id",id},{"request",request}};

@@ -160,7 +160,7 @@ void LiveRuntimeClient::poll(const char* blocked){
         if(!action_)action_=sink_.take_nr_mode_request(GetTickCount64());
         if(action_&&!dispatched_){
             if(action_->contains("settings")){const auto& v=action_->at("settings");nr::Settings settings{v.at("tone").get<float>(),v.at("structure").get<float>(),v.at("style").get<unsigned>(),v.value("exposure_stops",0.f),v.value("exposure_auto",0u),v.value("compare_split",0u),
-                    v.value("skin",1.f),v.value("automask",0u)};
+                    v.value("skin",1.f),v.value("automask",0u),v.value("extrapolate",0u),v.value("extrapolate_factor",2.f)};
                 dispatched_=apply_(context_,action_->at("revision").get<std::uint64_t>(),nr::mode_value(action_->at("mode").get<std::string>()),&settings);
             }else dispatched_=request_(context_,action_->at("revision").get<std::uint64_t>(),nr::mode_value(action_->at("mode").get<std::string>()));
         }
@@ -210,11 +210,15 @@ void LiveRuntimeClient::poll(const char* blocked){
                 {"blocked_frames",binding_status_.blocked_frames},{"reason",binding_status_.reason},{"reason_first_frame",binding_status_.reason_first_frame},
                 {"heap_order_permutations",binding_status_.heap_order_permutations},{"heap_permuted_insertions",binding_status_.heap_permuted_insertions}}:json(nullptr)}}},
         {"settings",{{"requested",{{"tone",status_.requested_settings.tone},{"structure",status_.requested_settings.structure},{"style",status_.requested_settings.style},{"exposure_stops",status_.requested_settings.exposure_stops},{"exposure_auto",status_.requested_settings.exposure_auto},{"compare_split",status_.requested_settings.compare_split},
-                {"skin",status_.requested_settings.skin},{"automask",status_.requested_settings.automask}}},
+                {"skin",status_.requested_settings.skin},{"automask",status_.requested_settings.automask},
+                {"extrapolate",status_.requested_settings.extrapolate},{"extrapolate_factor",status_.requested_settings.extrapolate_factor}}},
             {"observed",status_.settings_read_mask==3&&status_.settings_style_read?json{{"tone",status_.observed_settings.tone},{"structure",status_.observed_settings.structure},{"style",status_.observed_settings.style},{"exposure_stops",status_.observed_settings.exposure_stops},{"exposure_auto",status_.observed_settings.exposure_auto},{"compare_split",status_.observed_settings.compare_split},
-                {"skin",status_.observed_settings.skin},{"automask",status_.observed_settings.automask}}:json(nullptr)},
+                {"skin",status_.observed_settings.skin},{"automask",status_.observed_settings.automask},
+                {"extrapolate",status_.observed_settings.extrapolate},{"extrapolate_factor",status_.observed_settings.extrapolate_factor}}:json(nullptr)},
             {"skin_read",status_.settings_skin_read==1},{"automask_read",status_.settings_automask_read==1},
-            {"applied_exposure_stops",status_.applied_exposure_stops},{"metered_log2_luminance",status_.metered_log2_luminance},{"meter_samples",status_.meter_samples},
+            {"applied_exposure_stops",status_.applied_exposure_stops},
+            // ABI25: what the composite actually used on the last recorded ON frame.
+            {"applied_extrapolate",status_.applied_extrapolate!=0},{"applied_extrapolate_factor",status_.applied_extrapolate_factor},{"metered_log2_luminance",status_.metered_log2_luminance},{"meter_samples",status_.meter_samples},
             {"exposure_source",live::exposure_source_name(status_.exposure_source)},
             {"exposure_fallback",status_.exposure_source==static_cast<unsigned>(live::ExposureSource::meter)?json(live::exposure_note_name(status_.exposure_note)):json(nullptr)},
             {"game_exposure",game_exposure},

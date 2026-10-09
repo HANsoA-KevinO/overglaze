@@ -30,6 +30,14 @@ struct Settings {
     // is moved.
     float skin=1.f;
     std::uint32_t automask=0;
+    // Edit extrapolation (Live ABI25), a Lab composite setting the DLL never
+    // reads. With extrapolate=1, what is composited back is
+    // N' = saturate(C + extrapolate_factor * (N - C)) per channel, where C is the
+    // encoded image handed to NR and N its output in that same domain. NR still
+    // runs once and keeps its own output as history. Off, or a factor of 1, is
+    // exactly the plain composite.
+    std::uint32_t extrapolate=0;
+    float extrapolate_factor=2.f;
     // Manual exposure (and the offset on top of auto). The floor was -6, which
     // cannot reach scene-referred input such as Alan Wake 2 in daylight.
     static constexpr float min_exposure_stops=-12.f, max_exposure_stops=10.f;
@@ -37,12 +45,16 @@ struct Settings {
     // still change up to 16, clipping and artefacts from about 4); RenoDX uses
     // 1.85 / 2.00. 2 is the laboratory ceiling. Skin keeps the same ceiling.
     static constexpr float max_tone_structure=2.f, max_skin=2.f;
+    static constexpr float min_extrapolate_factor=1.f, max_extrapolate_factor=4.f;
     bool valid() const noexcept {
         return std::isfinite(tone)&&std::isfinite(structure)&&std::isfinite(exposure_stops)&&std::isfinite(skin)&&
             tone>=0.f&&tone<=max_tone_structure&&structure>=0.f&&structure<=max_tone_structure&&style<3&&
             exposure_stops>=min_exposure_stops&&exposure_stops<=max_exposure_stops&&exposure_auto<=1&&compare_split<=1&&
-            skin>=0.f&&skin<=max_skin&&automask<=1;
+            skin>=0.f&&skin<=max_skin&&automask<=1&&extrapolate<=1&&std::isfinite(extrapolate_factor)&&
+            extrapolate_factor>=min_extrapolate_factor&&extrapolate_factor<=max_extrapolate_factor;
     }
+    // The factor the composite applies: 1 (the plain composite) while off.
+    float applied_extrapolation() const noexcept {return extrapolate?extrapolate_factor:1.f;}
     float exposure_gain() const noexcept {return std::exp2(exposure_stops);}
     bool model_equal(const Settings& o) const noexcept {return tone==o.tone&&structure==o.structure&&style==o.style&&skin==o.skin&&automask==o.automask;}
     bool operator==(const Settings&) const = default;
@@ -55,7 +67,7 @@ struct SettingsReads {
     // ABI22. Skin and UseAutoMask are matched when the DLL read them, never
     // required: an unread optional control is reported, not a fault.
     bool skin_observed=false,automask_observed=false;
-    // Only DLL-read fields are matched; exposure_stops is host-applied.
+    // Only DLL-read fields are matched; exposure_stops and extrapolation are host-applied.
     bool matches(const Settings& expected) const noexcept {
         return mask==3&&style_observed&&values.tone==expected.tone&&values.structure==expected.structure&&values.style==expected.style&&
             (!skin_observed||values.skin==expected.skin)&&(!automask_observed||values.automask==expected.automask);

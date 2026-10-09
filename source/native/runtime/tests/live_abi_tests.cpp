@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 HANsoA-KevinO
 // SPDX-License-Identifier: MIT
-// Live ABI boundary between the runtime and research bridge variants (ABI24 adds the game's exposure to
+// Live ABI boundary between the runtime and research bridge variants (ABI25 adds edit extrapolation to
+// Settings and the applied factor to Status; ABI24 adds the game's exposure to
 // Frame and auto exposure's source to Status; ABI23 adds frame regions; ABI22 adds
 // Skin/AutoMask to Settings; ABI21 adds the render-queue handoff the late-load panel needs).
 //
@@ -14,6 +15,7 @@
 // no NGX, D3D12 or model dependency is touched.
 #include "lab_nr_live_api.hpp"
 #include <windows.h>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -76,20 +78,29 @@ int main(int argc,char** argv){try{
     // The runtime ABI carries no collector type. A research structure that
     // found its way back into Frame/Status would change these sizes.
     static_assert(std::is_trivially_copyable_v<Frame>&&std::is_trivially_copyable_v<Status>);
-    static_assert(sizeof(Frame)==176&&sizeof(Status)==1152&&sizeof(Capabilities)==92, // ABI24: Frame game exposure, Status exposure source and counts
-        "Live ABI24 runtime layout changed; review every host and bump the version");
-    static_assert(version==24);
+    static_assert(sizeof(Frame)==176&&sizeof(Status)==1176&&sizeof(Capabilities)==92, // ABI25: Settings extrapolation, Status applied extrapolation
+        "Live ABI25 runtime layout changed; review every host and bump the version");
+    static_assert(sizeof(lab::nr::Settings)==40,"ABI25 Settings: extrapolate and extrapolate_factor after AutoMask");
+    static_assert(offsetof(lab::nr::Settings,extrapolate)==32&&offsetof(lab::nr::Settings,extrapolate_factor)==36);
+    static_assert(offsetof(Status,applied_extrapolate_factor)==offsetof(Status,meter_reserved)+4&&offsetof(Status,applied_extrapolate)==offsetof(Status,applied_extrapolate_factor)+4,
+        "ABI25: the applied extrapolation sits beside the applied exposure");
+    static_assert(version==25);
     static_assert(exposure_note_count==19&&static_cast<unsigned>(ExposureSource::game)==2,"ABI24 exposure enums");
     {   // A frame source that says nothing about exposure says "no texture", at
         // pre-exposure and scale 1: the runtime then stays on its meter.
         Frame f;need(!f.exposure&&f.exposure_note==static_cast<unsigned>(ExposureNote::no_texture)&&f.pre_exposure==1.f&&f.exposure_scale==1.f,
             "Frame exposure defaults");
-        Status s;need(s.exposure_source==static_cast<unsigned>(ExposureSource::manual)&&!s.game_exposure_valid&&s.exposure_notes[0]==0,"Status exposure defaults");}
+        Status s;need(s.exposure_source==static_cast<unsigned>(ExposureSource::manual)&&!s.game_exposure_valid&&s.exposure_notes[0]==0,"Status exposure defaults");
+        need(s.applied_extrapolate==0&&s.applied_extrapolate_factor==1.f,"Status: no extrapolation applied by default (plain composite)");
+        need(!s.requested_settings.extrapolate&&s.requested_settings.extrapolate_factor==2.f,"Settings: extrapolation off at factor 2 by default");
+        // A request with an out-of-range factor never reaches the runtime.
+        lab::nr::Settings bad;bad.extrapolate=1;bad.extrapolate_factor=5;Status t;need(!apply_request(t,true,1,1,&bad)&&t.request_revision==0,"Invalid extrapolation refused at the ABI");
+        bad.extrapolate_factor=4;need(apply_request(t,true,1,1,&bad)&&t.requested_settings.extrapolate_factor==4.f,"Factor 4 carried through the ABI");}
     need(research_entry_point_count==15,"Research entry point list (15, including the chain capture)");
     Capabilities capabilities;
     need(capabilities.size==sizeof(Capabilities)&&capabilities.abi==version&&!capabilities.variant,"Capabilities default to an unknown variant");
 
-    if(argc==1){std::cout<<"PASS "<<checks<<" live ABI24 layout checks; runtime structures free of research collectors\n";return 0;}
+    if(argc==1){std::cout<<"PASS "<<checks<<" live ABI25 layout checks; runtime structures free of research collectors\n";return 0;}
     need(argc==3,"Usage: lab_live_abi_tests [controller|research <bridge dll>]");
     const std::string variant=argv[1];
     const auto names=exported_names(std::filesystem::canonical(argv[2]));

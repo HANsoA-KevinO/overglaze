@@ -138,6 +138,7 @@ The model takes display-referred colour, while the upscaler's output is linear f
 
 **Composite**
 
+- Optional **edit extrapolation** (off by default, factor n in 1–4): with **C** the NR input and **O** the NR output, **O** is replaced by clamp(**C** + n · (**O** − **C**), 0, 1), per channel. NR runs once and keeps its own output as history; off or n = 1 leaves **O** unchanged.
 - **N** = sRGB_decode(NR output)
 - **r** = clamp((**N** + ε) / (**S** + ε), 0.01, 10), per channel, with ε = 10⁻⁶
 - **result** = M_post · (**H** ⊙ **r**) / E, written back in place. Alpha is kept.

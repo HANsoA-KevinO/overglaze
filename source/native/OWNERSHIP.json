@@ -447,6 +447,9 @@
   "runtime/tests/prepost_guard_tests.cpp": {
    "track": "runtime"
   },
+  "runtime/tests/prepost_extrapolation_tests.cpp": {
+   "track": "runtime"
+  },
   "runtime/tests/nr_color_profile_tests.cpp": {
    "track": "runtime"
   },

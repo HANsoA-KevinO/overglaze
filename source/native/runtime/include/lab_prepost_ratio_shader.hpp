@@ -8,11 +8,13 @@ cbuffer Params : register(b0) {
     float4 Pre0, Pre1, Pre2, Post0, Post1, Post2;
     float Exposure, Sigma, Gamma; uint Operator;
     uint Width, Height, PrePost, Reserved;
+    float Extrapolate; uint3 ExtrapolatePad;
 };
 Texture2D<float4> Original : register(t0);
 Texture2D<float4> Neural : register(t1);
 Texture2D<float4> Hdr : register(t2);
 Texture2D<float4> Sdr : register(t3);
+Texture2D<float4> Prepared : register(t4);
 RWTexture2D<float4> Output : register(u0);
 RWTexture2D<float4> SavedHdr : register(u1);
 RWTexture2D<float4> SavedSdr : register(u2);
@@ -74,6 +76,11 @@ void Composite(uint3 id : SV_DispatchThreadID) {
         float3 h=PrePost ? float3(dot(Pre0.xyz,e),dot(Pre1.xyz,e),dot(Pre2.xyz,e)) : x.rgb;
         if(!safe_rgb(x.rgb) || !safe_rgb(h) || !safe_rgb(PrePost?tonemap(h):h) || !safe_rgb(raw)) {Output[id.xy]=x;return;}
     }
+    // Lab extension, edit extrapolation (Reserved&8, set only for a factor other
+    // than 1): amplify this pass's edit in the NR API domain before the ratio
+    // transfer, N' = saturate(C + k(N - C)) with C the encoded image NR was given.
+    // Only what is composited back changes; NR keeps its own output as history.
+    if(Reserved&8) {float3 c=Prepared.Load(int3(id.xy,0)).rgb; raw=saturate(c+Extrapolate*(raw-c));}
     float3 n=decode(raw);
     if(PrePost) {
         float3 r=clamp((n+1e-6)/(Sdr.Load(int3(id.xy,0)).rgb+1e-6),.01,10);

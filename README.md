@@ -84,6 +84,7 @@ Uninstall each game from the Game Library **before** you move or delete the Over
 | Structure (0–2, default 1) | Sets `DLSSNR.LocalStructureStrength`. In our tests it mostly changes detail. |
 | Style (0, 1, 2) | Sets `DLSSNR.Style`. The three styles are not mapped to any official names. |
 | AutoMask and Skin (0–2) | Set `DLSSNR.UseAutoMask` and `DLSSNR.SkinStructureStrength`. Skin only takes effect while AutoMask is on; 0 leaves skin almost untouched. Moving Skin turns AutoMask on. |
+| Extrapolate (off by default; factor ×1–×4, default ×2) | Overglaze's own composite step, not a model parameter. NR runs once, and the change it made is multiplied by the factor before it is written back. Beyond what the model was designed for: sharpening overshoot and fine grain are amplified too. |
 | Input exposure | Overglaze's own colour preparation, not a model parameter. Either a manual value in stops, or automatic: the game's own exposure when it passes a usable one, otherwise Overglaze's metering, with your value as an offset. The panel shows which source is in use. |
 | Compare split | Left half shows the original frame, right half the NR result. Diagnostic view only. |
 | Compute only | Runs NR without writing the result back into the game. Useful for measuring cost. |

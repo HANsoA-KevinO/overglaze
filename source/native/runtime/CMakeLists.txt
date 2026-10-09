@@ -78,6 +78,13 @@ add_executable(lab_prepost_guard_tests tests/prepost_guard_tests.cpp)
 target_link_libraries(lab_prepost_guard_tests PRIVATE lab_prepost_ratio_codec lab_color_codec lab_core dxgi)
 add_test(NAME native_prepost_invalid_rgb_guard COMMAND lab_prepost_guard_tests)
 set_tests_properties(native_prepost_invalid_rgb_guard PROPERTIES TIMEOUT 20 LABELS gpu SKIP_RETURN_CODE 77)
+# Edit extrapolation in the composite (Live ABI25): off and 1 are the plain
+# composite byte for byte, k gives saturate(C + k(N - C)) then the ratio
+# transfer, guards and split unchanged. On WARP.
+add_executable(lab_prepost_extrapolation_tests tests/prepost_extrapolation_tests.cpp)
+target_link_libraries(lab_prepost_extrapolation_tests PRIVATE lab_prepost_ratio_codec lab_core d3d12 dxgi)
+add_test(NAME native_prepost_extrapolation COMMAND lab_prepost_extrapolation_tests)
+set_tests_properties(native_prepost_extrapolation PROPERTIES TIMEOUT 60)
 add_executable(lab_hdr_fixture_tests tests/hdr_fixture_tests.cpp)
 target_link_libraries(lab_hdr_fixture_tests PRIVATE lab_runtime_includes)
 add_test(NAME native_hdr_numeric_fixture COMMAND lab_hdr_fixture_tests)

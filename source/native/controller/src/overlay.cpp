@@ -83,7 +83,7 @@ struct GameOverlay::Impl {
     unsigned width=0,height=0,rtv_stride=0,srv_stride=0;DXGI_FORMAT format=DXGI_FORMAT_UNKNOWN;
     DXGI_COLOR_SPACE_TYPE space=DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     std::uint64_t sequence=0,draws=0,skipped=0,last_tick=0,last_settings=0,settings_revision=0;
-    float tone=1,structure=1,exposure_stops=0,paper_white=203,skin=1;bool settings_dirty=false,settings_loaded=false,exposure_auto=false,compare_split=false,automask=false;
+    float tone=1,structure=1,exposure_stops=0,paper_white=203,skin=1,extrapolate_factor=2;bool settings_dirty=false,settings_loaded=false,exposure_auto=false,compare_split=false,automask=false,extrapolate=false;
     int model_style=0;
     std::string error;json controls=json::object();
     static inline std::atomic<Impl*> input_owner=nullptr;
@@ -387,14 +387,15 @@ struct GameOverlay::Impl {
         if(panel.other_owner)ImGui::TextWrapped("外部工具控制中，面板只读。");
         const auto requested=status.value("nr_settings_request",json());
         if(requested.is_object()&&(!settings_loaded||(!settings_dirty&&!ImGui::IsAnyItemActive()&&requested.value("revision",0ULL)!=settings_revision))){
-            const auto v=requested.at("values");tone=v.value("tone",1.f);structure=v.value("structure",1.f);exposure_stops=v.value("exposure_stops",0.f);exposure_auto=v.value("exposure_auto",0u)!=0;compare_split=v.value("compare_split",0u)!=0;model_style=v.value("style",0);skin=v.value("skin",1.f);automask=v.value("automask",0u)!=0;settings_loaded=true;settings_revision=requested.value("revision",0ULL);}
+            const auto v=requested.at("values");tone=v.value("tone",1.f);structure=v.value("structure",1.f);exposure_stops=v.value("exposure_stops",0.f);exposure_auto=v.value("exposure_auto",0u)!=0;compare_split=v.value("compare_split",0u)!=0;model_style=v.value("style",0);skin=v.value("skin",1.f);automask=v.value("automask",0u)!=0;
+            extrapolate=v.value("extrapolate",0u)!=0;extrapolate_factor=v.value("extrapolate_factor",2.f);settings_loaded=true;settings_revision=requested.value("revision",0ULL);}
         ImGui::Spacing();product::eyebrow("外观");
         const bool writable=!panel.other_owner&&!panel.failed;bool released=false;
         // Restore the last requested controls once per process as a staged
         // request (OFF allowed). The ON gate itself is never restored.
         if(saved_model.has_model&&!settings_restored&&writable&&requested.is_object()){settings_restored=true;
             dispatch("SetNrSettings",{{"tone",saved_model.tone},{"structure",saved_model.structure},{"style",saved_model.style},{"exposure_stops",saved_model.exposure_stops},{"exposure_auto",saved_model.exposure_auto},
-                {"skin",saved_model.skin},{"automask",saved_model.automask}});}
+                {"skin",saved_model.skin},{"automask",saved_model.automask},{"extrapolate",saved_model.extrapolate},{"extrapolate_factor",saved_model.extrapolate_factor}});}
         ImGui::BeginDisabled(!writable);
         const float style_width=(ImGui::GetContentRegionAvail().x-ImGui::GetStyle().ItemSpacing.x*2)/3;
         for(int i=0;i<3;++i){if(i)ImGui::SameLine();const char* labels[]{"Style 0","Style 1","Style 2"};
@@ -420,6 +421,17 @@ struct GameOverlay::Impl {
         ImGui::SetCursorPosX(label_x);if(ImGui::Checkbox("AutoMask",&automask)){settings_dirty=true;released=true;}mark("automask");
         ImGui::SameLine();ImGui::TextDisabled("皮肤区域识别");
         ImGui::SetItemTooltip("Skin 需要 AutoMask；调整 Skin 会自动开启。");
+        // Edit extrapolation (Live ABI25): NR still runs once; only what is
+        // composited back is this pass's change times the factor.
+        ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("外推");
+        ImGui::SameLine(ImGui::GetWindowContentRegionMax().x-48*dpi);
+        if(panel_toggle("外推",extrapolate,dpi)){settings_dirty=true;released=true;}mark("extrapolate");
+        ImGui::SetItemTooltip("NR 只运行一次，写回前放大这一遍的改动。");
+        if(extrapolate){
+            ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("倍数");ImGui::SameLine(label_x);ImGui::SetNextItemWidth(-1);
+            if(ImGui::SliderFloat("##extrapolate_factor",&extrapolate_factor,nr::Settings::min_extrapolate_factor,nr::Settings::max_extrapolate_factor,"×%.1f",ImGuiSliderFlags_AlwaysClamp))settings_dirty=true;
+            mark("extrapolate_factor");released|=ImGui::IsItemDeactivatedAfterEdit();
+            ImGui::PushTextWrapPos(0);ImGui::TextDisabled("把这一遍的改动按倍数放大。超出模型设计用法，锐化过冲和细小颗粒会一起放大。");ImGui::PopTextWrapPos();}
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         ImGui::AlignTextToFramePadding();product::eyebrow("输入曝光");
         ImGui::SameLine(ImGui::GetWindowContentRegionMax().x-128*dpi);
@@ -449,7 +461,7 @@ struct GameOverlay::Impl {
         ImGui::EndDisabled();
         if(settings_dirty&&writable&&(released||GetTickCount64()-last_settings>=100)){
             dispatch("SetNrSettings",{{"tone",tone},{"structure",structure},{"style",model_style},{"exposure_stops",exposure_stops},{"exposure_auto",exposure_auto?1:0},{"compare_split",compare_split?1:0},
-                {"skin",skin},{"automask",automask?1:0}});last_settings=GetTickCount64();settings_dirty=false;}
+                {"skin",skin},{"automask",automask?1:0},{"extrapolate",extrapolate?1:0},{"extrapolate_factor",extrapolate_factor}});last_settings=GetTickCount64();settings_dirty=false;}
         if(!on)ImGui::TextDisabled("参数在开启后生效");
 #ifdef LAB_OVERLAY_RESEARCH
         ImGui::Spacing();ImGui::Separator();ImGui::TextDisabled("CAPTURE");
@@ -491,6 +503,7 @@ struct GameOverlay::Impl {
                 if(s.value("read_mask",0u)==3&&s.value("style_read",false)&&v.is_object()){
                     ImGui::TextDisabled("Tone %.2f · Structure %.2f · Style %u",v.value("tone",0.f),v.value("structure",0.f),v.value("style",0u));
                     ImGui::TextDisabled("宿主曝光 %+.1f EV%s · 帧 %llu",s.value("applied_exposure_stops",v.value("exposure_stops",0.f)),v.value("exposure_auto",0u)?"（自动）":"",s.value("frame",0ULL));
+                    if(s.value("applied_extrapolate",false))ImGui::TextDisabled("宿主外推 ×%.1f",s.value("applied_extrapolate_factor",1.f));
                     // Unread optional controls mirror the request; only *_read says the DLL read them.
                     const bool skin_read=s.value("skin_read",false),mask_read=s.value("automask_read",false);
                     char skin_text[16]="未读";if(skin_read)std::snprintf(skin_text,sizeof skin_text,"%.2f",v.value("skin",0.f));
@@ -529,7 +542,8 @@ struct GameOverlay::Impl {
             ImGui::PopTextWrapPos();}
         ImGui::Spacing();ImGui::TextDisabled("%s 收起  ·  Esc 返回游戏",key_name);
         {OverlayPreferences current;current.hotkey=hotkey.load();current.white=paper_white;
-         if(settings_loaded){current.has_model=true;current.tone=tone;current.structure=structure;current.style=unsigned(model_style);current.exposure_stops=exposure_stops;current.exposure_auto=exposure_auto?1u:0u;current.skin=skin;current.automask=automask?1u:0u;}
+         if(settings_loaded){current.has_model=true;current.tone=tone;current.structure=structure;current.style=unsigned(model_style);current.exposure_stops=exposure_stops;current.exposure_auto=exposure_auto?1u:0u;current.skin=skin;current.automask=automask?1u:0u;
+             current.extrapolate=extrapolate?1u:0u;current.extrapolate_factor=extrapolate_factor;}
          // A settings file must never take the panel down. A file range check
          // narrower than the slider's (-6..10 against -12..10) once made this
          // throw on every frame: render failed, the panel hid, and each Insert

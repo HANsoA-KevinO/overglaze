@@ -92,7 +92,26 @@ int wmain(int argc,wchar_t** argv){
                 const auto settings=controller.status()["nr_settings_request"]["values"];
                 // ABI22 slider range 0..2: a click at 30% lands near 0.6.
                 need(settings["tone"].get<float>()>.4f&&settings["tone"].get<float>()<.8f&&settings["structure"]==1.f&&settings["skin"]==1.f&&settings["automask"]==0,"Scaled Tone click changes Tone, never adjacent Structure or Skin");
-                result["stretched_client_input_verified"]={{"client_width",client.right},{"client_height",client.bottom},{"buffer_width",1280},{"buffer_height",800},{"settings",settings}};}
+                result["stretched_client_input_verified"]={{"client_width",client.right},{"client_height",client.bottom},{"buffer_width",1280},{"buffer_height",800},{"settings",settings}};
+                // Edit extrapolation (Live ABI25): the 外推 toggle stages it, the 倍数
+                // slider it reveals sets the factor in 1..4, and switching it off keeps
+                // the factor. Each hit-test after the layout has settled.
+                const auto click=[&](const char* control,float fraction){
+                    for(unsigned settle=0;settle<2;++settle){gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();}
+                    const auto controls=overlay.snapshot()["controls"];need(controls.contains(control),"Panel control laid out");
+                    const auto hit=point(controls[control],fraction);
+                    SendMessageW(window,WM_MOUSEMOVE,0,MAKELPARAM(hit.x,hit.y));SendMessageW(window,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(hit.x,hit.y));gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();
+                    SendMessageW(window,WM_LBUTTONUP,0,MAKELPARAM(hit.x,hit.y));gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();
+                    return controller.status()["nr_settings_request"]["values"];};
+                need(!overlay.snapshot()["controls"].contains("extrapolate_factor"),"No factor slider while extrapolation is off");
+                auto extrapolation=click("extrapolate",.5f);
+                need(extrapolation["extrapolate"]==1&&extrapolation["extrapolate_factor"]==2.f&&extrapolation["tone"]==settings["tone"],"外推 toggle stages extrapolation at the default factor");
+                extrapolation=click("extrapolate_factor",.5f);
+                const auto factor=extrapolation["extrapolate_factor"].get<float>();
+                need(extrapolation["extrapolate"]==1&&factor>2.2f&&factor<2.8f,"倍数 slider spans 1..4 (a click at the middle lands near 2.5)");
+                extrapolation=click("extrapolate",.5f);
+                need(extrapolation["extrapolate"]==0&&extrapolation["extrapolate_factor"]==factor,"Switching extrapolation off keeps the factor");
+                result["extrapolation_input_verified"]={{"factor_at_middle",factor}};}
             result["profiles"].push_back({{"format",unsigned(formats[i])},{"space",unsigned(spaces[i])},{"outside_unchanged",true},{"overlay",status}});
             toggle(window);const auto hidden=overlay.snapshot().at("draws");overlay.present(chain.Get());need(overlay.snapshot().at("draws")==hidden,"Closing stops draws immediately");
             SendMessageW(window,WM_KEYDOWN,'K',0);need(key_events==keys+1,"Closing releases input");hr(chain->Present(0,0));gpu.wait();

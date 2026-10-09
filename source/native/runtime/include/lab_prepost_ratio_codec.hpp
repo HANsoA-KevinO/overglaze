@@ -64,5 +64,12 @@ public:
     // Recorded into the next prepare's constants; never part of the official recipe.
     void set_compare_split(bool);
     bool compare_split() const;
+    // Lab extension, edit extrapolation (Live ABI25): composite reads the NR
+    // output as N' = saturate(C + factor * (N - C)) per channel, with C the
+    // prepared (encoded) NR input, then transfers it as usual. 1 is the plain
+    // composite: the shader branch is not taken. Finite 1..4 only; applied from
+    // the next prepare, changed only between frames.
+    void set_extrapolation(float factor);
+    float extrapolation() const;
 };
 }
