@@ -350,8 +350,13 @@ int candidate_rank(const fs::path& exe){
     return 2;}
 // Folders of game data, never of the game's EXE. Skipping them keeps a large
 // game (thousands of packed asset files) inside the scan bound.
+// "Content" is an asset folder only inside an Unreal project, next to its
+// Binaries. An Xbox app (GDK) package keeps the whole game under a root
+// Content folder (Expedition 33: Content\Sandfall\Binaries\WinGDK\...), which
+// must be walked.
 bool data_folder(const fs::path& dir){const auto name=lower_ascii(text(dir.filename()));
-    for(const auto* data:{"content","paks","movies","saved","logs","localization","shadercache","crashes"})if(name==data)return true;
+    if(name=="content"){std::error_code ec;return fs::is_directory(dir.parent_path()/L"Binaries",ec);}
+    for(const auto* data:{"paks","movies","saved","logs","localization","shadercache","crashes"})if(name==data)return true;
     return false;}
 }
 
@@ -366,6 +371,7 @@ Discovery discover(const fs::path& input){Discovery out;const auto path=local(in
         if(attr&FILE_ATTRIBUTE_REPARSE_POINT){it.disable_recursion_pending();out.complete=false;continue;}if((attr&FILE_ATTRIBUTE_DIRECTORY)&&data_folder(it->path())){it.disable_recursion_pending();continue;}if(it.depth()>=7&&it->is_directory()){it.disable_recursion_pending();out.complete=false;}
         if(it->is_regular_file()&&winpath::same_spelling(it->path().extension(),L".exe"))out.executables.push_back(it->path());}if(ec)out.complete=false;
     std::sort(out.executables.begin(),out.executables.end(),[](const fs::path& a,const fs::path& b){const int ra=candidate_rank(a),rb=candidate_rank(b);return ra!=rb?ra<rb:a<b;});
+    if(out.complete&&out.executables.empty())out.notice="目录里没有找到 EXE。请确认路径，或直接选择游戏 EXE。";
     if(!out.complete)out.notice=out.executables.empty()?"目录检查未完整完成，没有找到 EXE。请直接选择游戏 EXE 再检查。":"目录较大，只检查了一部分；旁边有 DLSS 模块的 EXE 排在最前。";
     return out;}
 // ---------------------------------------------------------------- packages

@@ -329,6 +329,15 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     need(lab::games::store_kind(root/L"game4",true)=="gdk"&&lab::games::store_kind(root/L"game4",false)=="unknown"&&lab::games::store_kind(root/L"game5",false)=="gdk","package identity decides the store");
     // ---- discovery is bounded and explicit
     auto disc=lab::games::discover(root/L"game5");need(disc.complete&&disc.executables.size()==1,"directory discovery");need(lab::games::discover(root/L"game5/Plain.exe").executables.size()==1,"direct EXE discovery");
+    // An Xbox app (GDK) package: the whole game sits under a root Content folder,
+    // which must be walked; the project's own Content (beside its Binaries) is not.
+    {const auto gdk=root/L"gdk";for(const auto* d:{L"Content/Engine/Binaries/Win64",L"Content/Proj/Binaries/WinGDK",L"Content/Proj/Content/Paks"})fs::create_directories(gdk/d);
+        put(gdk/L"Content/Proj.exe",pe64(standard,"gdkboot"));const auto ship=gdk/L"Content/Proj/Binaries/WinGDK/Proj-WinGDK-Shipping.exe";put(ship,pe64(standard,"gdkship"));
+        put(gdk/L"Content/Proj/Content/Paks/x.exe","x");
+        const auto found=lab::games::discover(gdk);
+        need(found.complete&&found.executables.size()==2&&found.executables.front()==fs::canonical(ship),"GDK package: root Content walked, project Content skipped");
+        fs::create_directories(root/L"empty-game");const auto none=lab::games::discover(root/L"empty-game");
+        need(none.complete&&none.executables.empty()&&!none.notice.empty(),"an empty result says so");}
     // An Unreal layout: bootstrap at the root, the game under <Project>\Binaries\Win64
     // beside its DLSS module, and asset folders the scan does not need to walk.
     {const auto ue=root/L"ue";for(const auto* d:{L"Engine/Binaries/Win64",L"Proj/Binaries/Win64",L"Proj/Content/Paks"})fs::create_directories(ue/d);
