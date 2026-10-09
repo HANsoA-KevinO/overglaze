@@ -34,4 +34,29 @@ public:
     void discard_recording(); // list Reset before submission: no reading exists
     static constexpr std::uint64_t footprint_bytes() noexcept {return 3*16;}
 };
+// One GPU read of the game's own exposure texture (Live ABI24): texel (0,0) of
+// mip 0, R channel, through a typed SRV into a buffer of ours and its readback.
+// The game's texture is only ever read, in NON_PIXEL_SHADER_RESOURCE: another
+// declared state is transitioned there and back around the read, on the same
+// list, and nothing else touches it. One slot, retired with the NR frame.
+struct GameExposureReading {
+    bool read=false;  // a value came back
+    float value=0;    // as read; finiteness and sign are the caller's verdict
+};
+class GameExposureReader final {
+    struct Impl;std::unique_ptr<Impl> impl_;
+public:
+    explicit GameExposureReader(ID3D12Device*,SerialCallGate* gate=nullptr);
+    ~GameExposureReader();
+    GameExposureReader(const GameExposureReader&)=delete;
+    GameExposureReader& operator=(const GameExposureReader&)=delete;
+    bool pending() const;
+    // The texture must have passed lab::live::inspect_exposure_texture with this
+    // declared state; anything else is a logic_error before any recording.
+    void validate(ID3D12GraphicsCommandList*,ID3D12Resource* texture,unsigned declared_state) const;
+    void record(ID3D12GraphicsCommandList*,ID3D12Resource* texture,unsigned declared_state);
+    GameExposureReading acknowledge_completion();
+    void discard_recording();
+    static constexpr std::uint64_t footprint_bytes() noexcept {return 2*16;}
+};
 }

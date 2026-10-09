@@ -16,6 +16,10 @@ ResourceLease ResourceLease::acquire(const Resolution& r,bool allow_mip_chains,I
     Microsoft::WRL::ComPtr<ID3D12Device> device;Microsoft::WRL::ComPtr<IUnknown> identity;
     if(FAILED(out.command_->GetDevice(IID_PPV_ARGS(&device))) || FAILED(device.As(&identity))){f.reason="command-device-unavailable";return out;}
     f.same_device=true;
+    // The exposure texture the binding carries, if any, also while its tag
+    // lifetime still covers it. A failure only leaves the frame without it.
+    if(const auto& x=r.binding.exposure;!r.binding.exposure_note&&x.native&&!x.null_resource&&!x.issues)
+        if(SUCCEEDED(static_cast<IUnknown*>(x.native)->QueryInterface(IID_PPV_ARGS(&out.exposure_))))out.exposure_native_=x.native;
     for(unsigned i=0;i<3;++i){const auto& tag=r.binding.resources[i];
         if(tag.issues || tag.null_resource || !tag.native || tag.resource_type!=sl::ResourceType::eTex2d){f.reason="invalid-resource-tag";return out;}
         auto* input=static_cast<IUnknown*>(tag.native);

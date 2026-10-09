@@ -17,6 +17,7 @@
 #include "lab_motion_codec.hpp"
 #include "lab_exposure_meter.hpp"
 #include "lab_exposure_control.hpp"
+#include "lab_game_exposure.hpp"
 #include <wrl/client.h>
 #include <memory>
 #include <cstring>
@@ -29,8 +30,10 @@ constexpr auto write_state=D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 inline void demand(bool ok,const char* error){if(!ok)throw std::runtime_error(error);}
 inline void demand(bool ok,const std::string& error){if(!ok)throw std::runtime_error(error);}
 struct Borrowed {
-    std::array<ComPtr<ID3D12Resource>,3> textures;ComPtr<ID3D12GraphicsCommandList> command;
-    Borrowed()=default;explicit Borrowed(const Frame& f):textures{f.color,f.depth,f.motion},command(f.command){}
+    // Colour, depth, motion and -- when it is read on this frame -- the game's
+    // exposure texture (null otherwise), held until the GPU retires the frame.
+    std::array<ComPtr<ID3D12Resource>,4> textures;ComPtr<ID3D12GraphicsCommandList> command;
+    Borrowed()=default;explicit Borrowed(const Frame& f):textures{f.color,f.depth,f.motion,f.exposure},command(f.command){}
     bool held()const{return command!=nullptr;}
     void abandon(){for(auto& t:textures)(void)t.Detach();(void)command.Detach();}
 };
@@ -97,6 +100,29 @@ struct Live {
         return motion_region_width(f)!=f.guide_width||motion_region_height(f)!=f.guide_height||d.Width!=f.guide_width||d.Height!=f.guide_height;}
     std::unique_ptr<lab::nr::ExposureMeter> meter;lab::nr::ExposureController auto_exposure;
     bool meter_snap=false;float applied_exposure_stops=0;
+    // ABI24. Auto exposure prefers the game's own exposure: the reader copies its
+    // texel on the GPU with the frame, the selector decides game or meter from
+    // what retires. A reader that cannot be built only means "meter".
+    std::unique_ptr<lab::nr::GameExposureReader> exposure_reader;
+    lab::nr::GameExposureSelector exposure_selector;
+    // The recorded auto-exposure frame whose readings are still in flight.
+    struct ExposureFrame {bool pending=false;ExposureNote note=ExposureNote::waiting;float pre=1,scale=1;} exposure_frame;
+    void observe_exposure(const lab::nr::ExposureReading& metered){
+        if(!exposure_frame.pending)return;exposure_frame.pending=false;
+        lab::nr::GameExposureReading game;
+        if(exposure_reader&&exposure_reader->pending())game=exposure_reader->acknowledge_completion();
+        const auto before=exposure_selector.switches;
+        exposure_selector.observe(game.read,exposure_frame.note,game.value,exposure_frame.pre,exposure_frame.scale,metered.valid,metered.mean_log2_luminance);
+        status.exposure_source_switches+=exposure_selector.switches-before;
+        status.game_exposure_valid=game.read?1u:0u;
+        if(game.read){status.game_exposure=game.value;status.game_pre_exposure=exposure_frame.pre;status.game_exposure_scale=exposure_frame.scale;}
+        status.game_exposed_valid=exposure_selector.exposed_valid?1u:0u;
+        if(exposure_selector.exposed_valid)status.game_exposed_log2_luminance=exposure_selector.exposed_log2;
+    }
+    void discard_exposure_read(){
+        if(exposure_reader&&exposure_reader->pending())exposure_reader->discard_recording();
+        exposure_frame.pending=false;
+    }
     std::unique_ptr<lab::CompletionTimeline> timeline;
     std::unique_ptr<lab::nr::FrameRetirement<lab::nr::PrePostFramePipeline,Borrowed>> retirement;
     Status status;Frame config;lab::nr::PrePostColorConstants colors;
@@ -277,6 +303,8 @@ struct Live {
                 lab::nr::DepthCodecMode::hardware_mip0_copy,config.region_crop!=0);
         if(motion_region_w)motion_codec=std::make_unique<lab::nr::MotionCodec>(device.Get(),config.guide_width,config.guide_height,&gate);
         meter=std::make_unique<lab::nr::ExposureMeter>(device.Get(),config.width,config.height,&gate);auto_exposure.reset();meter_snap=false;
+        exposure_reader.reset();exposure_selector.reset();exposure_frame={};
+        try{exposure_reader=std::make_unique<lab::nr::GameExposureReader>(device.Get(),&gate);}catch(...){} // null: auto exposure stays on the meter
         // Named experimental colour constants for this extent. The research
         // collector records them in its manifest; the maths is the same in both
         // bridges and is not a claim about the game's own colour contract.
@@ -288,7 +316,8 @@ struct Live {
         status.feature_generation=create_fence;
         status.scratch_bytes=static_cast<std::uint64_t>(config.width)*config.height*8*6+
             (depth_codec?static_cast<std::uint64_t>(config.guide_width)*config.guide_height*4:0)+
-            (motion_codec?static_cast<std::uint64_t>(config.guide_width)*config.guide_height*4:0)+lab::nr::ExposureMeter::footprint_bytes();
+            (motion_codec?static_cast<std::uint64_t>(config.guide_width)*config.guide_height*4:0)+lab::nr::ExposureMeter::footprint_bytes()+
+            (exposure_reader?lab::nr::GameExposureReader::footprint_bytes():0);
         // Collectors are built last, from the finished Feature generation. A
         // collector that cannot be built never stops NR (it reports its own note).
         if(extension)extension->on_prepared(*this);
@@ -320,6 +349,7 @@ struct Live {
         if(depth_codec)depth_codec->discard_recording();
         if(motion_codec)motion_codec->discard_recording();
         if(meter&&meter->pending())meter->discard_recording();
+        discard_exposure_read();
         // The extension's own readback copies were in the same discarded list.
         const bool extension_owned=extension&&extension->on_recording_discarded();
         bool released=false;for(unsigned spin=0;spin<64&&!(released=submission->release_discarded());++spin)SwitchToThread();
@@ -353,9 +383,11 @@ struct Live {
             demand(retirement->poll(),"Live NR retirement failed after fence");
         }
         if(retirement->ready()){if(depth_codec)depth_codec->acknowledge_completion();if(motion_codec)motion_codec->acknowledge_completion();
-            if(meter&&meter->pending()){const auto reading=meter->acknowledge_completion();
+            lab::nr::ExposureReading reading;
+            if(meter&&meter->pending()){reading=meter->acknowledge_completion();
                 if(reading.valid){auto_exposure.update(reading.mean_log2_luminance,meter_snap);meter_snap=false;
                     status.metered_log2_luminance=reading.mean_log2_luminance;status.meter_samples=reading.samples;}}
+            observe_exposure(reading); // the same frame's game exposure, checked against that meter reading
             demand(submission->release_completed(),"Submission lease retirement failed");
             if(!(extension&&extension->on_retired()))++status.retired;
             status.pending_gpu=0;return true;}
@@ -365,7 +397,7 @@ struct Live {
         if(extension)extension->on_finish(*this);
         demand(!init_incomplete,"Initialization completion still unknown");
         if(session&&session->pending())throw std::runtime_error("Pending NGX work cannot be released");
-        retirement.reset();pipeline.reset();timeline.reset();depth_codec.reset();motion_codec.reset();meter.reset();
+        retirement.reset();pipeline.reset();timeline.reset();depth_codec.reset();motion_codec.reset();meter.reset();exposure_reader.reset();
         if(session&&session->has_feature()){demand(session->release()==NVSDK_NGX_Result_Success,"Live Release failed");++status.feature_releases;}
         if(session&&session->initialized())demand(session->shutdown()==NVSDK_NGX_Result_Success,"Live Shutdown failed");
         for(auto& t:scratch)t.Reset();submission->stop();state=State::stopped;
@@ -388,7 +420,7 @@ struct Live {
         state=State::preparing; // Callbacks bypass while worker releases/joins.
         demand(!init_incomplete&&!session->pending(),"Rebuild cannot release unknown GPU work");
         if(extension)extension->on_rebuild_release(*this);
-        retirement.reset();pipeline.reset();timeline.reset();depth_codec.reset();motion_codec.reset();meter.reset();
+        retirement.reset();pipeline.reset();timeline.reset();depth_codec.reset();motion_codec.reset();meter.reset();exposure_reader.reset();
         demand(session->release()==NVSDK_NGX_Result_Success,"Rebuild Release failed; no retry");++status.feature_releases;
         // A fresh Create must not see old Evaluate resource pointers/subrects
         // after their allocations are released. User settings live in Status
@@ -468,7 +500,7 @@ struct Live {
             color_format=f.color?f.color->GetDesc().Format:DXGI_FORMAT_R16G16B16A16_FLOAT;
             depth_plane_extract=two_plane_depth(f.depth);depth_copy=depth_copy_kind(f.depth,f);
             motion_region_w=needs_motion_codec(f)?motion_region_width(f):0;motion_region_h=motion_region_w?motion_region_height(f):0;
-            config=f;config.command=nullptr;config.color=config.depth=config.motion=nullptr;
+            config=f;config.command=nullptr;config.color=config.depth=config.motion=config.exposure=nullptr;
             if(status.rebuild_serial){boundary_call=f.call;boundary_on=false;boundary_revision=0;++status.off_frames;}
             demand(submission->enroll(f.command,true),"Live queue probe enrollment failed");state=State::probing_queue;return;}
         if(state==State::draining||state==State::probing_queue){
@@ -512,12 +544,35 @@ struct Live {
         parameters.Set("DLSSNR.Style",status.requested_settings.style);
         parameters.Set("DLSSNR.SkinStructureStrength",status.requested_settings.skin);
         parameters.Set("DLSSNR.UseAutoMask",static_cast<int>(status.requested_settings.automask));
-        // Host colour preparation exposure: manual absolute stops, or metered
-        // gain plus the user offset. Applied to this frame's prepare/composite
-        // constants only; never written to the DLL.
-        if(status.requested_settings.exposure_auto)
-            applied_exposure_stops=lab::nr::ExposureController::clamp_applied(auto_exposure.gain_stops()+status.requested_settings.exposure_stops);
-        else{applied_exposure_stops=status.requested_settings.exposure_stops;auto_exposure.reset();}
+        // Host colour preparation exposure: manual absolute stops; or, with auto
+        // on, the game's own exposure (log2 of E x scale / pre-exposure) when it
+        // has given a plausible one, else the metered gain -- the user offset on
+        // top either way. Applied to this frame's prepare/composite constants
+        // only; never written to the DLL. The game's texture is read on this
+        // frame only with auto on; manual exposure is exactly as before.
+        const bool auto_exposure_on=status.requested_settings.exposure_auto!=0;
+        auto frame_exposure_note=ExposureNote::none;
+        if(auto_exposure_on){
+            screen_exposure(f);
+            if(f.exposure){ComPtr<ID3D12Device> owner;
+                if(FAILED(f.exposure->GetDevice(IID_PPV_ARGS(&owner)))||owner.Get()!=device.Get()){f.exposure=nullptr;f.exposure_note=static_cast<unsigned>(ExposureNote::other_device);}}
+            if(f.exposure&&(!exposure_reader||exposure_reader->pending())){f.exposure=nullptr;f.exposure_note=static_cast<unsigned>(ExposureNote::reader_unavailable);}
+            frame_exposure_note=static_cast<ExposureNote>(f.exposure_note);
+            const bool game=exposure_selector.using_game();
+            const float base=game?exposure_selector.stops(f.pre_exposure,f.exposure_scale):auto_exposure.gain_stops();
+            applied_exposure_stops=lab::nr::ExposureController::clamp_applied(base+status.requested_settings.exposure_stops);
+            // On the meter, say why: this frame's own reason when it has one
+            // (007 passes no texture at all), else the selector's.
+            const auto why=game?ExposureNote::none:frame_exposure_note!=ExposureNote::none?frame_exposure_note:exposure_selector.note;
+            status.exposure_source=static_cast<unsigned>(game?ExposureSource::game:ExposureSource::meter);
+            status.exposure_note=static_cast<unsigned>(why);
+            if(game)++status.game_exposure_frames;
+            else{++status.meter_exposure_frames;if(static_cast<unsigned>(why)<exposure_note_count)++status.exposure_notes[static_cast<unsigned>(why)];}
+        }else{
+            f.exposure=nullptr;
+            applied_exposure_stops=status.requested_settings.exposure_stops;auto_exposure.reset();exposure_selector.reset();
+            status.exposure_source=static_cast<unsigned>(ExposureSource::manual);status.exposure_note=0;
+        }
         colors.exposure=std::exp2(applied_exposure_stops);
         pipeline->set_compare_split(status.requested_settings.compare_split!=0);
         const bool style_changed=last_evaluated_style!=status.requested_settings.style;
@@ -530,6 +585,8 @@ struct Live {
         lab::nr::Selection selected;
         auto record=[&]{selected=retirement->record_owned(sequence,std::move(held),[&]{
             guide_transitions(f,false);
+            // The game's exposure texel, read for the NEXT frame's decision.
+            if(f.exposure)exposure_reader->record(f.command,f.exposure,f.exposure_state);
             if(depth_codec)depth_codec->record(f.command,f.depth,f.depth_projection);
             if(motion_codec)motion_codec->record(f.command,f.motion,motion_region_w,motion_region_h);
             parameters.begin_settings_reads();
@@ -573,6 +630,9 @@ struct Live {
         demand(submission->arm(*timeline,retirement->ticket()),"Live completion arm failed");
         demand(selected.nr_recorded&&selected.resource==f.color,"NR did not select in-place game output");
         recorded_call=f.call;recorded_frame=f.frame;
+        // What retires with this frame for the exposure decision: the game's
+        // texel when it was read, otherwise this frame's reason.
+        exposure_frame={auto_exposure_on,frame_exposure_note,f.pre_exposure,f.exposure_scale};
         needs_reset=false;last_evaluated_style=status.requested_settings.style;++status.evaluates;status.pending_gpu=1;boundary_call=f.call;boundary_on=status.requested_on;boundary_revision=status.request_revision;
         status.consecutive_skips=0; // An admitted, recorded frame ends the transient-miss streak.
     }

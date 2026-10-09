@@ -65,6 +65,12 @@ add_executable(lab_exposure_meter_harness tests/exposure_meter_harness.cpp)
 target_link_libraries(lab_exposure_meter_harness PRIVATE lab_prepost_ratio_codec lab_core dxgi)
 add_test(NAME native_exposure_meter COMMAND lab_exposure_meter_harness)
 set_tests_properties(native_exposure_meter PROPERTIES LABELS gpu SKIP_RETURN_CODE 77)
+# The game's own exposure (Live ABI24): the per-frame screen of the texture, and
+# the GPU reader per value and per declared state, on WARP.
+add_executable(lab_game_exposure_tests tests/game_exposure_tests.cpp)
+target_link_libraries(lab_game_exposure_tests PRIVATE lab_prepost_ratio_codec lab_core d3d12 dxgi)
+add_test(NAME native_game_exposure COMMAND lab_game_exposure_tests)
+set_tests_properties(native_game_exposure PROPERTIES TIMEOUT 30)
 add_executable(lab_nr_color_profile_tests tests/nr_color_profile_tests.cpp)
 target_link_libraries(lab_nr_color_profile_tests PRIVATE lab_runtime_includes lab_core)
 add_test(NAME native_nr_color_profile_boundary COMMAND lab_nr_color_profile_tests)

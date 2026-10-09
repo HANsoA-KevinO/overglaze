@@ -25,6 +25,9 @@ struct ResourceFacts {
 // this CPU-only lease at API return is NOT a GPU resource retirement strategy.
 class ResourceLease final {
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,3> resources_;
+    // The game's exposure texture, when the binding carries one (Live ABI24).
+    // Optional: taking it never decides whether the lease itself holds.
+    Microsoft::WRL::ComPtr<ID3D12Resource> exposure_;void* exposure_native_=nullptr;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> command_;
     Binding identity_{};
     ResourceFacts facts_;
@@ -43,9 +46,11 @@ public:
     std::uint64_t call() const noexcept{return identity_.call;}
     ResourceFacts facts() const noexcept{return facts_;}
     ID3D12Resource* resource(unsigned i) const noexcept{return i<3?resources_[i].Get():nullptr;}
+    // Whether this lease took a reference to exactly that exposure texture.
+    bool holds_exposure(const void* native) const noexcept{return native&&exposure_&&exposure_native_==native;}
     // Uncertain submitted work: retain COM references until process exit,
     // rather than destroying potentially in-flight resources on an error.
-    void abandon() noexcept {for(auto& r:resources_)(void)r.Detach();(void)command_.Detach();}
+    void abandon() noexcept {for(auto& r:resources_)(void)r.Detach();(void)exposure_.Detach();(void)command_.Detach();}
 };
 json describe(const ResourceFacts&);
 }

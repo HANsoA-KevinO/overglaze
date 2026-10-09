@@ -12,6 +12,8 @@
 #include "lab_windows_path.hpp"
 #include "lab_installation.hpp"
 #include "lab_nr_mode.hpp"
+#include "lab_game_exposure.hpp"
+#include <cmath>
 #include <filesystem>
 namespace lab {
 namespace {
@@ -160,6 +162,18 @@ void LiveRuntimeClient::poll(const char* blocked){
     }
     dispatch_research_captures();
     const auto capabilities=capability_report();
+    // ABI24: where auto exposure took its gain from, the game's raw values and
+    // why the meter was used, by name.
+    json fallbacks=json::object();
+    for(unsigned i=1;i<live::exposure_note_count;++i)if(status_.exposure_notes[i])fallbacks[live::exposure_note_name(i)]=status_.exposure_notes[i];
+    const bool game_read=status_.game_exposure_valid!=0;
+    const bool game_stops_valid=game_read&&std::isfinite(status_.game_exposure)&&status_.game_exposure>0.f&&
+        status_.game_pre_exposure>0.f&&status_.game_exposure_scale>0.f;
+    const json game_exposure{{"texture_value",game_read?json(status_.game_exposure):json(nullptr)},
+        {"pre_exposure",game_read?json(status_.game_pre_exposure):json(nullptr)},{"exposure_scale",game_read?json(status_.game_exposure_scale):json(nullptr)},
+        {"stops",game_stops_valid?json(std::log2(status_.game_exposure*status_.game_exposure_scale/status_.game_pre_exposure)):json(nullptr)},
+        {"exposed_log2_luminance",status_.game_exposed_valid?json(status_.game_exposed_log2_luminance):json(nullptr)},
+        {"trusted_log2_window",json::array({nr::GameExposureSelector::min_exposed_log2,nr::GameExposureSelector::max_exposed_log2})}};
     sink_.publish_nr_runtime({{"capabilities",capabilities},
         {"profile",game_profile_},{"state",state_name(status_.state)},
         {"host_backend",proxy_host_?"reshade":"standalone-d3d12"},
@@ -194,7 +208,11 @@ void LiveRuntimeClient::poll(const char* blocked){
                 {"skin",status_.observed_settings.skin},{"automask",status_.observed_settings.automask}}:json(nullptr)},
             {"skin_read",status_.settings_skin_read==1},{"automask_read",status_.settings_automask_read==1},
             {"applied_exposure_stops",status_.applied_exposure_stops},{"metered_log2_luminance",status_.metered_log2_luminance},{"meter_samples",status_.meter_samples},
-            {"auto_exposure_scope","host GPU meter: mean log2 luminance of the working RGB -> mid-grey 0.18 gain, smoothed, plus the user offset; one-frame latency; not the game's exposure"},
+            {"exposure_source",live::exposure_source_name(status_.exposure_source)},
+            {"exposure_fallback",status_.exposure_source==static_cast<unsigned>(live::ExposureSource::meter)?json(live::exposure_note_name(status_.exposure_note)):json(nullptr)},
+            {"game_exposure",game_exposure},
+            {"exposure_frames",{{"game",status_.game_exposure_frames},{"meter",status_.meter_exposure_frames},{"source_switches",status_.exposure_source_switches},{"meter_by_reason",fallbacks}}},
+            {"auto_exposure_scope","auto: the game's own exposure (log2 of texture value x exposure scale / pre-exposure, read on the GPU with one frame of latency) when the game passes one whose game-exposed log-average lies in the trusted window, with hysteresis; otherwise the host GPU meter (mean log2 luminance of the working RGB -> mid-grey 0.18 gain, smoothed); the user offset on top either way"},
             {"exposure_scope","exposure_stops is applied by the Lab colour preparation (2^stops on working RGB, divided out after composite); the NR DLL does not read it"},
             {"style_read",status_.settings_style_read==1},{"history_reset_requested",status_.settings_reset_requested==1},
             {"requested_revision",status_.settings_requested_revision},{"observed_revision",status_.settings_observed_revision},

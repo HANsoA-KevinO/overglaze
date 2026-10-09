@@ -389,6 +389,64 @@ __declspec(noinline) void present_frame_attribution(){
          if(f.bindings.returned(c).ready())++admitted;}
      need(admitted==38&&f.bindings.stats().present_expiries_spared_previous_frame==38,"Every frame binds across the previous frame's Present");}
 }
+// The game's exposure texture (Live ABI24): bound beside the roles by their own
+// rules, optional, and never the reason a call is refused.
+__declspec(noinline) void exposure_bindings(){
+    using lab::live::ExposureNote;
+    sl::Resource exposure(sl::ResourceType::eTex2d,reinterpret_cast<void*>(0x5000),64),missing(sl::ResourceType::eTex2d,nullptr,64);
+    sl::Extent one{0,0,1,1};
+    const auto note=[](const Resolution& r){return static_cast<ExposureNote>(r.binding.exposure_note);};
+    {auto fx=std::make_unique<Fixture>();auto& f=*fx; // pinned profile, legacy global tags
+     sl::ResourceTag tag(&exposure,sl::kBufferTypeExposure,sl::eValidUntilPresent,&one);
+     std::array<sl::ResourceTag,4> four{f.tags[0],f.tags[1],f.tags[2],tag};
+     const auto tagged=[&](unsigned count,const sl::ResourceTag* tags){auto c=f.base(Api::tags);c.command=f.cmd;c.inputs=decode_tags(f.v,tags,count);return c;};
+     f.setup();auto r=f.run(f.eval());
+     need(r.ready()&&note(r)==ExposureNote::no_texture&&!r.binding.exposure.native,"No exposure tag: the call is ready and the exposure named missing");
+     f.issue(2);f.emit(f.constants());f.emit(tagged(4,four.data()));r=f.run(f.eval());
+     need(r.ready()&&note(r)==ExposureNote::none&&r.binding.exposure.native==exposure.native&&r.binding.exposure.type==sl::kBufferTypeExposure&&
+          !r.binding.exposure_local&&r.binding.exposure.state==64,"A tagged exposure texture is bound with its declared state");
+     f.issue(3);f.emit(f.constants());f.emit(f.global());r=f.run(f.eval());
+     need(r.ready()&&note(r)==ExposureNote::tag_not_fresh,"An Evaluate consumes it like the roles; the next call is still ready");
+     // Only valid at its tag call.
+     four[3].lifecycle=sl::eOnlyValidNow;f.issue(4);f.emit(f.constants());f.emit(tagged(4,four.data()));r=f.run(f.eval());
+     need(r.ready()&&note(r)==ExposureNote::tag_only_valid_now&&!r.binding.exposure.native,"eOnlyValidNow is never carried to an Evaluate");
+     four[3].lifecycle=sl::eValidUntilPresent;
+     // A legacy tag from another thread has no key that ties it to this call.
+     f.issue(5);f.emit(f.constants());f.emit(f.global());{auto c=tagged(1,&tag);c.thread=9;f.emit(c);}r=f.run(f.eval());
+     need(r.ready()&&note(r)==ExposureNote::tag_other_thread,"A legacy exposure tag from another thread is not used");
+     // Present expires it on the pinned profile.
+     f.issue(6);f.emit(f.constants());f.emit(tagged(4,four.data()));f.bindings.present_boundary();f.emit(f.global());r=f.run(f.eval());
+     need(r.ready()&&note(r)==ExposureNote::tag_not_fresh,"A Present expires the exposure tag with the roles (pinned)");
+     // Inline with the Evaluate, even eOnlyValidNow: this call's own argument...
+     sl::ResourceTag now(&exposure,sl::kBufferTypeExposure,sl::eOnlyValidNow,&one);
+     const sl::BaseStructure* inline_tags[]{&f.v,&now};
+     f.issue(8);f.emit(f.constants());f.emit(f.global());r=f.run(f.eval(inline_tags,2));
+     need(r.ready()&&note(r)==ExposureNote::none&&r.binding.exposure_local&&r.binding.exposure.native==exposure.native,"An inline exposure tag is bound as local");
+     // ...until a Present arrives inside the call: then only the exposure goes.
+     f.issue(9);f.emit(f.constants());f.emit(f.global());{auto c=f.eval(inline_tags,2);f.bindings.entering(c);f.bindings.present_boundary();r=f.bindings.returned(c);}
+     need(r.ready()&&note(r)==ExposureNote::tag_only_valid_now&&!r.binding.exposure.native,"A Present inside the call drops an inline eOnlyValidNow exposure, not the call");}
+    {auto fx=std::make_unique<Fixture>();auto& f=*fx;f.bindings.self_configure_before_attach(); // per-frame tags, self-configuring
+     sl::ResourceTag tag(&exposure,sl::kBufferTypeExposure,sl::eValidUntilEvaluate,&one);
+     std::array<sl::ResourceTag,4> four{f.tags[0],f.tags[1],f.tags[2],tag};
+     const auto framed=[&](unsigned count,const sl::ResourceTag* tags){auto c=f.base(Api::tags);c.command=f.cmd;c.inputs=decode_tags(f.v,tags,count);
+         c.frame_scoped_tags=true;c.token=f.ptr;return c;};
+     f.setup();f.run(f.eval()); // selects the viewport
+     f.issue(2);f.emit(f.constants());f.emit(framed(4,four.data()));auto r=f.run(f.eval());
+     need(r.ready()&&note(r)==ExposureNote::none&&r.binding.exposure.native==exposure.native,"A per-frame exposure tag is bound from its frame");
+     f.issue(3);f.emit(f.constants());f.emit(framed(3,f.tags.data()));r=f.run(f.eval());
+     need(r.ready()&&note(r)==ExposureNote::no_texture,"A frame without one has none");
+     // An exposure setter for this frame returning inside the Evaluate drops
+     // that Evaluate's exposure only; a role setter would skip the call.
+     f.issue(4);f.emit(f.constants());f.emit(framed(4,four.data()));
+     {auto c=f.eval();f.bindings.entering(c);auto x=framed(1,&tag);x.concurrent=true;f.emit(x);r=f.bindings.returned(c);}
+     need(r.ready()&&note(r)==ExposureNote::tag_not_fresh&&!r.binding.exposure.native,"A same-key exposure setter inside the Evaluate drops only the exposure");
+     f.issue(5);f.emit(f.constants());f.emit(framed(4,four.data()));f.bindings.present_boundary();r=f.run(f.eval());
+     need(r.ready()&&note(r)==ExposureNote::none,"Self-configuring, a Present expires no exposure tag either");
+     // A problem confined to the exposure tag stays with it: named invalid, roles bound.
+     sl::ResourceTag null_tag(&missing,sl::kBufferTypeExposure,sl::eValidUntilEvaluate,&one);std::array<sl::ResourceTag,4> bad{f.tags[0],f.tags[1],f.tags[2],null_tag};
+     f.issue(6);f.emit(f.constants());f.emit(framed(4,bad.data()));r=f.run(f.eval());
+     need(r.ready()&&note(r)==ExposureNote::tag_invalid&&!r.binding.exposure.native,"An exposure tag without a resource is named invalid; the call is ready");}
+}
 int main(){try {
     {Fixture f;f.setup();auto c=f.eval();c.concurrent=true;
      const auto r=f.run(c);need(r.rejection==Rejection::overlap&&r.overlap_sources==overlap_api_interval,"Original API overlap remains rejected and classified");}
@@ -582,6 +640,7 @@ int main(){try {
     gate_audit_relaxations();
     only_valid_now_copies();
     present_frame_attribution();
+    exposure_bindings();
 
     std::cout<<"PASS binding_checks="<<checks<<" raw_files=0 game_control=false\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

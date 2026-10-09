@@ -69,7 +69,7 @@ There is one writer at a time.
 | `skin` | number, 0–2 | `DLSSNR.SkinStructureStrength`; only acts while AutoMask is on |
 | `automask` | boolean or 0/1 | `DLSSNR.UseAutoMask` |
 | `exposure_stops` | number, −12 to 10 | Overglaze's input exposure, in stops. With auto on, an offset. |
-| `exposure_auto` | boolean or 0/1 | Automatic metering |
+| `exposure_auto` | boolean or 0/1 | Automatic exposure: the game's own exposure when it passes a usable one, otherwise Overglaze's metering |
 | `compare_split` | boolean or 0/1 | Diagnostic split screen: left original, right NR |
 
 The protocol does not link `skin` and `automask`; the panel turns AutoMask on when Skin is moved, but a client must set both itself. Settings sent while NR is off are staged, and applied when NR next turns on.
@@ -90,9 +90,34 @@ Image capture and diagnostic methods are not part of this release and answer `un
 | `nr_runtime.skipped_frames`, `consecutive_skips` | Frames skipped before insertion (the game showed its own image) |
 | `nr_runtime.history_gaps`, `discarded_recordings` | History resets after sequence breaks, and frames the game itself discarded |
 | `nr_runtime.settings.observed` | Values the model actually read on the latest frame |
-| `nr_runtime.settings.applied_exposure_stops` | Exposure actually applied (useful with auto metering) |
+| `nr_runtime.settings.applied_exposure_stops` | Exposure actually applied (useful with automatic exposure) |
+| `nr_runtime.settings.exposure_source` | Where automatic exposure took its gain on the latest NR frame: `game`, `meter`, or `manual` when automatic exposure is off |
+| `nr_runtime.settings.exposure_fallback` | With `meter`: why the game's exposure was not used, by name (below); otherwise null |
+| `nr_runtime.settings.game_exposure` | The game's latest values: `texture_value` (E), `pre_exposure`, `exposure_scale`, `stops` = log2(E × scale / pre-exposure), `exposed_log2_luminance` (the plausibility input) and `trusted_log2_window`; null where not read |
+| `nr_runtime.settings.exposure_frames` | NR frames with automatic exposure by source (`game`, `meter`), `source_switches`, and `meter_by_reason` (counts per fallback reason) |
 | `nr_runtime.capabilities` | Evidence collected in this process (below) |
 | `nr_runtime.rejected_call` | The latest skipped call: stage, reason and disposition |
+
+### Automatic exposure
+
+With `exposure_auto` on, Overglaze prefers the exposure the game hands its upscaler: the 1×1 exposure texture E (Streamline `kBufferTypeExposure`, NGX `ExposureTexture`), DLSS `Pre.Exposure` and `Exposure.Scale`. The input exposure is then log2(E × scale / pre-exposure) plus `exposure_stops` as an offset. E is read on the GPU with one frame of latency; the game's texture is only read.
+
+The game's value is trusted when the game-exposed image's log-average (the meter's mean log2 luminance plus that gain) lies in 2^−7.19 … 2^−0.42. The first reading decides at once; after that the source changes only after 8 consecutive readings that say so, and a trusted value is kept until it is more than one stop outside the window. Otherwise Overglaze's own meter is used, and `exposure_fallback` names why:
+
+| Reason | Meaning |
+|---|---|
+| `no-exposure-texture` | The game passed no exposure texture |
+| `game-uses-dlss-auto-exposure` | NGX feature created with DLSS AutoExposure |
+| `exposure-tag-not-fresh`, `exposure-tag-only-valid-now`, `exposure-tag-other-thread`, `exposure-tag-invalid` | Streamline: the exposure tag was not usable for this Evaluate |
+| `exposure-lease-unavailable` | No reference to the texture could be taken at Evaluate entry |
+| `unsupported-format`, `unsupported-shape`, `unsupported-state` | Not a 1×1 float texture in a state Overglaze can read from |
+| `exposure-aliases-an-input`, `exposure-on-another-device` | The texture is also colour, depth or motion, or belongs to another device |
+| `invalid-pre-exposure-or-scale`, `invalid-exposure-value` | Pre-exposure, scale or the value read is not finite and positive |
+| `implausible` | The game-exposed log-average is outside the trusted window |
+| `no-meter-reading-to-verify`, `no-reading-yet` | Nothing to check the game's value against yet |
+| `exposure-reader-unavailable` | Overglaze's GPU reader could not be created |
+
+None of these is a fault: NR keeps running on the meter.
 
 `nr_runtime.capabilities` only ever grows within a process; turning NR off doesn't undo evidence already seen.
 

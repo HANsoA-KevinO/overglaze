@@ -366,7 +366,11 @@ void WorkbenchAdapter::returned(const slboundary::Call& c) noexcept {
         // Still inside the outer interposer detour, BEFORE the caller resumes
         // and performs its contracted state rebind. Entry COM references remain
         // alive here; the renderer separately retains GPU-lifetime references.
-        admitted=true;live_->enter(r,options,command_unwrapped?static_cast<void*>(unwrapped.Get()):c.command);live_->boundary_returned(c.id,true);
+        // The game's exposure goes along only when the entry lease holds it too.
+        auto delivered=r;
+        if(!delivered.binding.exposure_note&&!release.holds_exposure(delivered.binding.exposure.native)){
+            delivered.binding.exposure={};delivered.binding.exposure_note=static_cast<std::uint32_t>(live::ExposureNote::lease_unavailable);}
+        admitted=true;live_->enter(delivered,options,command_unwrapped?static_cast<void*>(unwrapped.Get()):c.command);live_->boundary_returned(c.id,true);
     }
 }
 json WorkbenchAdapter::snapshot() {

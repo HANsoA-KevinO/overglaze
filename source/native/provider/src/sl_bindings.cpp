@@ -95,20 +95,47 @@ void Bindings::refuse_entry(std::uint64_t call,std::uint32_t roles,const std::ar
     pending_.volatile_roles|=roles;for(unsigned i=0;i<3;++i)if(roles&(1u<<i))pending_.volatile_reasons[i]=reasons[i];
 }
 void Bindings::expire_resources() noexcept {
-    for(auto& g:globals_)g.fresh=false;
-    for(auto& f:frame_tags_)for(auto& g:f.resources)g.fresh=false;
+    for(auto& g:globals_)g.fresh=false;exposure_global_.fresh=false;
+    for(auto& f:frame_tags_){for(auto& g:f.resources)g.fresh=false;f.exposure.fresh=false;}
 }
 void Bindings::clear_cache() noexcept {for(auto& t:tokens_){t.pointer=nullptr;t.known=false;}for(auto& c:common_)c={};expire_resources();next_frame_known_=false;}
 void Bindings::expire_call_target(const Call& c) noexcept {
-    if(!c.frame_scoped_tags){for(auto& g:globals_)g.fresh=false;return;}
-    if(auto* t=token(c.token);t&&t->known)if(auto* f=frame_tags(t->index,c.inputs.viewport))for(auto& g:f->resources)g.fresh=false;
+    if(!c.frame_scoped_tags){for(auto& g:globals_)g.fresh=false;exposure_global_.fresh=false;return;}
+    if(auto* t=token(c.token);t&&t->known)if(auto* f=frame_tags(t->index,c.inputs.viewport)){for(auto& g:f->resources)g.fresh=false;f->exposure.fresh=false;}
+}
+void Bindings::bind_exposure(const Call& c,FrameTags* framed,Binding& b) noexcept {
+    using live::ExposureNote;
+    b.exposure={};b.exposure_call=0;b.exposure_local=false;
+    auto note=ExposureNote::none;const Tag* local=nullptr;
+    for(unsigned j=0;j<c.inputs.tag_count&&j<c.inputs.tags.size();++j)if(c.inputs.tags[j].type==sl::kBufferTypeExposure){local=&c.inputs.tags[j];break;}
+    if(local){b.exposure=*local;b.exposure_local=true;b.exposure_call=c.id;}
+    else{
+        // The roles' sources, in the roles' order: a frame-keyed tag once the
+        // game uses that API, a fresh legacy tag otherwise (self-configuring,
+        // also as the fallback beside frame-keyed tags), whose thread must match.
+        const Global missing{};
+        const Global* source=frame_tags_seen_?(framed?&framed->exposure:&missing):&exposure_global_;bool from_global=!frame_tags_seen_;
+        if(self_configure_&&frame_tags_seen_&&!source->fresh&&exposure_global_.fresh){source=&exposure_global_;from_global=true;}
+        const auto& g=*source;
+        if(!g.call)note=ExposureNote::no_texture;
+        else if(!g.fresh)note=ExposureNote::tag_not_fresh;
+        else if(from_global&&g.thread!=c.thread)note=ExposureNote::tag_other_thread;
+        // Promised at its tag call only; never carried to an Evaluate.
+        else if(g.tag.lifecycle==sl::eOnlyValidNow)note=ExposureNote::tag_only_valid_now;
+        else{b.exposure=g.tag;b.exposure_call=g.call;}
+    }
+    const auto& t=b.exposure;
+    if(note==ExposureNote::none&&(t.issues||t.null_resource||!t.native||t.state==UINT32_MAX||t.resource_type!=sl::ResourceType::eTex2d))
+        note=ExposureNote::tag_invalid;
+    if(note!=ExposureNote::none){b.exposure={};b.exposure_call=0;b.exposure_local=false;}
+    b.exposure_note=static_cast<std::uint32_t>(note);
 }
 Bindings::FrameTags* Bindings::frame_tags(std::uint32_t frame,std::uint32_t viewport) noexcept {
     for(auto& f:frame_tags_)if(f.occupied&&f.frame==frame&&f.viewport==viewport)return &f;return nullptr;
 }
 Bindings::FrameTags* Bindings::frame_tag_slot(std::uint32_t frame,std::uint32_t viewport) noexcept {
     if(auto* f=frame_tags(frame,viewport))return f;
-    for(auto& f:frame_tags_){bool fresh=false;for(const auto& g:f.resources)fresh|=g.fresh;
+    for(auto& f:frame_tags_){bool fresh=f.exposure.fresh;for(const auto& g:f.resources)fresh|=g.fresh;
         if(!f.occupied||!fresh){f={};f.occupied=true;f.frame=frame;f.viewport=viewport;return &f;}}
     // Self-configuring, a Present does not expire frame-keyed tags, so a frame
     // that never reached Evaluate could hold a slot forever. Only a slot at
@@ -150,7 +177,8 @@ void Bindings::sync() noexcept {
             // Counted, copies apart. Each Evaluate still consumes them.
             if(!self_configure_){if(copy)++present_expiries_copies_;
                 for(auto& g:globals_)if(!g.tag.lab_copy)g.fresh=false;
-                for(auto& f:frame_tags_)for(auto& g:f.resources)g.fresh=false;}}
+                for(auto& f:frame_tags_)for(auto& g:f.resources)g.fresh=false;
+                exposure_global_.fresh=false;for(auto& f:frame_tags_)f.exposure.fresh=false;}}
         if(pending_call_){
             // A Present ends the validity of GLOBAL tags. It does not end the
             // validity of a tag passed inline with THIS Evaluate and declared
@@ -174,6 +202,11 @@ void Bindings::sync() noexcept {
             if(p!=seen_present_){
                 ++pending_.presents_during_call;
                 if(!survives_present){pending_.rejection=Rejection::stale;pending_.invalidations|=invalidation_present;}
+                // An inline eOnlyValidNow exposure ends with the Present; only
+                // the exposure is dropped, never the call.
+                auto& b=pending_.binding;
+                if(!b.exposure_note&&b.exposure.lifecycle==sl::eOnlyValidNow){b.exposure={};b.exposure_call=0;b.exposure_local=false;
+                    b.exposure_note=static_cast<std::uint32_t>(live::ExposureNote::tag_only_valid_now);}
             }
             if(l!=seen_loss_){pending_.rejection=Rejection::stale;pending_.invalidations|=invalidation_loss;}}
         // A missed return must not leave a permanent orphan transaction.
@@ -246,8 +279,8 @@ void Bindings::entering(const Call& c) noexcept {
     // beside our Evaluate or not.
     if(self_configure_&&!target(c.feature))return;
     if(pending_call_){pending_.rejection=Rejection::overlap;pending_.overlap_sources|=overlap_pending_evaluate;return;}
-    if(!target(c.feature)){for(auto& g:globals_)g.fresh=false;next_frame_known_=false; // which frame the next globals serve is not derivable
-        if(auto* t=token(c.token))if(auto* f=frame_tags(t->index,c.inputs.viewport))for(auto& g:f->resources)g.fresh=false;
+    if(!target(c.feature)){for(auto& g:globals_)g.fresh=false;exposure_global_.fresh=false;next_frame_known_=false; // which frame the next globals serve is not derivable
+        if(auto* t=token(c.token))if(auto* f=frame_tags(t->index,c.inputs.viewport)){for(auto& g:f->resources)g.fresh=false;f->exposure.fresh=false;}
         return;}
     pending_call_=c.id;pending_={};auto& b=pending_.binding;
     b.call=c.id;b.feature=c.feature;b.command=c.command;b.token=c.token;b.thread=c.thread;b.viewport=c.inputs.viewport;
@@ -348,11 +381,12 @@ void Bindings::entering(const Call& c) noexcept {
         const auto& r=b.resources[i];
         if(r.issues || r.null_resource || !r.native || r.state==UINT32_MAX){fail(Rejection::resource);pending_.resource_roles|=1u<<i;pending_.resource_causes|=4u;}
     }
+    bind_exposure(c,framed,b); // optional; never changes the verdict
     // Another viewport's Evaluate consumes that viewport's inputs in SL, not
     // ours; its own per-frame tags are keyed to it and expire below as usual.
     // The globals stored from now on serve the frame after this one.
-    if(!other_view(c)){for(auto& g:globals_)g.fresh=false;next_frame_known_=t&&t->known;next_frame_=next_frame_known_?t->index+1u:0u;}
-    if(framed)for(auto& g:framed->resources)g.fresh=false;
+    if(!other_view(c)){for(auto& g:globals_)g.fresh=false;exposure_global_.fresh=false;next_frame_known_=t&&t->known;next_frame_=next_frame_known_?t->index+1u:0u;}
+    if(framed){for(auto& g:framed->resources)g.fresh=false;framed->exposure.fresh=false;}
     // Inputs a game set before our lock existed are missing, not wrong: during
     // the settling window that is a skip, never the constants bypass.
     if(settling){--settle_;
@@ -401,25 +435,36 @@ Resolution Bindings::returned(const Call& c) noexcept {
             if(self_configure_){if(c.result==sl::Result::eOk&&valid_view(c))expire_call_target(c);return {};}
             if(conflicting(c))++concurrency_clears_;expire_resources();return {};}
         if(c.inputs.issues&&!issues)++tags_isolated_;
-        auto* target=&globals_;
+        auto* target=&globals_;auto* exposure_target=&exposure_global_;
         std::uint32_t keyed_frame=0;
         if(c.frame_scoped_tags){
             auto* t=token(c.token);
             if(!t||!t->known){if(self_configure_){++unkeyed_tag_calls_;return {};}expire_resources();return {};}
             auto* f=frame_tag_slot(t->index,c.inputs.viewport);
             if(!f){if(self_configure_){++unkeyed_tag_calls_;return {};}expire_resources();return {};}
-            target=&f->resources;keyed_frame=t->index;
+            target=&f->resources;exposure_target=&f->exposure;keyed_frame=t->index;
         }else if(frame_tags_seen_&&!self_configure_){expire_resources();return {};} // Do not combine legacy and per-frame APIs.
         // Self-configuring: a setter for the frame and viewport our in-flight
         // Evaluate uses (or a legacy tag, which has no key) returned while it
         // ran. Which of the two values SL consumed is unknowable, so that one
         // Evaluate is skipped; the values are stored for the frames after it.
+        // An exposure tag alone only drops that Evaluate's exposure.
         if(self_configure_&&pending_call_&&pending_.ready()&&(!c.frame_scoped_tags||
            (keyed_frame==pending_.binding.frame_index&&c.inputs.viewport==pending_.binding.viewport))){
-            bool ours=false;for(unsigned i=0;i<c.inputs.tag_count;++i)ours|=role(c.inputs.tags[i].type)>=0;
+            bool ours=false,exposure=false;
+            for(unsigned i=0;i<c.inputs.tag_count;++i){ours|=role(c.inputs.tags[i].type)>=0;exposure|=c.inputs.tags[i].type==sl::kBufferTypeExposure;}
             if(ours){pending_.rejection=Rejection::overlap;pending_.overlap_sources|=overlap_api_interval;++same_key_overlaps_;}
+            else if(exposure&&!pending_.binding.exposure_local){auto& b=pending_.binding;b.exposure={};b.exposure_call=0;
+                if(!b.exposure_note)b.exposure_note=static_cast<std::uint32_t>(live::ExposureNote::tag_not_fresh);}
         }
-        for(unsigned i=0;i<c.inputs.tag_count;++i){const auto& tag=c.inputs.tags[i];const int r=role(tag.type);if(r<0)continue;
+        for(unsigned i=0;i<c.inputs.tag_count;++i){const auto& tag=c.inputs.tags[i];const int r=role(tag.type);
+            if(r<0){
+                // The exposure texture: stored beside the roles, under the same
+                // key. Fresh even when unusable, so the Evaluate names it invalid.
+                if(tag.type==sl::kBufferTypeExposure){auto& slot=*exposure_target;
+                    slot={tag,c.id,c.thread,true};
+                    slot.frame=c.frame_scoped_tags?keyed_frame:next_frame_;slot.frame_known=c.frame_scoped_tags||next_frame_known_;}
+                continue;}
             auto& slot=(*target)[r];
             // Both depth semantics tagged for this frame: keep hardware depth.
             if(r==1&&self_configure_&&slot.fresh&&depth_rank(slot.tag.type)>depth_rank(tag.type))continue;

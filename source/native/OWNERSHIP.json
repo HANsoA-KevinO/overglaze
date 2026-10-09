@@ -363,6 +363,9 @@
   "runtime/include/lab_exposure_meter.hpp": {
    "track": "runtime"
   },
+  "runtime/include/lab_game_exposure.hpp": {
+   "track": "runtime"
+  },
   "runtime/include/lab_feature_api.hpp": {
    "track": "runtime"
   },
@@ -427,6 +430,9 @@
    "track": "runtime"
   },
   "runtime/tests/exposure_meter_harness.cpp": {
+   "track": "runtime"
+  },
+  "runtime/tests/game_exposure_tests.cpp": {
    "track": "runtime"
   },
   "runtime/tests/hdr_fixture_tests.cpp": {

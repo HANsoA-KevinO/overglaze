@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 HANsoA-KevinO
 // SPDX-License-Identifier: MIT
 #include "lab_exposure_meter.hpp"
+#include "lab_game_exposure.hpp"
 #include <wrl/client.h>
 #include <d3dcompiler.h>
 #include <algorithm>
@@ -129,5 +130,78 @@ ExposureReading ExposureMeter::acknowledge_completion(){
     s.input.Reset();s.command.Reset();s.pending=false;
     if(groups){r.valid=true;r.mean_log2_luminance=static_cast<float>(sum)/kFixedScale/static_cast<float>(groups);r.groups=groups;r.samples=samples;}
     return r;
+}
+namespace {
+constexpr unsigned kExposureBytes=16; // one float, padded
+constexpr char exposure_shader[]=R"(
+Texture2D<float4> Source : register(t0);
+RWByteAddressBuffer Value : register(u0);
+[numthreads(1,1,1)] void main() { Value.Store(0, asuint(Source.Load(int3(0, 0, 0)).r)); }
+)";
+}
+struct GameExposureReader::Impl {
+    ComPtr<ID3D12Device> device;ComPtr<ID3D12Resource> value,readback,input;
+    ComPtr<ID3D12GraphicsCommandList> command;
+    ComPtr<ID3D12DescriptorHeap> heap;ComPtr<ID3D12RootSignature> root;ComPtr<ID3D12PipelineState> pso;
+    ThreadAccess access;unsigned stride=0;bool pending=false;
+    explicit Impl(SerialCallGate* g):access(g){}
+    // Work that may still be in flight is never released (as the meter does).
+    ~Impl(){if(pending){(void)device.Detach();(void)value.Detach();(void)readback.Detach();(void)input.Detach();
+        (void)command.Detach();(void)heap.Detach();(void)root.Detach();(void)pso.Detach();}}
+};
+GameExposureReader::GameExposureReader(ID3D12Device* d,SerialCallGate* gate):impl_(std::make_unique<Impl>(gate)){
+    if(!d)throw std::logic_error("Invalid exposure reader device");auto& s=*impl_;s.device=d;
+    D3D12_RESOURCE_DESC b{};b.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;b.Width=kExposureBytes;b.Height=1;b.DepthOrArraySize=1;b.MipLevels=1;
+    b.SampleDesc.Count=1;b.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;b.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
+    hr(d->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&b,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,nullptr,IID_PPV_ARGS(&s.value)));
+    b.Flags=D3D12_RESOURCE_FLAG_NONE;heap.Type=D3D12_HEAP_TYPE_READBACK;
+    hr(d->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&b,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&s.readback)));
+    D3D12_DESCRIPTOR_RANGE ranges[]={{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,1,0,0,0},{D3D12_DESCRIPTOR_RANGE_TYPE_UAV,1,0,0,0}};
+    D3D12_ROOT_PARAMETER params[2]{};for(unsigned i=0;i<2;++i){params[i].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;params[i].DescriptorTable={1,&ranges[i]};}
+    D3D12_ROOT_SIGNATURE_DESC rd{2,params,0,nullptr,D3D12_ROOT_SIGNATURE_FLAG_NONE};ComPtr<ID3DBlob> blob,error;
+    hr(D3D12SerializeRootSignature(&rd,D3D_ROOT_SIGNATURE_VERSION_1,&blob,&error));hr(d->CreateRootSignature(0,blob->GetBufferPointer(),blob->GetBufferSize(),IID_PPV_ARGS(&s.root)));
+    blob.Reset();error.Reset();
+    const auto compiled=D3DCompile(exposure_shader,sizeof(exposure_shader)-1,"lab_game_exposure",nullptr,nullptr,"main","cs_5_1",D3DCOMPILE_ENABLE_STRICTNESS|D3DCOMPILE_OPTIMIZATION_LEVEL3,0,&blob,&error);
+    if(FAILED(compiled))throw std::runtime_error(error?std::string(static_cast<const char*>(error->GetBufferPointer()),error->GetBufferSize()):"Exposure reader compile failed");
+    D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};pd.pRootSignature=s.root.Get();pd.CS={blob->GetBufferPointer(),blob->GetBufferSize()};hr(d->CreateComputePipelineState(&pd,IID_PPV_ARGS(&s.pso)));
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.NumDescriptors=2;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;hr(d->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&s.heap)));
+    s.stride=d->GetDescriptorHandleIncrementSize(hd.Type);
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};uav.Format=DXGI_FORMAT_R32_TYPELESS;uav.ViewDimension=D3D12_UAV_DIMENSION_BUFFER;
+    uav.Buffer.NumElements=kExposureBytes/4;uav.Buffer.Flags=D3D12_BUFFER_UAV_FLAG_RAW;
+    auto handle=s.heap->GetCPUDescriptorHandleForHeapStart();handle.ptr+=s.stride;d->CreateUnorderedAccessView(s.value.Get(),nullptr,&uav,handle);
+}
+GameExposureReader::~GameExposureReader()=default;
+bool GameExposureReader::pending() const{impl_->access.require();return impl_->pending;}
+void GameExposureReader::validate(ID3D12GraphicsCommandList* cmd,ID3D12Resource* texture,unsigned declared_state) const{
+    auto& s=*impl_;s.access.require();
+    if(s.pending||!cmd||!texture||cmd->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT)throw std::logic_error("Exposure reader slot pending or missing input");
+    ComPtr<ID3D12Device> actual;hr(cmd->GetDevice(IID_PPV_ARGS(&actual)));if(identity(actual.Get())!=identity(s.device.Get()))throw std::logic_error("Exposure reader command device mismatch");
+    actual.Reset();hr(texture->GetDevice(IID_PPV_ARGS(&actual)));if(identity(actual.Get())!=identity(s.device.Get()))throw std::logic_error("Exposure texture device mismatch");
+    if(lab::live::inspect_exposure_texture(texture,declared_state)!=lab::live::ExposureNote::none)throw std::logic_error("Exposure texture was not screened");
+}
+void GameExposureReader::record(ID3D12GraphicsCommandList* cmd,ID3D12Resource* texture,unsigned declared_state){
+    validate(cmd,texture,declared_state);auto& s=*impl_;s.input=texture;s.command=cmd;s.pending=true;
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};srv.Format=texture->GetDesc().Format;srv.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;srv.Texture2D.MipLevels=1;
+    srv.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;s.device->CreateShaderResourceView(texture,&srv,s.heap->GetCPUDescriptorHandleForHeapStart());
+    const auto declared=static_cast<D3D12_RESOURCE_STATES>(declared_state),read=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    if(declared!=read)transition(cmd,texture,declared,read);
+    ID3D12DescriptorHeap* heaps[]{s.heap.Get()};cmd->SetDescriptorHeaps(1,heaps);cmd->SetComputeRootSignature(s.root.Get());cmd->SetPipelineState(s.pso.Get());
+    auto h=s.heap->GetGPUDescriptorHandleForHeapStart();cmd->SetComputeRootDescriptorTable(0,h);h.ptr+=s.stride;cmd->SetComputeRootDescriptorTable(1,h);
+    cmd->Dispatch(1,1,1);
+    if(declared!=read)transition(cmd,texture,read,declared);
+    transition(cmd,s.value.Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
+    cmd->CopyBufferRegion(s.readback.Get(),0,s.value.Get(),0,kExposureBytes);
+    transition(cmd,s.value.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+}
+void GameExposureReader::discard_recording(){
+    auto& s=*impl_;s.access.require();if(!s.pending)throw std::logic_error("No exposure read to discard");
+    s.input.Reset();s.command.Reset();s.pending=false;
+}
+GameExposureReading GameExposureReader::acknowledge_completion(){
+    auto& s=*impl_;s.access.require();if(!s.pending)throw std::logic_error("No exposure read to retire");
+    GameExposureReading r;void* mapped=nullptr;D3D12_RANGE range{0,kExposureBytes};hr(s.readback->Map(0,&range,&mapped));
+    std::memcpy(&r.value,mapped,4);D3D12_RANGE none{};s.readback->Unmap(0,&none);
+    s.input.Reset();s.command.Reset();s.pending=false;r.read=true;return r;
 }
 }

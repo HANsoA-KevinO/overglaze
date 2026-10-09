@@ -84,7 +84,7 @@ NR 很吃性能。我们在 RTX 5090、约 5K 输出下实测，每个渲染帧�
 | Structure（0–2，默认 1） | 设置 `DLSSNR.LocalStructureStrength`。我们测下来主要影响细节。 |
 | Style（0、1、2） | 设置 `DLSSNR.Style`。三档没有对应到任何官方名称。 |
 | AutoMask 与 Skin（0–2） | 设置 `DLSSNR.UseAutoMask` 和 `DLSSNR.SkinStructureStrength`。Skin 只在 AutoMask 打开时生效，0 表示几乎不动皮肤；拖动 Skin 会自动打开 AutoMask。 |
-| 输入曝光 | 釉光自己的颜色预处理，不是模型参数。可以手动设定档数（stop），也可以自动测光，这时滑条是在自动值上的偏移。 |
+| 输入曝光 | 釉光自己的颜色预处理，不是模型参数。可以手动设定档数（stop），也可以自动：游戏给出可用的曝光时用游戏的，否则自动测光，滑条是在自动值上的偏移。面板会显示当前曝光来源。 |
 | 对比分屏 | 左半边原图，右半边 NR 结果。仅用于诊断。 |
 | 仅计算 | 照常运行 NR，但不把结果写回游戏。用来测开销。 |
 

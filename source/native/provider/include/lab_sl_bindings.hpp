@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "lab_sl_boundary.hpp"
+#include "lab_nr_live_api.hpp"
 #include <algorithm>
 #include <atomic>
 #include <mutex>
@@ -77,6 +78,14 @@ struct Binding {
     std::array<std::uint64_t,3> tag_calls{};
     std::array<bool,3> local{};
     sl::Constants constants{};
+    // Optional, never a refusal (Live ABI24): the game's exposure texture
+    // (kBufferTypeExposure), bound by the roles' own freshness, thread and
+    // lifecycle rules; or an empty tag with exposure_note (live::ExposureNote)
+    // saying why. A Present inside the call drops an eOnlyValidNow one.
+    Tag exposure{};
+    std::uint64_t exposure_call=0;
+    bool exposure_local=false;
+    std::uint32_t exposure_note=static_cast<std::uint32_t>(live::ExposureNote::no_texture);
 };
 struct Resolution {
     Rejection rejection=Rejection::not_target;
@@ -242,7 +251,11 @@ class Bindings final {
     std::array<Common,16> common_{};
     unsigned common_limit() const noexcept {return self_configure_?16u:3u;}
     std::array<Global,3> globals_{};
-    struct FrameTags {std::uint32_t frame=0,viewport=0;bool occupied=false;std::array<Global,3> resources{};};
+    // The game's exposure texture beside the three roles (Live ABI24): stored,
+    // expired and consumed exactly like them, but never required. It takes no
+    // part in present_boundary_of_frame's frame derivation.
+    Global exposure_global_{};
+    struct FrameTags {std::uint32_t frame=0,viewport=0;bool occupied=false;std::array<Global,3> resources{};Global exposure{};};
     std::array<FrameTags,16> frame_tags_{};
     // Atomic only so stores_tag_call() may read it outside the lock; every
     // writer still holds mutex_.
@@ -274,6 +287,8 @@ class Bindings final {
     // Self-configuring: after a discarded tag call, doubt only what that call
     // could have replaced -- its own frame slot, or the legacy global set.
     void expire_call_target(const Call&) noexcept;
+    // Binds the exposure of a target Evaluate into b (or names why not).
+    void bind_exposure(const Call&,FrameTags* framed,Binding& b) noexcept;
 public:
     // Whether an overlap with another SL call makes this call's data unusable.
     // Pinned profile: any overlap does. Self-configuring: none does by itself.

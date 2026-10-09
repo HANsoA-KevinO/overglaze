@@ -459,6 +459,10 @@ NVSDK_NGX_Result NVSDK_CONV evaluate_detour(ID3D12GraphicsCommandList* list,
             readable->Get(NVSDK_NGX_Parameter_MV_Scale_X, &evaluation.mv_scale_x) == NVSDK_NGX_Result_Success &&
             readable->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &evaluation.mv_scale_y) == NVSDK_NGX_Result_Success;
         if (readable->Get(NVSDK_NGX_Parameter_Reset, &evaluation.reset) != NVSDK_NGX_Result_Success) evaluation.reset = 0;
+        // The game's exposure for auto exposure (read only; absent values are 1).
+        evaluation.exposure = resource(NVSDK_NGX_Parameter_ExposureTexture);
+        if (readable->Get(NVSDK_NGX_Parameter_DLSS_Pre_Exposure, &evaluation.pre_exposure) != NVSDK_NGX_Result_Success) evaluation.pre_exposure = 1;
+        if (readable->Get(NVSDK_NGX_Parameter_DLSS_Exposure_Scale, &evaluation.exposure_scale) != NVSDK_NGX_Result_Success) evaluation.exposure_scale = 1;
         int rw = 0, rh = 0;
         evaluation.render_subrect_present =
             readable->Get(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, &rw) == NVSDK_NGX_Result_Success &&

@@ -12,6 +12,7 @@
 // states something the observation could not see.
 #include "lab_frame_receiver.hpp"
 #include "lab_live_frame_prescreen.hpp"
+#include "lab_game_exposure.hpp"
 #include <d3d12.h>
 #include <cmath>
 #include <cstdint>
@@ -23,7 +24,7 @@ constexpr std::uint32_t frame_generation = 11;    // NVSDK_NGX_Feature_FrameGene
 constexpr std::uint32_t ray_reconstruction = 13;  // NVSDK_NGX_Feature_RayReconstruction
 // NVSDK_NGX_DLSS_Feature_Flags, read from the game's CreateFeature parameters.
 constexpr int flag_is_hdr = 1 << 0, flag_mv_low_res = 1 << 1, flag_mv_jittered = 1 << 2,
-              flag_depth_inverted = 1 << 3;
+              flag_depth_inverted = 1 << 3, flag_auto_exposure = 1 << 6;
 
 // One ray-reconstruction EvaluateFeature call, in plain values. The observer
 // fills it from the game's own parameter block BEFORE forwarding the call.
@@ -54,6 +55,12 @@ struct Evaluation {
     // RR when the game has it, SR only when it
     // does not -- so an SR call is skipped while an RR feature exists.
     bool rr_alive_elsewhere = false;
+    // The game's exposure (Live ABI24, auto exposure only): the ExposureTexture
+    // it handed NGX, null when none, and DLSS.Pre.Exposure / DLSS.Exposure.Scale,
+    // 1 when absent. A feature created with AutoExposure meters itself, so its
+    // texture (normally absent) is not used.
+    ID3D12Resource* exposure = nullptr;
+    float pre_exposure = 1, exposure_scale = 1;
 };
 
 // Whether one NGX Evaluate is a CANDIDATE for NR at all, decided BEFORE anything
@@ -209,6 +216,15 @@ inline const char* translate(const Evaluation& e, live::Frame& f) noexcept {
     const auto depth_format = d.Format;
     f.packed_guides = (depth_format == DXGI_FORMAT_R32_TYPELESS || depth_format == DXGI_FORMAT_R32G8X24_TYPELESS) ? 0u : 1u;
     f.depth_encoding = nr::DepthEncoding::hardware;
+    // The game's exposure, never a reason to skip. Its state is inferred like
+    // the guides': NGX read it as a shader resource on this list, so it is
+    // declared NON_PIXEL_SHADER_RESOURCE and read there without a barrier.
+    f.pre_exposure = e.pre_exposure;
+    f.exposure_scale = e.exposure_scale;
+    if (e.create_flags & flag_auto_exposure) f.exposure_note = static_cast<unsigned>(live::ExposureNote::dlss_auto_exposure);
+    else if (!e.exposure) f.exposure_note = static_cast<unsigned>(live::ExposureNote::no_texture);
+    else { f.exposure = e.exposure; f.exposure_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE; f.exposure_note = 0; }
+    live::screen_exposure(f);
     // Every per-frame rule the runtime would otherwise end NR on, as a skip.
     return live::prescreen(f);
 }

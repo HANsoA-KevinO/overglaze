@@ -19,8 +19,35 @@ namespace lab::live {
 // preparation probes, boundary audit) lives in the separately versioned
 // lab_nr_live_research_api.hpp, which only the research bridge implements.
 // A host asks LabNrLiveCapabilities which variant it loaded before using them.
-inline constexpr unsigned version=23; // 23: frame regions (crop) and display-resolution motion; 22: Tone/Structure 0..2, Skin + UseAutoMask in Settings and read receipts; 13: exposure_stops; 14: skip counters; 15: auto exposure; 16: compare split, unlimited skips; 17: history gaps; 18: capture collector availability; 19: discarded recordings, submission skips; 20: research collectors split out, capabilities; 21: render-queue handoff, named completion-signal reasons, signal_retries
+inline constexpr unsigned version=24; // 24: the game's exposure (texture, pre-exposure, scale) in Frame, auto exposure's source in Status; 23: frame regions (crop) and display-resolution motion; 22: Tone/Structure 0..2, Skin + UseAutoMask in Settings and read receipts; 13: exposure_stops; 14: skip counters; 15: auto exposure; 16: compare split, unlimited skips; 17: history gaps; 18: capture collector availability; 19: discarded recordings, submission skips; 20: research collectors split out, capabilities; 21: render-queue handoff, named completion-signal reasons, signal_retries
 enum class State:unsigned {waiting_frame,probing_queue,preparing,ready,failed,stopped,draining,waiting_rebuild_frame};
+// ABI24. Why a frame carries no usable game exposure, or why auto exposure used
+// the GPU meter instead of the game's value. Never a reason to skip a frame or
+// to stop NR. Names: lab_game_exposure.hpp (exposure_note_name).
+enum class ExposureNote:unsigned {
+    none,               // the game's exposure is used
+    no_texture,         // the game passed no exposure texture
+    dlss_auto_exposure, // NGX feature created with AutoExposure: DLSS meters itself
+    tag_not_fresh,      // tagged before, but not for this Evaluate (consumed or expired)
+    tag_only_valid_now, // eOnlyValidNow outside this call
+    tag_other_thread,   // legacy global tag set on another thread
+    tag_invalid,        // null, issues, unknown state, not a texture
+    lease_unavailable,  // no COM reference could be taken at Evaluate entry
+    unsupported_format,
+    unsupported_shape,  // not a readable single-sample 1x1 2D texture
+    unsupported_state,
+    aliased,            // the same resource as colour, depth or motion
+    other_device,
+    invalid_scale,      // pre-exposure or exposure scale not finite and positive
+    invalid_value,      // the texel read back is not finite and positive
+    implausible,        // game-exposed log-average outside the trusted window
+    unverified,         // no meter reading to check the game's value against
+    waiting,            // no reading retired yet
+    reader_unavailable, // our GPU reader could not be built
+    count};
+inline constexpr unsigned exposure_note_count=static_cast<unsigned>(ExposureNote::count);
+// ABI24. Where auto exposure took its gain from on the last recorded ON frame.
+enum class ExposureSource:unsigned {manual,meter,game};
 struct Frame {
     unsigned size=sizeof(Frame),abi=version;
     std::uint64_t call=0,frame=0;
@@ -49,6 +76,15 @@ struct Frame {
     // motion resource as given, and the runtime rescales them to the guide grid.
     // 0: motion is on the guide grid (the region, or the whole resource).
     unsigned motion_width=0,motion_height=0;
+    // ABI24. The game's own exposure as it handed it to its upscaler; optional.
+    // exposure: its 1x1 exposure texture (SL kBufferTypeExposure, NGX
+    // ExposureTexture) in exposure_state, or null with exposure_note (an
+    // ExposureNote) saying why. pre_exposure / exposure_scale: DLSS
+    // Pre.Exposure / Exposure.Scale, 1 when the game passes none. Used only with
+    // auto exposure on: game-exposed colour = colour x E x scale / pre-exposure.
+    ID3D12Resource* exposure=nullptr;
+    unsigned exposure_state=0,exposure_note=static_cast<unsigned>(ExposureNote::no_texture);
+    float pre_exposure=1,exposure_scale=1;
 };
 struct Status {
     unsigned size=sizeof(Status),abi=version;State state=State::waiting_frame;
@@ -93,6 +129,19 @@ struct Status {
     // ABI23. The configured frame's regions: 1 when colour/depth are cropped,
     // and the motion region resampled onto the guide grid (0 = not resampled).
     unsigned region_crop=0,motion_width=0,motion_height=0,region_reserved=0;
+    // ABI24. Auto exposure's source on the last recorded ON frame (ExposureSource)
+    // and, on the meter, why (ExposureNote; none while the game's value is used).
+    unsigned exposure_source=0,exposure_note=0;
+    // The latest game exposure read back on the GPU (one frame of latency), with
+    // the pre-exposure and scale of that frame. game_exposed_log2_luminance: the
+    // meter's log-average of the working RGB plus log2(E x scale / pre), the
+    // plausibility test's input. The two flags say whether each value exists.
+    float game_exposure=0,game_pre_exposure=1,game_exposure_scale=1,game_exposed_log2_luminance=0;
+    unsigned game_exposure_valid=0,game_exposed_valid=0;
+    // Recorded auto-exposure ON frames by source, source switches, and the
+    // meter frames by the note that sent them there.
+    std::uint64_t game_exposure_frames=0,meter_exposure_frames=0,exposure_source_switches=0;
+    std::uint64_t exposure_notes[exposure_note_count]{};
     RejectedCall rejection;
     char error[256]{};
 };

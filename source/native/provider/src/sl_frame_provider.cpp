@@ -10,6 +10,7 @@
 #include "lab_sl_frame_provider.hpp"
 #include "lab_sl_guide_contract.hpp"
 #include "lab_live_frame_prescreen.hpp"
+#include "lab_game_exposure.hpp"
 #include <cmath>
 namespace lab {
 
@@ -84,6 +85,14 @@ const char* translate_rr_frame(const slboundary::Resolution& r,const rr::Packet&
     }catch(const std::logic_error&){return linear&&profile.self_configure
         ?"SL guide conventions or linear depth projection (near/far/clip) unsupported"
         :"SL guide conventions, extents or converted scales unsupported";}
+    // ABI24. The game's exposure rides along for auto exposure; nothing about
+    // it refuses the frame. Pre-exposure and scale come from the options packet
+    // (exactly 1 on the pinned profile), the texture from the binding.
+    f.pre_exposure=o.pre_exposure;f.exposure_scale=o.exposure_scale;f.exposure_note=b.exposure_note;
+    if(!b.exposure_note){const auto& e=b.exposure.extent;
+        if(e.left||e.top||((e.width||e.height)&&(e.width!=1||e.height!=1)))f.exposure_note=static_cast<unsigned>(live::ExposureNote::unsupported_shape);
+        else{f.exposure=static_cast<ID3D12Resource*>(b.exposure.native);f.exposure_state=b.exposure.state;}}
+    live::screen_exposure(f);
     // Every remaining per-frame rule of the runtime, each of which would end
     // NR for good there (nr_live_core.hpp validate): here one skipped frame.
     if(profile.self_configure)if(const auto* why=live::prescreen(f))return why;
@@ -108,6 +117,10 @@ void SlFrameProvider::self_configure(const slboundary::Resolution& r,const rr::P
             {"states",{{"color",r.binding.resources[0].state},{"depth",r.binding.resources[1].state},{"motion",r.binding.resources[2].state}}},
             {"output",json::array({p.options.width,p.options.height})},
             {"hdr",p.options.hdr==sl::eTrue},{"pre_exposure",p.options.pre_exposure},{"exposure_scale",p.options.exposure_scale},
+            // The exposure tag as the binding layer found it (before the texture is screened).
+            {"exposure_texture",{{"binding",live::exposure_note_name(r.binding.exposure_note)},
+                {"format",r.binding.exposure_note?json(nullptr):json(static_cast<unsigned>(static_cast<ID3D12Resource*>(r.binding.exposure.native)->GetDesc().Format))},
+                {"state",r.binding.exposure_note?json(nullptr):json(r.binding.exposure.state)}}},
             {"scope","read from the game's own RR or SR calls, not from the package; formats are DXGI numbers"}};
         std::lock_guard lock(self_mutex_);facts["calls"]=++self_calls_;observed_=std::move(facts);
     }catch(...){}

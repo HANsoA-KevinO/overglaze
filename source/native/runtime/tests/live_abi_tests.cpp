@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 HANsoA-KevinO
 // SPDX-License-Identifier: MIT
-// Live ABI boundary between the runtime and research bridge variants (ABI23 adds frame regions; ABI22 adds
+// Live ABI boundary between the runtime and research bridge variants (ABI24 adds the game's exposure to
+// Frame and auto exposure's source to Status; ABI23 adds frame regions; ABI22 adds
 // Skin/AutoMask to Settings; ABI21 adds the render-queue handoff the late-load panel needs).
 //
 //   no arguments        layout only: the runtime structures stay trivially
@@ -74,14 +75,20 @@ int main(int argc,char** argv){try{
     // The runtime ABI carries no collector type. A research structure that
     // found its way back into Frame/Status would change these sizes.
     static_assert(std::is_trivially_copyable_v<Frame>&&std::is_trivially_copyable_v<Status>);
-    static_assert(sizeof(Frame)==152&&sizeof(Status)==944&&sizeof(Capabilities)==92, // ABI23: Frame regions (crop, motion region), Status region report
-        "Live ABI23 runtime layout changed; review every host and bump the version");
-    static_assert(version==23);
+    static_assert(sizeof(Frame)==176&&sizeof(Status)==1152&&sizeof(Capabilities)==92, // ABI24: Frame game exposure, Status exposure source and counts
+        "Live ABI24 runtime layout changed; review every host and bump the version");
+    static_assert(version==24);
+    static_assert(exposure_note_count==19&&static_cast<unsigned>(ExposureSource::game)==2,"ABI24 exposure enums");
+    {   // A frame source that says nothing about exposure says "no texture", at
+        // pre-exposure and scale 1: the runtime then stays on its meter.
+        Frame f;need(!f.exposure&&f.exposure_note==static_cast<unsigned>(ExposureNote::no_texture)&&f.pre_exposure==1.f&&f.exposure_scale==1.f,
+            "Frame exposure defaults");
+        Status s;need(s.exposure_source==static_cast<unsigned>(ExposureSource::manual)&&!s.game_exposure_valid&&s.exposure_notes[0]==0,"Status exposure defaults");}
     need(research_entry_point_count==15,"Research entry point list (15, including the chain capture)");
     Capabilities capabilities;
     need(capabilities.size==sizeof(Capabilities)&&capabilities.abi==version&&!capabilities.variant,"Capabilities default to an unknown variant");
 
-    if(argc==1){std::cout<<"PASS "<<checks<<" live ABI23 layout checks; runtime structures free of research collectors\n";return 0;}
+    if(argc==1){std::cout<<"PASS "<<checks<<" live ABI24 layout checks; runtime structures free of research collectors\n";return 0;}
     need(argc==3,"Usage: lab_live_abi_tests [controller|research <bridge dll>]");
     const std::string variant=argv[1];
     const auto names=exported_names(std::filesystem::canonical(argv[2]));

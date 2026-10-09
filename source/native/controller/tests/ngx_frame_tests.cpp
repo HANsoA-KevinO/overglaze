@@ -12,6 +12,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 using Microsoft::WRL::ComPtr;
 namespace {
@@ -215,6 +216,41 @@ int main() try {
         ComPtr<ID3D12GraphicsCommandList> compute;
         hr(gpu.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, compute_allocator.Get(), nullptr, IID_PPV_ARGS(&compute)), "compute list");
         e = base; e.command = compute.Get(); refused(e, "non-direct", "RR on an async compute list");
+    }
+    // ---- the game's exposure (Live ABI 24): carried for auto exposure, never a
+    // reason to skip. Halo is created with AutoExposure: DLSS meters itself.
+    {
+        auto exposure = gpu.texture(1, 1, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_NONE);
+        using lab::live::ExposureNote;
+        auto e = base; e.pre_exposure = .0038f; e.exposure_scale = 2.f;
+        lab::live::Frame f; const char* why = lab::ngx::translate(e, f);
+        need(!why && !f.exposure && f.exposure_note == unsigned(ExposureNote::dlss_auto_exposure),
+             "Halo (0x43, AutoExposure): no game exposure, named, frame accepted");
+        need(f.pre_exposure == .0038f && f.exposure_scale == 2.f, "pre-exposure and scale are carried");
+        e.exposure = exposure.Get();
+        need(!lab::ngx::translate(e, f) && !f.exposure && f.exposure_note == unsigned(ExposureNote::dlss_auto_exposure),
+             "with AutoExposure a texture is not used either");
+        e = base; e.create_flags &= ~lab::ngx::flag_auto_exposure;
+        need(!lab::ngx::translate(e, f) && !f.exposure && f.exposure_note == unsigned(ExposureNote::no_texture),
+             "no ExposureTexture: 'no texture'");
+        e.exposure = exposure.Get(); e.pre_exposure = .5f;
+        why = lab::ngx::translate(e, f);
+        need(!why && f.exposure == exposure.Get() && f.exposure_note == 0 &&
+             f.exposure_state == D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE && f.pre_exposure == .5f && f.exposure_scale == 1.f,
+             "a 1x1 R32F ExposureTexture is carried, declared NGX's read state, no barrier");
+        auto wide = gpu.texture(2, 1, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_NONE);
+        auto ldr = gpu.texture(1, 1, DXGI_FORMAT_R8_UNORM, D3D12_RESOURCE_FLAG_NONE);
+        const std::pair<ID3D12Resource*, ExposureNote> cases[]{{wide.Get(), ExposureNote::unsupported_shape},
+            {ldr.Get(), ExposureNote::unsupported_format}, {depth.Get(), ExposureNote::aliased}};
+        for (const auto& [texture, note] : cases) {
+            auto c = e; c.exposure = texture;
+            why = lab::ngx::translate(c, f);
+            need(!why && !f.exposure && f.exposure_note == unsigned(note) && f.color == output.Get(),
+                 std::string("an unusable ExposureTexture is a note, the frame is kept: ") + lab::live::exposure_note_name(unsigned(note)));
+        }
+        auto z = e; z.exposure_scale = 0.f;
+        need(!lab::ngx::translate(z, f) && !f.exposure && f.exposure_note == unsigned(ExposureNote::invalid_scale),
+             "an exposure scale of 0 is a note");
     }
     // ---- regions (Live ABI 23): Hellblade 2's measured shape. SR,
     // created IsHDR | DepthInverted | AutoExposure (no MVLowRes): the output image

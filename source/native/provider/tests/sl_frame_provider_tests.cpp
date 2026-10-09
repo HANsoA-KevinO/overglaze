@@ -242,6 +242,44 @@ int main(){try{
         // The strict profile still refuses a game pre-exposure.
         {auto q=packet;q.options.pre_exposure=.5f;
          refuses("RR HDR/exposure/flip differs from the admitted experimental profile",make(false),q,hardware_profile);}
+
+        // ---- the game's exposure (Live ABI24): carried for auto exposure, never a refusal
+        using lab::live::ExposureNote;
+        constexpr unsigned nps=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        auto exposure=texture(device.Get(),1,1,DXGI_FORMAT_R32_FLOAT);
+        const auto with=[&](lab::slboundary::Resolution r,ID3D12Resource* x,unsigned state){
+            r.binding.exposure={sl::kBufferTypeExposure,sl::eValidUntilPresent,{},x,sl::ResourceType::eTex2d,state,false,0};
+            r.binding.exposure_note=0;r.binding.exposure_call=r.binding.call;return r;};
+        // 007: no exposure tag, pre-exposure and scale 1 -> the runtime's meter.
+        need(lab::translate_rr_frame(make(false),packet,command,hardware_profile,out)==nullptr&&!out.exposure&&
+             out.exposure_note==unsigned(ExposureNote::no_texture)&&out.pre_exposure==1.f&&out.exposure_scale==1.f,"No exposure tag: no texture, named");
+        // Alan Wake 2's shape: tag type 13 beside linear depth, a game pre-exposure.
+        {auto q=packet;q.options.pre_exposure=.25f;q.options.exposure_scale=2.f;
+         const auto* why=lab::translate_rr_frame(with(make(true),exposure.Get(),nps),q,command,lab::FrameProfile{0,true,true},out);
+         need(why==nullptr&&out.exposure==exposure.Get()&&out.exposure_note==0&&out.exposure_state==nps&&out.pre_exposure==.25f&&out.exposure_scale==2.f,
+              std::string("A tagged 1x1 exposure texture is carried with the options' pre-exposure and scale: ")+(why?why:""));
+         self.enter(with(make(true),exposure.Get(),nps),q,command);
+         need(seen.order.back()=="frame"&&seen.last.exposure==exposure.Get()&&
+              self.observed()["exposure_texture"].value("binding","")=="none"&&self.observed()["exposure_texture"].value("format",0u)==unsigned(DXGI_FORMAT_R32_FLOAT),
+              "Delivered, and the tag is reported among the observed facts");}
+        need(lab::translate_rr_frame(with(make(false),exposure.Get(),nps),packet,command,hardware_profile,out)==nullptr&&out.exposure==exposure.Get(),
+             "The pinned profile carries it too (pre-exposure and scale are 1 there)");
+        // What the binding layer could not bind is passed on by name.
+        {auto r=make(false);r.binding.exposure_note=unsigned(ExposureNote::tag_not_fresh);
+         need(lab::translate_rr_frame(r,packet,command,auto_profile,out)==nullptr&&!out.exposure&&out.exposure_note==unsigned(ExposureNote::tag_not_fresh),
+              "The binding's note is kept and the frame admitted");}
+        // An unusable texture is dropped with its note; the frame is kept.
+        {auto wide=texture(device.Get(),2,2,DXGI_FORMAT_R32_FLOAT);auto ldr=texture(device.Get(),1,1,DXGI_FORMAT_R8_UNORM);
+         const struct {lab::slboundary::Resolution r;ExposureNote note;const char* what;} cases[]{
+            {with(make(false),wide.Get(),nps),ExposureNote::unsupported_shape,"2x2"},
+            {with(make(false),ldr.Get(),nps),ExposureNote::unsupported_format,"R8_UNORM"},
+            {with(make(false),exposure.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET),ExposureNote::unsupported_state,"render target state"},
+            {with(make(false),color.Get(),0),ExposureNote::aliased,"the output colour"}};
+         for(const auto& c:cases)need(lab::translate_rr_frame(c.r,packet,command,auto_profile,out)==nullptr&&!out.exposure&&out.exposure_note==unsigned(c.note)&&out.color==color.Get(),
+             std::string("Unusable exposure is a note, not a refusal: ")+c.what);
+         auto r=with(make(false),exposure.Get(),nps);r.binding.exposure.extent={0,0,4,4};
+         need(lab::translate_rr_frame(r,packet,command,auto_profile,out)==nullptr&&!out.exposure&&out.exposure_note==unsigned(ExposureNote::unsupported_shape),
+              "A tag extent other than 1x1 is a note");}
     }
 
     std::cout<<"PASS "<<checks<<" frame translation checks; WARP descriptors, no queue, no NR\n";return 0;

@@ -79,7 +79,7 @@ This route is for games that call NGX themselves, such as Unreal Engine's DLSS p
 
 - Overglaze hooks the NGX D3D12 evaluate call.
 - Only Ray Reconstruction and Super Resolution evaluations are admitted. Other features, such as frame generation, pass through untouched and are not counted as skips.
-- From the NGX parameter block it reads colour input and output, depth, motion vectors, the render sub-rectangle, creation flags (for example whether motion vectors are at render resolution) and the game's pre-exposure.
+- From the NGX parameter block it reads colour input and output, depth, motion vectors, the render sub-rectangle, creation flags (for example whether motion vectors are at render resolution) and the game's exposure texture, pre-exposure and exposure scale.
 - Motion vectors at display resolution are resampled onto the depth grid, and their scale is converted.
 - Letterboxed or sub-rectangle images are cropped to their valid region. Padding rows are never read or written.
 
@@ -151,7 +151,7 @@ The model takes display-referred colour, while the upscaler's output is linear f
 **Exposure** is Overglaze's own pre-processing; the model never reads it.
 
 - **Manual:** −12 to +10 stops.
-- **Automatic metering:** on the GPU, Overglaze measures the log-average luminance of the working colour and computes the gain that maps it to mid-grey (0.18). The gain is smoothed and applied one frame later, within ±14 stops, and the panel value becomes an offset on top of it. Before the first reading, it starts at +5 stops.
+- **Automatic:** the game's own exposure first. When the game hands its upscaler an exposure texture (Streamline exposure tag, NGX `ExposureTexture`), Overglaze reads its texel on the GPU and uses E = E_game × `Exposure.Scale` / `Pre.Exposure`, one frame later, as long as the game-exposed log-average stays within 2^−7.19 … 2^−0.42 (with hysteresis, see [CONTROL-PROTOCOL.md](CONTROL-PROTOCOL.md#automatic-exposure)). Otherwise, **metering:** on the GPU, Overglaze measures the log-average luminance of the working colour and computes the gain that maps it to mid-grey (0.18). The gain is smoothed and applied one frame later, within ±14 stops. Before the first reading, it starts at +5 stops. Either way the panel value is an offset on top.
 
 ## Control and status
 

@@ -424,11 +424,18 @@ struct GameOverlay::Impl {
         ImGui::AlignTextToFramePadding();product::eyebrow("输入曝光");
         ImGui::SameLine(ImGui::GetWindowContentRegionMax().x-128*dpi);
         if(ImGui::Checkbox("自动测光",&exposure_auto)){settings_dirty=true;released=true;}mark("exposure_auto");
-        ImGui::SetItemTooltip("自动测光后，滑条调整 EV 偏移。属于输入处理。");
+        ImGui::SetItemTooltip("优先用游戏曝光，没有或不可信时自动测光；滑条调整 EV 偏移。属于输入处理。");
         ImGui::SetNextItemWidth(-1);
         if(ImGui::SliderFloat("##exposure",&exposure_stops,nr::Settings::min_exposure_stops,nr::Settings::max_exposure_stops,exposure_auto?"EV 偏移   %+.1f":"Exposure  %+.1f EV",ImGuiSliderFlags_AlwaysClamp))settings_dirty=true;
         mark("exposure");released|=ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SetItemTooltip("调整 NR 输入曝光，输出时还原。游戏曝光不变。");
+        // Where auto exposure took its gain on the last ON frame (Live ABI24).
+        if(exposure_auto&&nr.is_object()){const auto s=nr.value("settings",json::object());const auto source=s.value("exposure_source",std::string());
+            if(source=="game")ImGui::TextDisabled("曝光来源：游戏");
+            else if(source=="meter"){const auto why=s.value("exposure_fallback",json());const std::string note=why.is_string()?why.get<std::string>():"";
+                const char* reason=note=="no-exposure-texture"?"游戏未提供":note=="game-uses-dlss-auto-exposure"?"游戏用 DLSS 自动曝光":
+                    note=="implausible"?"游戏值不可信":note=="no-reading-yet"||note=="no-meter-reading-to-verify"?"等待读数":"游戏值不可用";
+                ImGui::TextDisabled("曝光来源：自动测光（%s）",reason);}}
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("分屏对照");
         ImGui::SameLine(ImGui::GetWindowContentRegionMax().x-48*dpi);
