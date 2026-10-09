@@ -87,18 +87,24 @@ const char* control_id(const std::string& a){
     if(a=="update")return "games.update";if(a=="uninstall")return "games.uninstall";if(a=="repin")return "games.repin";
     if(a=="forget")return "games.forget";if(a=="open-folder")return "games.folder";return "games.action";}
 }
-GameManagerPage::GameManagerPage(std::filesystem::path root,bool known):root_(std::move(root)){refresh(known);}
+namespace {
+// Whether the model in app\models is outside the reviewed versions (used only
+// when the user allowed it): one hash per job, for the confirmation's warning.
+bool local_unrecognized(const games::Manager& m){const auto s=m.model_status();return s.present&&s.error.empty()&&!s.known;}
+}
+GameManagerPage::GameManagerPage(std::filesystem::path root,bool known,bool allow_unrecognized_model):root_(std::move(root)){
+    opening_.allow_unrecognized_model=allow_unrecognized_model;refresh(known);}
 void GameManagerPage::mark(const char* id){const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();controls[id]={a.x,a.y,b.x-a.x,b.y-a.y};}
 void GameManagerPage::refresh(bool known){if(busy())return;error_.clear();
     {std::lock_guard guard(live_->lock);live_->text.clear();live_->index=live_->count=0;}
     const auto root=root_;const auto opening=opening_;
-    job_=std::async(std::launch::async,[root,known,opening]{games::Manager m(root,std::nullopt,opening.model_sha256,opening.run_checker);if(known)m.import_known_installations();Result r;r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;return r;});}
+    job_=std::async(std::launch::async,[root,known,opening]{games::Manager m(root,std::nullopt,opening.model_sha256,opening.run_checker);m.allow_unrecognized_model(opening.allow_unrecognized_model);if(known)m.import_known_installations();Result r;r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;r.local_model_unrecognized=local_unrecognized(m);return r;});}
 // What the install / update dialog's button means, recorded in the receipt: the
 // dialog showed what the checks found and the risk paragraph, and the user went on.
 constexpr const char* kRiskConsent="acknowledged in the viewer's confirmation dialog: online, anti-cheat and anti-tamper risks are the user's own; Overglaze bypasses no protection";
 void GameManagerPage::act(const std::string& action,const std::string& id,bool late_package){if(busy())return;error_.clear();notice_.clear();const auto root=root_;const auto live=live_;const auto opening=opening_;
     {std::lock_guard guard(live->lock);live->text.clear();live->index=live->count=0;}
-    job_=std::async(std::launch::async,[root,action,id,live,opening,late_package]{games::Manager m(root,std::nullopt,opening.model_sha256,opening.run_checker);Result r;
+    job_=std::async(std::launch::async,[root,action,id,live,opening,late_package]{games::Manager m(root,std::nullopt,opening.model_sha256,opening.run_checker);m.allow_unrecognized_model(opening.allow_unrecognized_model);Result r;
     // Progress: the stage now running, in the table's words.
     const games::Progress progress=[live](const games::ProgressEvent& ev){if(ev.status!="start")return;
         std::string t=words("operation."+ev.operation)+" › "+words("stage."+ev.operation+"."+ev.stage);if(!ev.parent.empty())t=words("operation."+ev.parent)+" › "+t;
@@ -122,10 +128,10 @@ void GameManagerPage::act(const std::string& action,const std::string& id,bool l
     else if(action=="uninstall"){const auto before=after();m.uninstall(id,true,progress);r.message=games::render("uninstall-done");
         if(before.launch_via=="steam")r.message+=" "+games::render("launch.uninstall");}
     else if(action=="forget"){m.forget(id);r.message=games::render("forgotten");}
-    else throw std::runtime_error("Unknown manager action");r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;return r;});}
+    else throw std::runtime_error("Unknown manager action");r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;r.local_model_unrecognized=local_unrecognized(m);return r;});}
 void GameManagerPage::poll(){using namespace std::chrono_literals;if(!busy()||job_.wait_for(0ms)!=std::future_status::ready)return;
     std::string failed;
-    try{auto result=job_.get();if(result.discovering){found_=std::move(result.found);candidate_=0;}else{rows_=std::move(result.rows);if(result.has_storage)storage_=std::move(result.storage);if(!result.selection.empty())selected_=std::move(result.selection);else if(selected_.empty()&&!rows_.empty())selected_=rows_.front().entry.id;}if(!result.message.empty())notice_=std::move(result.message);
+    try{auto result=job_.get();if(result.discovering){found_=std::move(result.found);candidate_=0;}else{rows_=std::move(result.rows);if(result.has_storage)storage_=std::move(result.storage);local_model_unrecognized_=result.local_model_unrecognized;if(!result.selection.empty())selected_=std::move(result.selection);else if(selected_.empty()&&!rows_.empty())selected_=rows_.front().entry.id;}if(!result.message.empty())notice_=std::move(result.message);
         if(result.launch){launch_=std::move(*result.launch);show_launch_=true;}}
     // A write operation that stopped part-way says where it stopped and where it
     // left the game (an update whose install failed: not installed). The list is
@@ -427,7 +433,11 @@ void GameManagerPage::draw(HWND window,float dpi){
         if(writes){
             if(pending_status_.risks.empty())muted_text(games::render("risk-unproven").c_str());else risk_lines(pending_status_);
             gap(6*dpi);
-            ImGui::PushStyleColor(ImGuiCol_Text,ink(games::Tone::warning));ImGui::TextWrapped("%s",games::render("risk-notice").c_str());ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_Text,ink(games::Tone::warning));ImGui::TextWrapped("%s",games::render("risk-notice").c_str());
+            // An unrecognized model the user allowed -- the package's, or the
+            // local one an update would package: the same warning again, here.
+            if(pending_status_.model_unrecognized||local_model_unrecognized_){gap(6*dpi);ImGui::TextWrapped("%s",games::render("model-unrecognized-notice").c_str());}
+            ImGui::PopStyleColor();
             mark("games.risk-notice");
             gap(6*dpi);muted_text(games::render("risk-accept").c_str());gap(16*dpi);
         }else{
@@ -479,7 +489,7 @@ void GameManagerPage::draw(HWND window,float dpi){
         ImGui::BeginDisabled(busy()||found_.executables.empty());
         if(primary_button("添加",{165*dpi,40*dpi})){
             const auto root=root_,exe=found_.executables.at(candidate_);const auto opening=opening_;
-            job_=std::async(std::launch::async,[root,exe,opening]{games::Manager m(root,std::nullopt,opening.model_sha256,opening.run_checker);const auto added=m.add(exe);Result r;r.selection=added.id;r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;r.message=games::render("registered");return r;});
+            job_=std::async(std::launch::async,[root,exe,opening]{games::Manager m(root,std::nullopt,opening.model_sha256,opening.run_checker);m.allow_unrecognized_model(opening.allow_unrecognized_model);const auto added=m.add(exe);Result r;r.selection=added.id;r.rows=rows(m);r.storage=m.storage_usage();r.has_storage=true;r.local_model_unrecognized=local_unrecognized(m);r.message=games::render("registered");return r;});
             selected_.clear();*search_=0;filter_=0;ImGui::CloseCurrentPopup();
         }
         mark("games.addconfirm");ImGui::EndDisabled();ImGui::SameLine(0,10*dpi);

@@ -144,8 +144,11 @@ struct View {
         last_folder=path;++interactions;
     }catch(const std::exception& e){error=std::string("打开所在文件夹失败：")+e.what();}}
     void open(const std::filesystem::path& file){if(loading.valid())return;error.clear();loading=std::async(std::launch::async,[file]{return std::make_shared<lab::RawCapture>(file);});}
+    // The user's "allow unrecognized models" setting (Settings), off by default.
+    bool allow_unrecognized()const{return model_setup&&model_setup->state.allow_unrecognized;}
     void check_model(bool startup=false){if(model_job.valid()||!manager_allowed)return;startup_model_check=startup;setup_importing=false;
-        const auto root=library_root().parent_path();model_job=std::async(std::launch::async,[root]{return lab::games::Manager(root).model_status();});}
+        const auto root=library_root().parent_path();const bool allow=allow_unrecognized();
+        model_job=std::async(std::launch::async,[root,allow]{lab::games::Manager m(root);m.allow_unrecognized_model(allow);return m.model_status();});}
     void start_model_setup(){if(!manager_allowed)return;setup_error.clear();setup_requested=true;if(!model_checked)check_model();}
     void select_model(){if(!manager_allowed||model_job.valid())return;
         std::vector<wchar_t> path(32768);OPENFILENAMEW dialog{sizeof(dialog)};dialog.hwndOwner=window;
@@ -154,14 +157,15 @@ struct View {
         dialog.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR|OFN_DONTADDTORECENT|OFN_EXPLORER;
         if(!GetOpenFileNameW(&dialog)){const auto code=CommDlgExtendedError();if(code)setup_error="无法打开文件选择窗口（Windows "+std::to_string(code)+"）";return;}
         const std::filesystem::path selected_model(path.data());const auto root=library_root().parent_path();setup_error.clear();setup_importing=true;startup_model_check=false;
-        model_job=std::async(std::launch::async,[root,selected_model]{return lab::games::Manager(root).import_model(selected_model);});}
+        const bool allow=allow_unrecognized();
+        model_job=std::async(std::launch::async,[root,selected_model,allow]{lab::games::Manager m(root);m.allow_unrecognized_model(allow);return m.import_model(selected_model);});}
     void poll(){using namespace std::chrono_literals;
         if(model_job.valid()&&model_job.wait_for(0ms)==std::future_status::ready){const bool imported=setup_importing;
             try{auto checked=model_job.get();if(imported&&!checked.error.empty())setup_error=checked.error;else{model=std::move(checked);model_checked=true;
-                    if(imported&&model.known&&model.error.empty()){if(model_setup)model_setup->remember(lab::ModelSetupState::Decision::completed);manager.reset();}}}
+                    if(imported&&model.usable()){if(model_setup)model_setup->remember(lab::ModelSetupState::Decision::completed);manager.reset();}}}
             catch(const std::exception& e){if(imported)setup_error=e.what();else{model={};model.error=e.what();model_checked=true;}}
             setup_importing=false;
-            if(startup_model_check&&model_setup&&model_setup->state.should_prompt(manager_allowed,model_checked,model.known&&model.error.empty()))setup_requested=true;
+            if(startup_model_check&&model_setup&&model_setup->state.should_prompt(manager_allowed,model_checked,model.usable()))setup_requested=true;
             startup_model_check=false;}
         if(scanning.valid()&&scanning.wait_for(0ms)==std::future_status::ready){try{catalog=scanning.get();}catch(const std::exception& e){error=e.what();}}
         if(exporting.valid()&&exporting.wait_for(0ms)==std::future_status::ready){try{last_export=exporting.get();}catch(const std::exception& e){error=e.what();}}
@@ -253,14 +257,15 @@ struct View {
         {const float w=std::min(640*dpi,io.DisplaySize.x-48*dpi);ImGui::SetNextWindowSizeConstraints({w,0},{w,FLT_MAX});}
         if(ImGui::BeginPopupModal("模型配置##model-setup",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
             lab::product::wordmark(dpi);ImGui::Dummy({0,16*dpi});
-            const bool ready=model_checked&&model.known&&model.error.empty();
+            const bool ready=model_checked&&model.usable(),unrecognized=ready&&!model.known;
             ImGui::Spacing();
             ImGui::PushFont(nullptr,26);ImGui::TextUnformatted("NR 模型");ImGui::PopFont();
             ImGui::TextWrapped("选择原版 nvngx_dlssnr.dll。");
             ImGui::Dummy({0,8*dpi});ImGui::Separator();ImGui::Spacing();
             const auto status=model_job.valid()?(setup_importing?"导入中…":"校验中…"):
-                ready?"模型已识别":model_checked?(model.present?"校验未通过":"未配置模型"):"待校验";
-            lab::product::pill(status,ready?lab::product::accent:lab::product::amber);
+                unrecognized?"未识别 · 非原版 · 风险自负":ready?"模型已识别":model_checked?(model.present?"校验未通过":"未配置模型"):"待校验";
+            lab::product::pill(status,ready&&!unrecognized?lab::product::accent:lab::product::amber);
+            if(unrecognized){ImGui::TextDisabled("SHA-256 %s",model.sha256.c_str());ImGui::TextWrapped("%s",lab::games::render("model-unrecognized-notice").c_str());}
             if(ready){if(!model.label.empty())ImGui::TextWrapped("%s",model.label.c_str());
                 ImGui::TextDisabled("Insert 打开游戏内面板。NR 默认关闭。");}
             else ImGui::TextWrapped("模型需自行提供，也可稍后导入。");
@@ -279,10 +284,20 @@ struct View {
             lab::product::wordmark(dpi);ImGui::Spacing();ImGui::TextDisabled("0.2.0 Preview 3  /  WINDOWS · DX12");ImGui::Spacing();
             ImGui::TextWrapped("NR 控制与采集浏览");
             ImGui::Spacing();ImGui::SeparatorText("模型");
-            ImGui::TextColored(model_checked&&model.known&&model.error.empty()?lab::product::accent:lab::product::amber,"%s",model_job.valid()?"校验中…":model_checked?(!model.error.empty()?"模型校验未通过":model.known?"模型已识别":model.present?"模型版本未识别":"未配置模型"):"待校验");
+            const bool unrecognized_in_use=model_checked&&model.usable()&&!model.known;
+            ImGui::TextColored(model_checked&&model.known&&model.error.empty()?lab::product::accent:lab::product::amber,"%s",model_job.valid()?"校验中…":model_checked?(!model.error.empty()?"模型校验未通过":model.known?"模型已识别":
+                unrecognized_in_use?"未识别 · 非原版 · 风险自负":model.present?"模型版本未识别":"未配置模型"):"待校验");
             ImGui::TextWrapped("导入原版模型后可安装游戏插件。");
             if(!model.error.empty())ImGui::TextWrapped("%s",model.error.c_str());
             if(!model.label.empty())ImGui::TextDisabled("%s",model.label.c_str());
+            if(model_checked&&model.present&&!model.known&&model.error.empty())ImGui::TextDisabled("SHA-256 %s",model.sha256.c_str());
+            // The user's explicit opt-in; off by default. Saved at once; the game
+            // library is reopened with it, because every check depends on it.
+            {bool allow=allow_unrecognized();
+             ImGui::BeginDisabled(!model_setup||!model_setup->enabled()||model_job.valid()||!manager_allowed);
+             if(ImGui::Checkbox("允许使用未识别的模型",&allow)&&model_setup){model_setup->allow_unrecognized(allow);manager.reset();check_model();}
+             mark("app.about.allow-unrecognized");ImGui::EndDisabled();
+             if(allow){ImGui::PushStyleColor(ImGuiCol_Text,lab::product::amber);ImGui::TextWrapped("%s",lab::games::render("model-unrecognized-notice").c_str());ImGui::PopStyleColor();}}
             auto show_folder=[&](const std::filesystem::path& path){about_error.clear();if(reinterpret_cast<INT_PTR>(ShellExecuteW(window,L"explore",path.c_str(),nullptr,nullptr,SW_SHOWNORMAL))<=32)about_error="无法打开本地目录："+lab::utf8(path.wstring());};
             if(ImGui::Button("打开程序目录"))show_folder(library_root().parent_path()/L"app");ImGui::SameLine();
             if(ImGui::Button("打开数据目录"))show_folder(library_root());ImGui::SameLine();
@@ -300,7 +315,7 @@ struct View {
             ImGui::Spacing();ImGui::TextDisabled("MIT · 第三方许可见 THIRD_PARTY_NOTICES.md");
             if(ImGui::Button("关闭",{100*dpi,36*dpi}))ImGui::CloseCurrentPopup();mark("app.about.close");ImGui::EndPopup();}
         ImGui::Dummy({0,12*dpi});ImGui::Separator();ImGui::Dummy({0,8*dpi});
-        if(games_page){if(manager_allowed){if(!manager)manager=std::make_unique<lab::GameManagerPage>(library_root().parent_path());manager->draw(window,dpi);}else ImGui::TextDisabled("采集回归模式：不读写游戏管理登记。");ImGui::End();return;}
+        if(games_page){if(manager_allowed){if(!manager)manager=std::make_unique<lab::GameManagerPage>(library_root().parent_path(),true,allow_unrecognized());manager->draw(window,dpi);}else ImGui::TextDisabled("采集回归模式：不读写游戏管理登记。");ImGui::End();return;}
         ImGui::PushFont(nullptr,26);ImGui::TextUnformatted("采集浏览");ImGui::PopFont();
         ImGui::SameLine(ImGui::GetWindowWidth()-252*dpi);
         if(ImGui::Button(library_visible?"收起记录":"展开记录",{118*dpi,36*dpi})){library_visible=!library_visible;++interactions;}mark("library.toggle");ImGui::SameLine();

@@ -6,6 +6,7 @@
 #include "lab_control.hpp"
 #include "lab_windows_path.hpp"
 #include "lab_identity.hpp"
+#include "lab_model_versions.hpp"
 #include <iostream>
 #include <fstream>
 int wmain(int argc,wchar_t** argv){try{
@@ -188,7 +189,29 @@ int wmain(int argc,wchar_t** argv){try{
      {auto bad=v3;bad["risk"]=v4["risk"];reject(bad,aw_exe,aw_host);}
      {auto bad=v4;bad["version"]=5;reject(bad,aw_exe,aw_host);}
      // V4 is a data-driven contract: a compiled row's V2 shape cannot claim it.
-     {auto bad=v2;bad["version"]=4;bad.erase("offline_single_player");bad.erase("no_anticheat");bad["risk"]=v4["risk"];reject(bad,exe,host);}}
+     {auto bad=v2;bad["version"]=4;bad.erase("offline_single_player");bad.erase("no_anticheat");bad["risk"]=v4["risk"];reject(bad,exe,host);}
+     // ---- an unrecognized model the user allowed: V4 may pin its SHA-256.
+     // Every config without the key -- every install made without the opt-in,
+     // and every one made before it existed -- is exactly what it was.
+     {const std::string pin(64,'d');auto pinned=v4;pinned["model_sha256"]=pin;
+      if(lab::parse_installation(pinned,aw_exe,aw_host).model_sha256!=pin)throw std::runtime_error("V4 carries the model pin");
+      if(!lab::parse_installation(v4,aw_exe,aw_host).model_sha256.empty()||!lab::parse_installation(v3,aw_exe,aw_host).model_sha256.empty())
+          throw std::runtime_error("No pin without the opt-in; earlier configs are unchanged");
+      {auto late=pinned;late["loader"]={{"strategy","late_d3d12"},{"basename","overglaze_controller.dll"},{"subdir","overglaze"}};
+       auto late_host=aw_host;late_host["path"]="D:\\Games\\AlanWake2\\overglaze\\overglaze_controller.dll";
+       if(lab::parse_installation(late,aw_exe,late_host).model_sha256!=pin)throw std::runtime_error("The pin sits beside the loader block");}
+      for(const lab::json value:{lab::json(std::string(64,'D')),lab::json(std::string(63,'d')),lab::json(std::string(65,'d')),lab::json(1),lab::json(nullptr),lab::json(std::string(64,'g'))}){
+          auto bad=pinned;bad["model_sha256"]=value;reject(bad,aw_exe,aw_host);}
+      {auto bad=v3;bad["model_sha256"]=pin;reject(bad,aw_exe,aw_host);}       // V3 never pins
+      {auto bad=pinned;bad["extra"]=1;reject(bad,aw_exe,aw_host);}             // the pin is one key, not a licence for more
+      // What the in-game bridge then accepts: a reviewed version always, the
+      // pinned file only with its pin, a changed file never.
+      const std::string original=lab::model::kKnownVersions[0].sha256,changed(64,'c');
+      if(!lab::model::accepted(original,"")||!lab::model::accepted(original,pin))throw std::runtime_error("The original model is always accepted");
+      if(lab::model::accepted(pin,""))throw std::runtime_error("An unrecognized model is refused without its pin");
+      if(!lab::model::accepted(pin,pin))throw std::runtime_error("The pinned model is accepted");
+      if(lab::model::accepted(changed,pin)||lab::model::accepted(changed,""))throw std::runtime_error("A file that changed after install is refused");
+      if(lab::model::known(pin))throw std::runtime_error("The known table never grows by configuration");}}
     // ---- the loader block: where this installation's own files live.
     // Absent means the original layout, and it must stay byte-for-byte the same
     // decision as before the key existed.

@@ -143,6 +143,10 @@ struct Status {
     // install, update and re-adaptation needs the user's risk acknowledgement,
     // whatever the checks found: not finding them proves nothing.
     std::vector<std::string> risks,anticheat;
+    // The package's model is not a reviewed version: the user allowed an
+    // unrecognized model and this package pins it. Shown with the warning,
+    // never a pass for anything else.
+    bool model_unrecognized=false;
     // steam | epic | gdk | unknown: decides how a late-loading game is started.
     std::string store="unknown";
     // A late-loading package (load_mode late_d3d12): how the player starts the
@@ -186,7 +190,11 @@ json storage_json(const StorageUsage&,const std::vector<Entry>& titles={});
 struct ModelStatus {
     std::filesystem::path path;
     bool present=false,known=false;
+    // Present, readable, not a reviewed version, and the user allowed
+    // unrecognized models: usable, at the user's risk (known stays false).
+    bool unrecognized_allowed=false;
     std::string sha256,label,error;
+    bool usable()const noexcept{return present&&error.empty()&&(known||unrecognized_allowed);}
 };
 json model_json(const ModelStatus&);
 // Installer checks read only the selected application root and existing records.
@@ -305,9 +313,17 @@ public:
     // package under the new names, install -- refused for any other game.
     void migrate(const std::string& id,bool risk_accepted,const std::string& consent,const Progress& progress={});
     ModelStatus model_status() const;
-    // User-selected file, reviewed SHA only. Existing different content is
-    // refused; a matching model is reused. No DLL is loaded by this operation.
+    // User-selected file, reviewed SHA only -- or any file once unrecognized
+    // models are allowed. Existing different content is refused; a matching
+    // model is reused. No DLL is loaded by this operation.
     ModelStatus import_model(const std::filesystem::path&);
+    // The user's explicit opt-in (desktop setting, --allow-unrecognized-model):
+    // import, package and install a model outside lab_model_versions.hpp. A
+    // package made with one pins its SHA-256 in the installation config, so the
+    // in-game bridge loads exactly that file and nothing else. Off by default;
+    // off means reviewed versions only, exactly as before.
+    void allow_unrecognized_model(bool allow) noexcept {allow_unrecognized_model_=allow;}
+    bool unrecognized_model_allowed() const noexcept {return allow_unrecognized_model_;}
     std::filesystem::path models_dir() const;  // <root>\app\models
     std::filesystem::path model_file() const;  // models_dir()\nvngx_dlssnr.dll
     void import_known_installations(); // registry only, no game writes
@@ -318,6 +334,9 @@ public:
     const std::filesystem::path& root()const{return root_;}
 private:
     std::filesystem::path root_,store_;std::vector<Policy> policies_;std::vector<std::string> package_notes_;std::string model_sha256_;bool run_checker_=true;
+    bool allow_unrecognized_model_=false;
+    // A reviewed version (or the tests' synthetic hash), or -- allowed -- any other.
+    bool model_hash_usable(const std::string& sha256) const;
     Entry find(const std::string&) const;
     const Policy* match(const std::filesystem::path& exe) const;
     // full=false: only what uninstall needs (no package payload, published host,

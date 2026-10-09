@@ -35,7 +35,7 @@
 
 ## 运行要求
 
-- NVIDIA GeForce RTX 50 系显卡（在 RTX 5090 上测试）。不支持其他显卡。
+- NVIDIA GeForce RTX 50 系显卡。只在 RTX 50 系（RTX 5090）上测试过；其他显卡需要能在其上运行的模型，未识别的模型须明确开启，风险自负（见 [docs/MODEL.md](docs/MODEL.md)）。
 - NVIDIA 驱动 615 或更新（在 617.14 上测试）。
 - 64 位 Windows 11（目前只在这个系统上测试过）。
 - Microsoft Visual C++ v14 x64 运行库。安装包和带运行库的 ZIP 将微软签名的 DLL 放在程序旁边；不安装全局运行库。不带这些 DLL 的自建包仍需另行安装匹配的运行库，见 [微软官方下载说明](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)。
@@ -49,7 +49,7 @@ NR 很吃性能。我们在 RTX 5090、约 5K 输出下实测，每个渲染帧�
 
 本项目不包含、也不分发 `nvngx_dlssnr.dll`。这个文件属于 NVIDIA，请自行准备。
 
-釉光会把文件的 SHA-256 和已知版本逐一核对，对不上的一律拒绝，改动过的文件也一样。详见 [docs/MODEL.md](docs/MODEL.md)。
+釉光只校验原版模型：把文件的 SHA-256 和已知版本逐一核对，对不上的一律拒绝；除非你在设置里打开「允许使用未识别的模型」（命令行 `--allow-unrecognized-model`）。未识别的模型可能无法运行、画质与原版不同，或带来安全风险，风险自负；每次安装都会锁定那一个文件。详见 [docs/MODEL.md](docs/MODEL.md)。
 
 ## 五步上手
 

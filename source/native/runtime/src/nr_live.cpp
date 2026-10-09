@@ -87,6 +87,14 @@ extern "C" __declspec(dllexport) bool __cdecl LabNrLiveBindingPolicyV1(void* ctx
     if(!ctx||(flags&~1u))return false;auto& s=*static_cast<Live*>(ctx);if(!s.bindings)return false;
     s.bindings->tolerate_unknown_indirect((flags&1u)!=0);return true;
 }
+// The unrecognized model an installation pinned with the user's opt-in (V1).
+// Once, before the first frame: the model is loaded at the first preparation,
+// and a pin may never change what is already loaded or widen it twice.
+extern "C" __declspec(dllexport) bool __cdecl LabNrLivePinModelV1(void* ctx,const char* sha256){
+    if(!ctx||!Live::sha256_text(sha256))return false;auto& s=*static_cast<Live*>(ctx);auto lease=s.gate.try_enter();if(!lease)return false;
+    if(s.state!=State::waiting_frame||s.session||s.last_call||!s.pinned_model.empty())return false;
+    s.pinned_model.assign(sha256,64);return true;
+}
 // Read-only handoff of the queue the submission router already observed and
 // verified. No lease is taken: this touches neither NR state nor the GPU, and it
 // must stay answerable while an Evaluate is in flight.

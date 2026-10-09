@@ -36,7 +36,8 @@ const char* runtime_entry_points[]={
     "LabNrLiveRequest","LabNrLiveApply","LabNrLiveConfigure","LabNrLiveEnter",
     "LabNrLiveBoundaryReturned","LabNrLiveStop","LabNrLiveReject",
     "LabNrLiveRenderQueue", // ABI21, resolved without proc<>: optional by design
-    "LabNrLiveBindingPolicyV1"}; // resolved without proc<>: optional by design
+    "LabNrLiveBindingPolicyV1", // resolved without proc<>: optional by design
+    "LabNrLivePinModelV1"}; // resolved without proc<>, only for a pinned unrecognized model
 // The three the research availability rule requires, all resolved without proc<>.
 const char* research_group[]={"LabNrLiveResearchFrameContext","LabNrLivePollCapture","LabNrLiveCapture"};
 
@@ -90,6 +91,11 @@ int wmain(int argc,wchar_t** argv){
         need(capabilities.variant==1,"The controller bridge reports variant 1");
         need(capabilities.research_exports==0,"The controller bridge reports no research exports");
         need(capabilities.abi==lab::live::version,"The controller bridge reports this ABI");
+        // The model pin (an unrecognized model the user allowed) is refused
+        // without a context and for anything that is not 64 lowercase hex digits.
+        {const auto pin=reinterpret_cast<lab::live::PinModel>(GetProcAddress(controller.handle,"LabNrLivePinModelV1"));
+         const std::string sha(64,'d');
+         need(pin&&!pin(nullptr,sha.c_str())&&!pin(nullptr,nullptr),"The model pin needs a live context");}
 
         unsigned resolved=0;
         for(const auto* entry:research_group)

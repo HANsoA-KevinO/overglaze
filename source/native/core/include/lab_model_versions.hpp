@@ -11,7 +11,16 @@
 // listed here. A file whose SHA-256 is not in this table is refused, by the
 // in-game bridge (on disk and again as mapped) and by the manager before it
 // copies anything, and the manager says "unknown version" instead of failing
-// obscurely. Adding a row is a reviewed change, never a configuration.
+// obscurely. Adding a row is a reviewed change, never a configuration; the
+// table holds the original model only.
+//
+// The one exception is the user's own, explicit choice: with "allow
+// unrecognized models" on (desktop setting, or --allow-unrecognized-model), the
+// manager imports and installs a file outside the table and pins that exact
+// SHA-256 in the game's installation config. The bridge then accepts the table
+// or that pin (accepted()), nothing else: a model that changes after install is
+// refused as before. Overglaze verifies only the original model; an
+// unrecognized one may not run, may look different and is used at the user's risk.
 //
 // Shared by the in-game bridge and the out-of-game manager; no code beyond the
 // lookup.
@@ -27,5 +36,10 @@ inline constexpr KnownVersion kKnownVersions[]{
 inline const KnownVersion* known(std::string_view sha256) noexcept {
     for(const auto& v:kKnownVersions)if(sha256==v.sha256)return &v;
     return nullptr;
+}
+// A reviewed version, or exactly the SHA-256 an installation pinned for an
+// unrecognized model the user chose to allow. An empty pin is the table only.
+inline bool accepted(std::string_view sha256,std::string_view pinned) noexcept {
+    return known(sha256)!=nullptr||(!pinned.empty()&&sha256==pinned);
 }
 }

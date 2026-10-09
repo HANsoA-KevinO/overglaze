@@ -4,6 +4,9 @@
 #include "lab_game_presentation.hpp"
 #include "lab_root_locator.hpp"
 #include "lab_windows_path.hpp"
+#include "lab_installation.hpp"
+#include "lab_package_identity.hpp"
+#include "lab_model_versions.hpp"
 #include <fstream>
 #include <iostream>
 #include <algorithm>
@@ -530,6 +533,58 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
       const auto text=lab::games::render(s.refusals.at("make-package"));need(text.find("不包含、也不分发")!=std::string::npos&&text.find("\xe6\xb3\x84")==std::string::npos,"the words say we do not include it, and nothing else");}
      fs::rename(root/L"app/models/nvngx_dlssnr.dll.away",root/L"app/models/nvngx_dlssnr.dll");
      table.forget(g12.id);}
+    // ---- an unrecognized model: the user's explicit opt-in, and only then.
+    // Off is exactly the refusal above; on, the file is imported, packaged with
+    // its SHA-256 pinned in the config, installed, and the in-game host's
+    // contract reads the pin through the package hash chain.
+    {lab::games::Manager off(root,std::nullopt,{},false),on(root,std::nullopt,{},false);on.allow_unrecognized_model(true);
+     need(!off.unrecognized_model_allowed()&&on.unrecognized_model_allowed(),"off by default");
+     {const auto ms=on.model_status();need(ms.present&&!ms.known&&ms.unrecognized_allowed&&ms.usable()&&!off.model_status().usable()&&!off.model_status().unrecognized_allowed,
+          "allowed: present, not a reviewed version, usable; not usable while off");
+      const auto mj=lab::games::model_json(ms);need(mj["reason"]["code"]=="model-unrecognized-allowed"&&mj["usable"]==true&&mj["known"]==false&&mj["unrecognized_allowed"]==true,"the status says unrecognized and allowed");
+      need(lab::games::render(lab::games::Reason{"model-unrecognized-allowed",{{"hash",ms.sha256}}}).find("风险自负")!=std::string::npos&&
+           lab::games::render("model-unrecognized-notice").find("只校验原版")!=std::string::npos,"and says it is at the user's own risk");}
+     // Import: refused while off, as before; accepted while on, never over a different file.
+     const auto same=root/L"incoming-model.dll",other=root/L"incoming-other.dll";
+     fs::copy_file(root/L"app/models/nvngx_dlssnr.dll",same);put(other,"another unrecognized model");
+     reject([&]{off.import_model(same);},"an unrecognized model is not imported while the setting is off");
+     {const auto im=on.import_model(same);need(im.present&&!im.known&&im.unrecognized_allowed&&im.sha256==model_hash,"allowed: imported (the identical file in place is reused)");}
+     reject([&]{on.import_model(other);},"a different file already in app\\models is never overwritten, allowed or not");
+     need(lab::sha256(root/L"app/models/nvngx_dlssnr.dll")==model_hash,"the model in place is untouched");
+     // Packaging.
+     auto g=on.add(root/L"game12/Twelve.exe");
+     {auto s=st(off,g);need(!s.can_make_package&&s.refusals.at("make-package").code=="model-unknown-version","off: packaging refused as before");}
+     {auto s=st(on,g);need(s.state=="needs-package"&&s.can_make_package&&!s.refusals.contains("make-package"),"on: packaging offered");}
+     {auto o=lab::games::PackageOptions::controller_root_proxy();o.allow_unsigned_modules=true;o.name="twelve";
+      reject([&]{off.make_package(g.id,o);},"off: no package around an unrecognized model");need(!fs::exists(root/L"app/adapters/twelve"),"nothing written while off");
+      lab::games::PackageOptions research;research.allow_unsigned_modules=true;research.name="twelve-research";
+      reject([&]{on.make_package(g.id,research);},"a research-track package never carries an unrecognized model");need(!fs::exists(root/L"app/adapters/twelve-research"),"nothing written for it");
+      const auto p=on.make_package(g.id,o);const auto cfg=read(root/L"app/adapters/twelve/overglaze.install.json");
+      need(p.track=="controller"&&cfg["version"]==4&&cfg["model_sha256"]==model_hash&&cfg.size()==13&&p.payload.at("nvngx_dlssnr.dll")==model_hash,
+           "the V4 config pins the exact model, beside the loader block");}
+     off=lab::games::Manager(root,std::nullopt,{},false); // sees the new package
+     {auto s=st(on,g);need(s.state=="available"&&s.can_install&&s.model_unrecognized&&lab::games::status_json(s)["model_unrecognized"]==true,"on: installable, marked unrecognized");}
+     {auto s=st(off,g);need(!s.can_install&&has_reason(s,"model-unknown-version"),"off: the same package is not installable, as before");}
+     reject([&]{off.install(g.id,true,"fixture consent: unrecognized model, setting off");},"off: install refused");
+     need(!fs::exists(root/L"game12/dxgi.dll")&&!fs::exists(root/L"game12/overglaze"),"nothing written while off");
+     // Install, and the host's own contract over the installed files.
+     on.install(g.id,true,"fixture consent: unrecognized model, the user's own risk");
+     {auto s=st(on,g);need(s.state=="installed"&&s.health=="ok"&&s.model_unrecognized,"installed with the pinned model");
+      need(read(root/L"game12/overglaze/overglaze.install.json")["model_sha256"]==model_hash&&lab::sha256(root/L"game12/overglaze/nvngx_dlssnr.dll")==model_hash,
+           "the installed config pins the model it installed");}
+     {const auto cfgp=root/L"game12/overglaze/overglaze.install.json",exe=root/L"game12/Twelve.exe",host=root/L"game12/overglaze/overglaze_controller.dll";
+      const json exe_j={{"path",lab::utf8(exe.wstring())},{"sha256",lab::game_identity_token(exe)}},host_j={{"path",lab::utf8(host.wstring())},{"sha256",lab::sha256(host)}};
+      const auto c=lab::load_installation_file(cfgp,exe_j,host_j);
+      need(c.model_sha256==model_hash,"the in-game host reads the pin through the package hash chain");
+      need(lab::model::accepted(model_hash,c.model_sha256)&&!lab::model::accepted(model_hash,"")&&!lab::model::accepted(lab::sha256(other),c.model_sha256),
+           "the host accepts the pinned file only with its pin, and a changed file not at all");
+      const auto man_path=root/L"app/adapters/twelve/package.json";const auto manifest=read(man_path);
+      auto forged=manifest;forged["payload"]["nvngx_dlssnr.dll"]=std::string(64,'f');put(man_path,forged.dump(2));
+      bool refused=false;try{(void)lab::load_installation_file(cfgp,exe_j,host_j);}catch(const std::exception& e){refused=std::string(e.what()).find("Pinned model")!=std::string::npos;}
+      need(refused,"a pin that is not the package's own model is refused by the host");
+      put(man_path,manifest.dump(2));}
+     on.uninstall(g.id,true);need(!fs::exists(root/L"game12/overglaze")&&!fs::exists(root/L"game12/dxgi.dll"),"uninstalled");on.forget(g.id);
+     fs::remove_all(root/L"app/adapters/twelve");fs::remove(same);fs::remove(other);}
     // ================================================================ a check that cannot run is "unknown"
     put(root/L"game8/Locked.exe",pe64(standard,"locked"));put(root/L"game8/sl.interposer.dll","sl");put(root/L"game8/sl.dlss_d.dll","dlss_d");
     {lab::Handle hold(CreateFileW((root/L"game8/Locked.exe").c_str(),GENERIC_READ,0,nullptr,OPEN_EXISTING,0,nullptr));need(hold.valid(),"exclusive fixture handle");

@@ -44,7 +44,13 @@ const wchar_t* kVerbs=L" <verb> ...\n"
     L"                a game installed by the pre-rename build (DLSS Lab, install state legacy): uninstall its files by\n"
     L"                their recorded hashes, rewrite the package under the new names, install -- as one operation\n"
     L"  model                             the user-supplied NR model: where it is looked for, present, reviewed version (read-only)\n"
-    L"  import-model <file>                validate and import your model; existing different files are not overwritten\n"
+    L"  import-model <file> [--allow-unrecognized-model]\n"
+    L"                validate and import your model; existing different files are not overwritten\n"
+    L"  --allow-unrecognized-model\n"
+    L"                import-model, make-package, refresh-package, install, update, migrate, repin: also use a model\n"
+    L"                that is not a reviewed version. Overglaze verifies only the original model; an unrecognized one\n"
+    L"                may not run, may look different or carry security risks -- at your own risk. A package made with\n"
+    L"                it pins that exact SHA-256, and the game loads nothing else\n"
     L"  app-check update|uninstall --root <folder> [--installer-text]    read-only application maintenance check\n"
     L"  repin <id|exe> --accept-risk --consent \"<text>\" [--progress] [--allow-unsigned-modules]\n"
     L"                re-adapt a changed game (controller track only): full preflight,\n"
@@ -78,6 +84,8 @@ int wmain(int argc,wchar_t** argv){
         // Preflight above needs no root at all.
         const auto root=lab::root::resolve_self().root;
         lab::games::Manager m(root);
+        // The desktop setting's command-line twin: off unless said here.
+        m.allow_unrecognized_model(has(L"--allow-unrecognized-model"));
         if(verb=="import-model"){if(a.size()<2)throw std::runtime_error("import-model needs a file");auto result=lab::games::model_json(m.import_model(a[1]));
             result["scope"]="User-selected model validated; identical destination reused or a verified copy imported. No DLL loaded.";
             std::cout<<result.dump(2)<<'\n';return 0;}

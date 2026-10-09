@@ -9,7 +9,9 @@
 namespace lab {
 class GameManagerPage {
 public:
-    explicit GameManagerPage(std::filesystem::path root,bool import_known=true);
+    // allow_unrecognized_model: the desktop setting (off by default). The
+    // viewer makes a new page when it changes; every check depends on it.
+    explicit GameManagerPage(std::filesystem::path root,bool import_known=true,bool allow_unrecognized_model=false);
     void draw(HWND window,float dpi);
     json controls=json::object();
     bool busy()const{return job_.valid();}
@@ -22,12 +24,13 @@ private:
     // manager from this program's own root.
     struct Launch {std::string title,via,command;};
     struct Result {std::vector<games::Status> rows;games::Discovery found;bool discovering=false;std::string message,selection;
-        games::StorageUsage storage;bool has_storage=false;std::optional<Launch> launch;};
+        games::StorageUsage storage;bool has_storage=false;std::optional<Launch> launch;bool local_model_unrecognized=false;};
     // How the worker threads open the manager. Production: reviewed models
     // only and the package's own installation checker; the UI test swaps in a
     // synthetic model hash, no checker and unsigned synthetic modules.
-    struct Opening {std::string model_sha256;bool run_checker=true,allow_unsigned_modules=false;};
+    struct Opening {std::string model_sha256;bool run_checker=true,allow_unsigned_modules=false,allow_unrecognized_model=false;};
     Opening opening_;
+    bool local_model_unrecognized_=false; // the latest job's view of app\models
     Launch launch_;bool show_launch_=false;
     // The status the confirmation was opened for: what the dialog says about
     // risks and the launch option comes from it, not from a later selection.

@@ -33,7 +33,7 @@ Overglaze inserts the NR model, often called "DLSS 5", into games that already u
 
 ## Requirements
 
-- An NVIDIA GeForce RTX 50 series GPU. Tested on an RTX 5090. Other GPUs are not supported.
+- An NVIDIA GeForce RTX 50 series GPU. Tested only on the RTX 50 series (RTX 5090). Other GPUs need a model that runs on them; unrecognized models are an explicit opt-in, at your own risk (see [docs/MODEL.md](docs/MODEL.md)).
 - NVIDIA driver 615 or newer. Tested on 617.14.
 - 64-bit Windows 11. This is the only OS it has been tested on.
 - Microsoft Visual C++ v14 x64 runtime. Setup and runtime-enabled ZIPs include signed application-local DLLs. Packages built without them require a separately installed runtime at least as recent as the build tools; see [Microsoft's runtime downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
@@ -47,7 +47,7 @@ NR is expensive. On an RTX 5090 at about 5K output, it added roughly 9–12 ms o
 
 This project does not include or redistribute `nvngx_dlssnr.dll`. The file belongs to NVIDIA. You supply it yourself.
 
-Overglaze checks the file's SHA-256 against the versions it knows and refuses anything else, including modified files. See [docs/MODEL.md](docs/MODEL.md).
+Overglaze verifies only the original model: it checks the file's SHA-256 against the versions it knows and refuses anything else, unless you turn on *Allow unrecognized models* (Settings, or `--allow-unrecognized-model`). An unrecognized model may not run, may look different from the original or may carry security risks; you use it at your own risk, and each install pins that exact file. See [docs/MODEL.md](docs/MODEL.md).
 
 ## Quick start
 

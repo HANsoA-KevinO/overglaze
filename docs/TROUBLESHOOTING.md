@@ -66,7 +66,7 @@ The Games page shows the reason for each refused action; hover over a disabled b
 | Game is running | Close it. |
 | A file already exists | Overglaze never overwrites files it didn't create. |
 | Not enough disk space | Installing keeps a reserve free on the drive with Overglaze's data folder (currently 30 GiB). |
-| Model mismatch | The model in `models\`, or one already in the game folder, isn't a known version. |
+| Model mismatch | The model in `models\`, or one already in the game folder, isn't a known version (and unrecognized models are not allowed), or differs from the one the package pinned. |
 
 ## The game won't start after installing
 

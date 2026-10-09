@@ -53,7 +53,7 @@ The desktop program handles a game with Denuvo like any other game: it shows the
 
 - Overglaze never modifies NVIDIA modules: not the game's Streamline or DLSS DLLs, not the driver, not the model.
 - The game's NVIDIA modules are checked for a valid Authenticode signature. The in-game component refuses to hook Streamline modules that aren't validly signed.
-- The model is accepted only if its SHA-256 matches a known, unmodified NVIDIA release. Modified or re-signed copies are refused, including patched files meant to run on other GPU generations. See [docs/MODEL.md](docs/MODEL.md).
+- Overglaze verifies only the original model: by default it is accepted only if its SHA-256 matches a known NVIDIA release (listed in [docs/MODEL.md](docs/MODEL.md)). Any other file is an unrecognized model. It is used only when you explicitly allow unrecognized models, at your own risk; Overglaze neither tests nor endorses it, and each installation pins that exact file's SHA-256.
 - Overglaze does not get around driver or GPU-architecture restrictions.
 
 ## System

@@ -178,9 +178,13 @@ Installation parse_installation(const json& j,const json& exe,const json& host){
     // The extra key is the loader block and nothing else: a V3 config carrying
     // V4's risk block, or the reverse, is neither contract.
     const std::size_t loader_key=j.contains("loader")?1:0;
+    // V4 may also pin an unrecognized model the user allowed (model_sha256).
+    // Absent -- every install without that opt-in -- is the config as before.
+    const std::size_t model_key=j.contains("model_sha256")?1:0;
     demand((!embedded&&!data_driven&&j.size()==11&&j.at("version")==1)||(embedded&&j.size()==(diagnostics?10:9))||
-        (version==3&&j.size()==12+loader_key)||(acknowledged&&j.size()==11+loader_key),"Unsupported installation contract");
+        (version==3&&j.size()==12+loader_key)||(acknowledged&&j.size()==11+loader_key+model_key),"Unsupported installation contract");
     demand(!j.contains("loader")||data_driven,"Only the V3/V4 contract carries a loader block");
+    demand(!model_key||acknowledged,"Only the V4 contract pins a model");
     const auto id=j.at("profile").get<std::string>();const auto* profile=profiles::game(id);
     demand(profile||data_driven,"Unapproved game profile");
     if(acknowledged){
@@ -213,6 +217,8 @@ Installation parse_installation(const json& j,const json& exe,const json& host){
         winpath::same_spelling(dll.filename(),wide(c.loader.basename))&&winpath::same_spelling(loader_dir,dll.parent_path()),"Loader is not in the admitted game directory");
     c.profile=id;c.game_directory=game.parent_path();c.loader_directory=loader_dir;c.bridge_sha256=j.at("bridge_sha256");
     demand(hash(c.bridge_sha256),"Installation bridge hash malformed");
+    if(model_key){demand(j.at("model_sha256").is_string()&&hash(j.at("model_sha256").get<std::string>()),"Installation model pin malformed");
+        c.model_sha256=j.at("model_sha256").get<std::string>();}
     // Host contract V4: the data root is the one this receipt
     // records -- written by the manager from its own resolved root -- not a
     // compiled machine path. Only its spelling here; load_installation_file
@@ -275,6 +281,8 @@ Installation load_installation_file(const std::filesystem::path& p,const json& e
             manifest.at("payload").value(c.loader.basename,"")==host.at("sha256").get<std::string>()&&
             manifest.at("payload").value("overglaze_nvngx.dll","")==c.bridge_sha256&&
             manifest.value("config_sha256","")==sha256(p),"Installed files are not the adapter package's exact payload");
+        // A pinned model is the package's own model, through the same chain.
+        demand(c.model_sha256.empty()||manifest.at("payload").value("nvngx_dlssnr.dll","")==c.model_sha256,"Pinned model is not the adapter package's model");
         const auto module_dirs=module_directories(c.game_directory); // walked once, not per module
         for(const auto& [name,pin]:c.facts.modules){
             demand(manifest.at("pins").value(name,"")==pin,"Module pin differs from the adapter package");

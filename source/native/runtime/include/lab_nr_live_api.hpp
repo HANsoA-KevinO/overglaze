@@ -200,6 +200,12 @@ using Enter=void(__cdecl*)(void*,const Frame*);
 using BoundaryReturned=void(__cdecl*)(void*,std::uint64_t,unsigned);
 using Stop=void(__cdecl*)(void*);
 using Reject=void(__cdecl*)(void*,const RejectedCall*);
+// Separately named V1 export, called only for an installation that pins an
+// unrecognized model the user allowed (lab_installation.hpp model_sha256):
+// 64 lowercase hex digits, accepted once and only before NR first loads the
+// model. The bridge then loads a reviewed version or exactly that file
+// (lab_model_versions.hpp accepted()); without the call, reviewed versions only.
+using PinModel=bool(__cdecl*)(void*,const char* sha256);
 // ABI21. The DIRECT queue the game itself used to submit the command list an
 // admitted RR call was recorded on -- observed and re-verified by the submission
 // router (device, type and ExecuteCommandLists address all checked), never a

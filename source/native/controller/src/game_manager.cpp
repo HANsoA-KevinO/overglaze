@@ -269,6 +269,9 @@ std::uint64_t file_bytes(HANDLE h){LARGE_INTEGER size{};need(GetFileSizeEx(h,&si
 // app\models (hash re-checked by handle) without staging it, and a recovery copy
 // records its hash and keeps ONE shared copy per distinct model here.
 constexpr const char* kModelName="nvngx_dlssnr.dll";
+// A reviewed version (lab_model_versions.hpp), or the tests' synthetic hash
+// standing in for one. Anything else is unrecognized.
+bool reviewed_model(const std::string& sha,const std::string& test_sha){return test_sha.empty()?lab::model::known(sha)!=nullptr:sha==test_sha;}
 bool hex_sha256(const std::string& h){if(h.size()!=64)return false;for(const char c:h)if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')))return false;return true;}
 fs::path shared_models(const fs::path& store){return store/L"_models";}
 fs::path shared_model_file(const fs::path& store,const std::string& sha){need(hex_sha256(sha),"模型身份格式不对");return shared_models(store)/wide(sha)/L"nvngx_dlssnr.dll";}
@@ -605,7 +608,8 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
     s.running=within("process-check-failed",[&]{return running(exe);});
     const Policy* p=within("multiple-packages",[&]{return match(exe);});
     if(p){s.package=p->name;s.route=p->route;s.track=p->track;s.load_mode=p->loader.strategy;s.risks=p->risks;s.anticheat=p->anticheat;
-        s.store=store_kind(dir,is_package_token(p->pins.at(p->executable)));}
+        s.store=store_kind(dir,is_package_token(p->pins.at(p->executable)));
+        if(const auto model=p->payload.find(kModelName);model!=p->payload.end())s.model_unrecognized=!reviewed_model(model->second,model_sha256_);}
     // A game whose EXE or modules changed: offer the re-adaptation when this
     // package qualifies and its fresh preflight passes.
     auto changed=[&](Reason why){s.state="changed";s.install_state="game-changed";s.health=s.installed?"game-changed":"not-applicable";
@@ -655,7 +659,7 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
             s.health="needs-update";s.install_state="legacy";s.update_available=true;s.update.package_behind_published=true;
             s.reasons.push_back({"legacy-install"});
             if(full){const auto why=refresh_refusal(*p,games::preflight(exe));if(!why.code.empty())s.refusals["update"]=why;
-                else{const auto m=model_status();if(!m.known){s.refusals["update"]=m.present?Reason{"model-unknown-version",{{"hash",m.sha256}}}:Reason{"model-missing",{{"path",text(m.path)}}};}}}
+                else{const auto m=model_status();if(!m.usable()){s.refusals["update"]=m.present?Reason{"model-unknown-version",{{"hash",m.sha256}}}:Reason{"model-missing",{{"path",text(m.path)}}};}}}
             s.can_update=!s.running&&!s.refusals.contains("update");
             return s;}
         // ---- health: what the in-game host checks at start-up
@@ -710,9 +714,10 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         if(s.state=="needs-package"){s.reasons.push_back({"package-missing",{{"route",pre.route},{"store",pre.store}}});
             if(!pre.modules_signed)s.reasons.push_back({"modules-unsigned"});
             // A package carries the user's model hash, so it cannot be made without
-            // a reviewed model in place; say which, before the button is pressed.
+            // a reviewed model in place (or an unrecognized one the user allowed);
+            // say which, before the button is pressed.
             const auto m=model_status();
-            if(!m.known){const Reason why=m.present?Reason{"model-unknown-version",{{"hash",m.sha256}}}:Reason{"model-missing",{{"path",text(m.path)}}};
+            if(!m.usable()){const Reason why=m.present?Reason{"model-unknown-version",{{"hash",m.sha256}}}:Reason{"model-missing",{{"path",text(m.path)}}};
                 record(s,"local-model",Outcome::fail,m.present?json(m.sha256):json(nullptr),why.code);
                 s.can_make_package=false;s.refusals["make-package"]=why;s.reasons.push_back(why);}}
         else if(s.state=="loader-conflict")s.reasons.push_back({"loader-conflict",{{"files",pre.loader_conflicts}}});
@@ -760,7 +765,8 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         const auto bridge=within("file-unreadable",[&]{return digest(f.dir/f.bridge);});
         gate(s,"existing-bridge",std::find(p->accepted_bridges.begin(),p->accepted_bridges.end(),bridge)!=p->accepted_bridges.end(),"foreign-bridge","已有 NR 桥接文件身份不同",json::object(),bridge);
         auto c=within("existing-config-unsupported",[&]{return read(f.dir/f.config);});const auto v=c.value("version",0);
-        gate(s,"existing-config",(v==2&&c.size()==10)||(v==3&&(c.size()==12||c.size()==13))||(v==4&&(c.size()==11||c.size()==12)),"existing-config-unsupported","既有安装配置不是受支持的 V2-V4 契约",json::object(),v);
+        gate(s,"existing-config",(v==2&&c.size()==10)||(v==3&&(c.size()==12||c.size()==13))||
+            (v==4&&c.size()==11+std::size_t(c.contains("loader"))+std::size_t(c.contains("model_sha256"))),"existing-config-unsupported","既有安装配置不是受支持的 V2-V4 契约",json::object(),v);
         const bool consistent=within("existing-config-mismatch",[&]{return c.at("profile")==p->profile&&c.at("game_sha256")==p->pins.at(p->executable)&&c.at("host_sha256")==h&&c.at("bridge_sha256")==bridge&&scope_declared(c)&&c.at("in_game_controls")==true;});
         gate(s,"existing-config",consistent,"existing-config-mismatch","既有安装配置与适配包不一致");
         const auto output_root=within("existing-config-mismatch",[&]{return c.at("output_root").get<std::string>();});
@@ -788,7 +794,8 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         gate(s,"package-payload",payload_ok,"package-payload-mismatch","适配包载荷与清单不一致");
         {const auto m=model_status();
          gate(s,"local-model",m.present,"model-missing","找不到 NR 模型 nvngx_dlssnr.dll：本项目不包含、也不分发它，请自行准备并放进 "+text(m.path.parent_path()),json{{"path",text(m.path)}});
-         gate(s,"local-model",m.known,"model-unknown-version","这份 nvngx_dlssnr.dll 不是已审阅的版本，不使用",json{{"hash",m.sha256}},m.sha256);
+         // An unrecognized model passes only with the user's explicit opt-in.
+         gate(s,"local-model",m.known||m.unrecognized_allowed,"model-unknown-version","这份 nvngx_dlssnr.dll 不是已审阅的版本，不使用",json{{"hash",m.sha256}},m.sha256);
          gate(s,"local-model",m.sha256==p->payload.at("nvngx_dlssnr.dll"),"local-model-mismatch","本地模型与适配包清单不一致",json::object(),m.sha256);}
         gate(s,"package-config",!p->config_sha256.empty()&&within("file-unreadable",[&]{return digest(p->directory/L"overglaze.install.json");})==p->config_sha256,"package-config-mismatch","适配包配置与清单 config_sha256 不一致");
         const auto published=within("published-host-missing",[&]{return published_host(p->track);});
@@ -817,7 +824,7 @@ json status_json(const Status& s){json reasons=json::array(),checks=json::array(
     {"load_mode",s.load_mode.empty()?json(nullptr):json(s.load_mode)},
     {"update",{{"available",s.update_available},{"host",s.update.host},{"bridge",s.update.bridge},{"config",s.update.config},{"proxy",s.update.proxy},{"package_behind_published",s.update.package_behind_published}}},
     {"health",s.health},{"can_update",s.can_update},{"can_repin",s.can_repin},
-    {"risks",s.risks},{"anticheat",s.anticheat},{"store",s.store},
+    {"risks",s.risks},{"anticheat",s.anticheat},{"store",s.store},{"model_unrecognized",s.model_unrecognized},
     {"launch",s.launch_via.empty()?json(nullptr):json{{"via",s.launch_via},{"command",s.launch_command}}},
     {"reasons",reasons},{"checks",checks},{"refusals",refusals},{"presentation",presentation_json(present(s))}};}
 Policy Manager::write_package(const fs::path& exe,const std::string& name,const profiles::Facts& facts_in,const std::string& title,const Preflight& pre,json notes,bool replace,const std::string& consent,const std::string& track,const Loader& loader){
@@ -834,7 +841,9 @@ Policy Manager::write_package(const fs::path& exe,const std::string& name,const 
     for(const auto& src:{plugin/L"overglaze_nvngx.dll",tools/L"overglaze_install_check.exe"})need(fs::is_regular_file(src),"已发布的宿主/工具缺失: "+text(src));
     {const auto m=model_status();
      if(!m.present)throw Refusal("model-missing","找不到 NR 模型 nvngx_dlssnr.dll：本项目不包含、也不分发它，请自行准备并放进 "+text(models),json{{"path",text(m.path)}});
-     if(!m.known)throw Refusal("model-unknown-version","这份 nvngx_dlssnr.dll 不是已审阅的版本，不使用",json{{"hash",m.sha256}});}
+     if(!m.known&&!m.unrecognized_allowed)throw Refusal("model-unknown-version","这份 nvngx_dlssnr.dll 不是已审阅的版本，不使用",json{{"hash",m.sha256}});
+     // Only the controller's V4 config can pin an unrecognized model.
+     if(!m.known&&track!="controller")throw Refusal("model-unknown-version","研究轨适配包只接受已审阅的模型",json{{"hash",m.sha256}});}
     // The loader this package will carry, taken from the published track under
     // its own name. A late package ships overglaze_controller.dll, not dxgi.dll.
     const auto loader_source=plugin/wide(loader.basename);
@@ -848,7 +857,10 @@ Policy Manager::write_package(const fs::path& exe,const std::string& name,const 
         need(fs::is_regular_file(proxy_source),"已发布的根代理缺失: "+text(proxy_source));
         proxy_hash=digest(proxy_source);} // copied below: a replace pass clears pkg first
     const auto host=digest(loader_source),bridge=digest(plugin/L"overglaze_nvngx.dll"),checker=digest(tools/L"overglaze_install_check.exe"),model=digest(models/L"nvngx_dlssnr.dll");
-    need(model_sha256_.empty()?lab::model::known(model)!=nullptr:model==model_sha256_,"模型在检查后改变，或不是已审阅的版本");
+    need(model_hash_usable(model),"模型在检查后改变，或不是已审阅的版本");
+    // An unrecognized model the user allowed: the config pins exactly this file.
+    const bool pin_model=!reviewed_model(model,model_sha256_);
+    need(!pin_model||track=="controller","模型在检查后改变，或不是已审阅的版本");
     auto facts=facts_in;facts.package=name;
     // The package carries the route the preflight actually measured. A fixed
     // "sl-rr" would be wrong for every NGX-direct title.
@@ -906,6 +918,9 @@ Policy Manager::write_package(const fs::path& exe,const std::string& name,const 
     // Only stated when it is not the original layout, so a root package stays the
     // 12-key V3 config every existing installation checker already accepts.
     if(!loader.root())config["loader"]={{"strategy",loader.strategy},{"basename",loader.basename},{"subdir",text(loader.subdir)}};
+    // Likewise only for an unrecognized model the user allowed: the in-game
+    // bridge then accepts a reviewed version or exactly this SHA-256.
+    if(pin_model)config["model_sha256"]=model;
     save(pkg/L"overglaze.install.json",config);const auto config_sha=digest(pkg/L"overglaze.install.json");
     json pins=json::object();pins[facts.executable]=pre.executable_sha256;for(const auto& [k,v]:facts.modules)pins[k]=v;
     json manifest={{"schema","overglaze-adapter-package-v1"},{"name",name},{"title",title},{"profile",facts.id},{"route",facts.route},{"track",track},{"game_root",text(exe.parent_path())},
@@ -1417,7 +1432,7 @@ ModelStatus Manager::import_model(const fs::path& source_path){
     const auto source_handle=pins.file(source);LARGE_INTEGER size{};
     need(GetFileSizeEx(source_handle,&size)&&size.QuadPart>0&&size.QuadPart<=512LL*1024*1024,"模型大小不在导入范围内");
     const auto hash=handle_digest(source_handle);const auto* reviewed=lab::model::known(hash);
-    need(model_sha256_.empty()?reviewed!=nullptr:hash==model_sha256_,"模型版本未识别：文件未导入，请选择支持的原版模型");
+    need(model_hash_usable(hash),"模型版本未识别：文件未导入，请选择支持的原版模型");
     Writer writer(store_);directory(root_/L"app");directory(models_dir());pins.parents(models_dir());
     const auto destination=model_file();
     if(fs::exists(destination)){
@@ -1428,9 +1443,11 @@ ModelStatus Manager::import_model(const fs::path& source_path){
             need(MoveFileExW(staging.c_str(),destination.c_str(),MOVEFILE_WRITE_THROUGH)!=FALSE,"模型导入未完成：目标文件已存在或目录不可写");}
         catch(...){DeleteFileW(staging.c_str());throw;}
     }
-    ModelStatus out;out.path=destination;out.present=out.known=true;out.sha256=hash;
-    out.label=reviewed?reviewed->label:"test model";return out;
+    ModelStatus out;out.path=destination;out.present=true;out.sha256=hash;
+    out.known=reviewed_model(hash,model_sha256_);out.unrecognized_allowed=!out.known;
+    out.label=reviewed?reviewed->label:out.known?"test model":"";return out;
 }
+bool Manager::model_hash_usable(const std::string& sha256)const{return reviewed_model(sha256,model_sha256_)||allow_unrecognized_model_;}
 
 AppMaintenanceStatus app_maintenance_check(const fs::path& selected,const std::string& operation){
     AppMaintenanceStatus out;out.root=selected;out.operation=operation;
@@ -1514,15 +1531,18 @@ json app_maintenance_json(const AppMaintenanceStatus& s){return {{"schema","over
 ModelStatus Manager::model_status()const{ModelStatus m;m.path=model_file();std::error_code ec;
     if(!fs::is_regular_file(m.path,ec))return m;
     try{m.sha256=digest(m.path);m.present=true;}catch(const std::exception& e){m.error=e.what();return m;}
-    if(!model_sha256_.empty()){m.known=m.sha256==model_sha256_;if(m.known)m.label="test model";return m;}
-    if(const auto* v=lab::model::known(m.sha256)){m.known=true;m.label=v->label;}
+    if(!model_sha256_.empty()){m.known=m.sha256==model_sha256_;if(m.known)m.label="test model";}
+    else if(const auto* v=lab::model::known(m.sha256)){m.known=true;m.label=v->label;}
+    m.unrecognized_allowed=!m.known&&allow_unrecognized_model_;
     return m;}
 json model_json(const ModelStatus& m){json known=json::array();for(const auto& v:lab::model::kKnownVersions)known.push_back({{"sha256",v.sha256},{"label",v.label}});
-    const char* code=!m.present?"model-missing":!m.known?"model-unknown-version":"model-ready";
+    const char* code=!m.present?"model-missing":m.known?"model-ready":m.unrecognized_allowed?"model-unrecognized-allowed":"model-unknown-version";
     return {{"schema","overglaze-model-status-v1"},{"path",text(m.path)},{"present",m.present},{"sha256",m.sha256.empty()?json(nullptr):json(m.sha256)},
-        {"known",m.known},{"label",m.label.empty()?json(nullptr):json(m.label)},{"error",m.error.empty()?json(nullptr):json(m.error)},
+        {"known",m.known},{"unrecognized_allowed",m.unrecognized_allowed},{"usable",m.usable()},
+        {"label",m.label.empty()?json(nullptr):json(m.label)},{"error",m.error.empty()?json(nullptr):json(m.error)},
         {"reason",reason_json({code,!m.present?json{{"path",text(m.path)}}:!m.known?json{{"hash",m.sha256}}:json::object()})},{"known_versions",known},
-        {"scope","read-only. This project does not include or redistribute nvngx_dlssnr.dll; the user supplies their own copy. Only reviewed versions are used."}};}
+        {"scope","read-only. This project does not include or redistribute nvngx_dlssnr.dll; the user supplies their own copy. Overglaze verifies only the reviewed versions listed; "
+                 "an unrecognized model is used only after the user explicitly allows it (--allow-unrecognized-model or the desktop setting), at the user's own risk, pinned by SHA-256 per install."}};}
 void Manager::migrate(const std::string& id,bool risk_accepted,const std::string& consent,const Progress& progress){
     {const auto s=inspect(find(id));
      if(s.install_state!="legacy")throw Refusal("migrate-not-legacy","这款游戏没有旧版（DLSS Lab）安装，不需要迁移",json{{"install",s.install_state}});}

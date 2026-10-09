@@ -36,6 +36,11 @@ struct Loader {
 };
 struct Installation {
     std::string profile,bridge_sha256,console_sha256,package;
+    // V4, optional: the SHA-256 of an unrecognized model the user chose to allow,
+    // pinned when the manager generated this package. The bridge then loads a
+    // reviewed version or exactly this file (lab_model_versions.hpp accepted()).
+    // Empty -- every install without the opt-in -- means reviewed versions only.
+    std::string model_sha256;
     profiles::Facts facts; // reviewed row or V3 data-driven facts
     Loader loader;
     // loader_directory == game_directory / loader.subdir. The loader, the NR

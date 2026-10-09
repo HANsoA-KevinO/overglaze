@@ -36,6 +36,7 @@ __declspec(dllexport) void LabNrLiveStop(){never();}
 __declspec(dllexport) void LabNrLiveReject(){never();}
 __declspec(dllexport) void LabNrLiveRenderQueue(){never();}
 __declspec(dllexport) void LabNrLiveBindingPolicyV1(){never();}
+__declspec(dllexport) void LabNrLivePinModelV1(){never();}
 // LabNrLiveCapabilities intentionally NOT exported.
 }
 

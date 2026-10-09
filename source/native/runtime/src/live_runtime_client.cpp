@@ -28,7 +28,7 @@ LiveRuntimeClient::LiveRuntimeClient(LiveStatusSink& sink,ID3D12CommandQueue* se
                                      LiveHostKind kind,const Installation* installation,unsigned required_variant,HMODULE proxy_host)
     :sink_(sink),kind_(kind),proxy_host_(proxy_host!=nullptr){
     if(installation){game_profile_=installation->profile;binding_preservation_=installation->facts.binding_preservation;
-        late_attach_=installation->loader.late_host();}
+        late_attach_=installation->loader.late_host();model_pin_=installation->model_sha256;}
     if(kind==LiveHostKind::native_fixture)game_profile_="synthetic-standalone-fixture";
     if(!installation&&(env(L"OVERGLAZE_OFFLINE_CONFIRMED")!=L"1"||env(L"OVERGLAZE_NO_ANTICHEAT_CONFIRMED")!=L"1"))throw std::runtime_error("Offline single-player scope required");
     // An Xbox app title runs through the OS package layout; compare the real
@@ -87,6 +87,11 @@ LiveRuntimeClient::LiveRuntimeClient(LiveStatusSink& sink,ID3D12CommandQueue* se
     // <root>\data\<run> and <root>\app\models. No copy, no compiled path.
     const auto model_path=kind==LiveHostKind::native_fixture?allowed.parent_path()/L"app"/L"models"/L"nvngx_dlssnr.dll":loader_dir/L"nvngx_dlssnr.dll";
     if(!live::proc<live::Start>(module_,"LabNrLiveStart")(seed,proxy_host,model_path.c_str(),data.c_str(),&context_))throw std::runtime_error("Live backend start failed");
+    // An unrecognized model the user allowed at install: hand the bridge that
+    // one exact SHA-256 before it ever loads the model. Without a pin it loads
+    // reviewed versions only, as always.
+    if(!model_pin_.empty()){const auto pin=reinterpret_cast<live::PinModel>(GetProcAddress(module_,"LabNrLivePinModelV1"));
+        if(!pin||!pin(context_,model_pin_.c_str()))throw std::runtime_error("Live bridge did not accept the model pinned at install");}
     std::array<wchar_t,8> preserve_fixture{};
     const bool fixture_preservation=kind==LiveHostKind::native_fixture&&
         GetEnvironmentVariableW(L"OVERGLAZE_FIXTURE_BINDING_PRESERVATION",preserve_fixture.data(),8)==1&&preserve_fixture[0]==L'1';
@@ -179,6 +184,8 @@ void LiveRuntimeClient::poll(const char* blocked){
         {"host_backend",proxy_host_?"reshade":"standalone-d3d12"},
         {"input_origin",kind_==LiveHostKind::native_fixture?"synthetic":"game"},
         {"error",status_.error},{"binding_blocker",blocked?json(blocked):json(nullptr)},{"bridge",bridge_},
+        // The unrecognized model the user allowed and the installation pinned; null: reviewed versions only.
+        {"unrecognized_model_sha256",model_pin_.empty()?json(nullptr):json(model_pin_)},
         {"rejected_call",status_.rejection.reason[0]?json{{"call",status_.rejection.call},{"frame",status_.rejection.frame},{"stage",status_.rejection.stage},{"reason",status_.rejection.reason},
             {"disposition",status_.rejection.disposition==RejectedDisposition::constants_missing_before_nr?"bypass-and-rebuild-off":
                 status_.rejection.disposition==RejectedDisposition::skipped_before_insertion?"skipped-before-insertion-history-reset":

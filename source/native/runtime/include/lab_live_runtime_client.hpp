@@ -108,6 +108,8 @@ private:
     LiveHostKind kind_=LiveHostKind::native_game;
     bool proxy_host_=false; // started under a caller-verified overlay layer
     std::string game_profile_="cyberpunk2077-rr-v1";
+    // The unrecognized model the installation pinned (empty: reviewed versions only).
+    std::string model_pin_;
     bool binding_preservation_=false,binding_preservation_active_=false;
     // Late attach (loader late_d3d12 or root_proxy_on_insert) and the unknown-indirect policy actually in force.
     bool late_attach_=false;std::string unknown_indirect_policy_="strict";

@@ -32,7 +32,8 @@ const char* runtime_entry_points[]={
     "LabNrLiveRequest","LabNrLiveApply","LabNrLiveConfigure","LabNrLiveEnter",
     "LabNrLiveBoundaryReturned","LabNrLiveStop","LabNrLiveReject",
     "LabNrLiveRenderQueue", // ABI21
-    "LabNrLiveBindingPolicyV1"}; // optional: late-attach unknown-indirect policy
+    "LabNrLiveBindingPolicyV1", // optional: late-attach unknown-indirect policy
+    "LabNrLivePinModelV1"}; // optional: an unrecognized model the installation pinned
 
 template<class T> T read_at(const std::vector<char>& image,std::size_t offset){
     if(offset+sizeof(T)>image.size())throw std::runtime_error("Truncated PE image");

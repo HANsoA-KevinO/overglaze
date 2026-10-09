@@ -15,7 +15,7 @@ Not accepted:
 
 - games with anti-cheat, or online or competitive use;
 - anything that patches, spoofs, debugs, dumps or works around DRM or anti-tamper, including disguising Overglaze's files to get past a game's checks;
-- modified, re-signed or patched model files, or code that loads them;
+- modified, re-signed or patched model files, their hashes for the known-version table, or code written for a particular one (Overglaze verifies only the original model; any other file is the user's own opt-in);
 - uploaded DLLs, EXEs or other binaries, NVIDIA files, or game files and assets taken from games;
 - private offsets (RVAs), byte patterns or other reverse-engineered internals of NVIDIA or game binaries;
 - code under licences incompatible with MIT, including GPL-licensed code.

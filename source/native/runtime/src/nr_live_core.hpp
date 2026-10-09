@@ -51,6 +51,13 @@ struct Live {
     Parameters parameters{false};ComPtr<ID3D12Device> device;ComPtr<ID3D12CommandQueue> init_queue;
     ComPtr<ID3D12CommandAllocator> init_allocator;ComPtr<ID3D12GraphicsCommandList> init_commands;
     ComPtr<ID3D12Fence> init_fence;lab::Handle event,sample_lock;
+    // The unrecognized model the installation pinned (LabNrLivePinModelV1); empty:
+    // reviewed versions only. Set once, before the model is first loaded.
+    std::string pinned_model;
+    static bool sha256_text(const char* s){
+        if(!s)return false;unsigned n=0;
+        for(;n<65&&s[n];++n)if(!((s[n]>='0'&&s[n]<='9')||(s[n]>='a'&&s[n]<='f')))return false;
+        return n==64;}
     std::filesystem::path sample,data;
     lab::LiveSubmission* submission=nullptr;
     lab::InsertionBindings* bindings=nullptr;
@@ -249,11 +256,14 @@ struct Live {
         demand(std::filesystem::is_directory(data)&&std::filesystem::space(data).available>=30ULL*1024*1024*1024,"Existing data directory and disk reserve required");
         if(!session){
         sample_lock.value=CreateFileW(sample.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);
-        // Any reviewed version (lab_model_versions.hpp), checked on disk while the file
-        // is held open, then again for the module actually mapped.
+        // Any reviewed version (lab_model_versions.hpp) -- or exactly the
+        // unrecognized model the installation pinned with the user's opt-in --
+        // checked on disk while the file is held open, then again for the
+        // module actually mapped.
         demand(sample_lock.valid(),"NR model missing or unreadable");
         const auto sample_sha=lab::sha256(sample);
-        demand(lab::model::known(sample_sha)!=nullptr,"NR model is not a reviewed version");
+        demand(lab::model::accepted(sample_sha,pinned_model),pinned_model.empty()?"NR model is not a reviewed version":
+            "NR model is neither a reviewed version nor the one pinned at install");
         // The host must exclude the legacy renderer BEFORE this context starts.
         demand(!GetModuleHandleW(L"renodx-dlss5.addon64")&&!GetModuleHandleW(L"overglaze_preview.addon64")&&!GetModuleHandleW(L"dlsslab_preview.addon64"),"Conflicting legacy NR or preview loaded");
         auto nr=LoadLibraryExW(sample.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);

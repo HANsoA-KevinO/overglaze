@@ -9,7 +9,8 @@ shortcut and the normal Windows uninstall entry.
 ## First launch
 
 The initial configuration screen lets you select your own `nvngx_dlssnr.dll`.
-Overglaze verifies the file against its reviewed versions before importing it.
+Overglaze verifies the file against its reviewed versions before importing it
+(an unrecognized model only with *允许使用未识别的模型* on; see [MODEL.md](MODEL.md)).
 The model is never included in the installer. You can continue without a model
 to browse captures and register games, then return to Settings to import it.
 Installing a game plugin still requires the model and the game-specific checks.

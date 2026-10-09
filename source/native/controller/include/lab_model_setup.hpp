@@ -5,23 +5,31 @@
 #include <fstream>
 
 namespace lab {
-// Only the user's decision to finish or skip setup is remembered. Model
-// readiness is checked afresh on every normal application start.
+// The user's decision to finish or skip setup, and whether they allow an
+// unrecognized (non-original) model -- off by default. Model readiness is
+// checked afresh on every normal application start.
 struct ModelSetupState {
     enum class Decision {pending,skipped,completed};
     Decision decision=Decision::pending;
+    // Version 2 only: "allow unrecognized models". A file without it (version
+    // 1, every earlier preference) means off, and off is written as version 1.
+    bool allow_unrecognized=false;
     bool should_prompt(bool allowed,bool checked,bool known)const noexcept {
         return allowed&&checked&&!known&&decision==Decision::pending;
     }
-    json document()const{return {{"kind","overglaze-model-setup"},{"version",1},
-        {"decision",decision==Decision::completed?"completed":decision==Decision::skipped?"skipped":"pending"}};}
+    json document()const{json d={{"kind","overglaze-model-setup"},{"version",allow_unrecognized?2:1},
+        {"decision",decision==Decision::completed?"completed":decision==Decision::skipped?"skipped":"pending"}};
+        if(allow_unrecognized)d["allow_unrecognized_model"]=true;return d;}
     static ModelSetupState parse(const json& j){
-        if(!j.is_object()||j.size()!=3||j.value("kind","")!="overglaze-model-setup"||j.at("version")!=1)
+        const bool v2=j.is_object()&&j.value("version",0)==2;
+        if(!j.is_object()||j.size()!=(v2?4u:3u)||j.value("kind","")!="overglaze-model-setup"||(j.at("version")!=1&&!v2))
             throw std::runtime_error("Unknown model setup preferences");
         ModelSetupState s;const auto d=j.at("decision").get<std::string>();
         if(d=="completed")s.decision=Decision::completed;
         else if(d=="skipped")s.decision=Decision::skipped;
         else if(d!="pending")throw std::runtime_error("Unknown model setup decision");
+        if(v2){if(!j.at("allow_unrecognized_model").is_boolean())throw std::runtime_error("Unknown model setup preference");
+            s.allow_unrecognized=j.at("allow_unrecognized_model").get<bool>();}
         return s;
     }
 };
@@ -42,8 +50,12 @@ public:
         }catch(const std::exception& e){error=e.what();enabled_=false;}
     }
     bool enabled()const noexcept{return enabled_;}
-    void remember(ModelSetupState::Decision decision){
-        state.decision=decision;if(!enabled_)return;
+    void remember(ModelSetupState::Decision decision){state.decision=decision;save();}
+    // The "allow unrecognized models" setting, saved at once.
+    void allow_unrecognized(bool allow){state.allow_unrecognized=allow;save();}
+private:
+    void save(){
+        if(!enabled_)return;
         std::filesystem::path temp;
         try{plain(root_);if(!std::filesystem::exists(file_.parent_path()))std::filesystem::create_directory(file_.parent_path());plain(file_.parent_path());
             if(std::filesystem::exists(file_))plain(file_);
