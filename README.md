@@ -4,8 +4,6 @@
 
 Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Rendering) model in DX12 single-player games and lets you control it from inside the game.
 
-*Overglaze is the potter's technique of painting on top of a glaze that has already been fired. NR does something similar: it paints a layer on top of a frame the game has already finished rendering.*
-
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
 ## 0.2.0-preview.4
