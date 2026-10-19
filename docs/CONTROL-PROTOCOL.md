@@ -73,10 +73,13 @@ There is one writer at a time.
 | `compare_split` | boolean or 0/1 | Diagnostic split screen: left original, right NR |
 | `extrapolate` | boolean or 0/1 | Edit extrapolation: what is written back is this NR pass's change multiplied by `extrapolate_factor` (below). Overglaze's composite, not a model parameter |
 | `extrapolate_factor` | number, 1–4 (default 2) | The multiplier n. Kept while `extrapolate` is off |
+| `network` | integer 0, 1 or 2 (default 0) | `DLSSNR.Hint.Render.Preset`, the NR network. 0 passes the model's own default. Read by the model only when the NR feature is created (below) |
 
 The protocol does not link `skin` and `automask`; the panel turns AutoMask on when Skin is moved, but a client must set both itself. Settings sent while NR is off are staged, and applied when NR next turns on.
 
 With `extrapolate` on, NR still runs once per frame and keeps its own output as its history. Only what is composited back changes: in the NR API domain (the encoded image Overglaze hands the model, C, and the model's output in that domain, N), per channel, N' = clamp(C + n·(N − C), 0, 1); N' then goes through the usual ratio transfer onto the working colour. Off, or n = 1, is exactly the plain composite. This is outside what the model was designed for: sharpening overshoot and fine grain are amplified with the rest.
+
+`network` is a creation parameter, not a per-frame one. It is passed when the NR feature is created and never changed on an existing feature. When NR is running and a request names a different network, the bridge records nothing on the next frame, releases the feature once the previous frame has completed on the GPU, and creates it again with the requested network (`nr_runtime.rebuild_reason` is then `network-changed`). NR history starts fresh. The game shows its own image for those few frames, and the current ON or compute-only intent resumes by itself once the runtime is ready again. Sent while NR is off, the value is staged and goes with the next ON request. The bridge creates its first feature before any setting reaches it, with 0, so a staged 1 or 2 rebuilds that feature once at the first ON frame. What the numbers select depends on the model: 310.8.0.0 has one network, which every value selects; 310.9.16.0 has two, where 1 is the 310.8.0.0 network, 2 is a newer, smaller one, and 0 selects 2. For any other model the meaning is unknown.
 
 Image capture and diagnostic methods are not part of this release and answer `unsupported`.
 
@@ -93,9 +96,12 @@ Image capture and diagnostic methods are not part of this release and answer `un
 | `nr_runtime.evaluates`, `nr_runtime.retired` | NR runs recorded, and NR runs completed on the GPU |
 | `nr_runtime.skipped_frames`, `consecutive_skips` | Frames skipped before insertion (the game showed its own image) |
 | `nr_runtime.history_gaps`, `discarded_recordings` | History resets after sequence breaks, and frames the game itself discarded |
-| `nr_runtime.settings.observed` | Values the model actually read on the latest frame |
+| `nr_runtime.settings.observed` | Values the model actually read on the latest frame (`network` there is the one the feature was created with) |
 | `nr_runtime.settings.applied_exposure_stops` | Exposure actually applied (useful with automatic exposure) |
 | `nr_runtime.settings.applied_extrapolate`, `applied_extrapolate_factor` | Edit extrapolation on the latest NR frame: whether it was on, and the factor the composite actually used (1 = plain composite) |
+| `nr_runtime.settings.applied_network` | The `network` passed when the current NR feature was created; null before the first creation |
+| `nr_runtime.model_sha256` | SHA-256 of the model the bridge verified and loaded; null until NR is first prepared |
+| `nr_runtime.rebuild_serial`, `rebuild_reason` | NR feature rebuilds in this process, and the latest reason (`resource-extents-changed`, `network-changed`, and others) |
 | `nr_runtime.settings.exposure_source` | Where automatic exposure took its gain on the latest NR frame: `game`, `meter`, or `manual` when automatic exposure is off |
 | `nr_runtime.settings.exposure_fallback` | With `meter`: why the game's exposure was not used, by name (below); otherwise null |
 | `nr_runtime.settings.game_exposure` | The game's latest values: `texture_value` (E), `pre_exposure`, `exposure_scale`, `stops` = log2(E × scale / pre-exposure), `exposed_log2_luminance` (the plausibility input) and `trusted_log2_window`; null where not read |

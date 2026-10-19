@@ -51,7 +51,7 @@ Installations made without the setting have no pin and keep accepting known vers
 | 310.8.0.0 | `e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e` | 165,840,496 | Supported, tested |
 | 310.9.16.0 | `2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f` | 266,424,944 | Supported, tested on the real-NR fixture |
 
-Both known versions take the same parameters; 310.9.16.0 adds one input Overglaze does not set (`DLSSNR.MaskBlendMode`). To switch between them, move the current file out of `app\models`, import the other one, then update each game's plugin so its package carries the new hash.
+Both known versions take the same parameters; 310.9.16.0 adds one input Overglaze does not set (`DLSSNR.MaskBlendMode`). To switch between them, move the current file out of `app\models`, import the other one, then update each game's plugin so its package carries the new hash. 310.9.16.0 also carries two networks, chosen when NR starts: network 1 is the same as 310.8.0.0's only network and network 2, a newer and smaller one, is its default; the panel's *网络* setting (自动 / 1 / 2) picks one for comparison, and switching rebuilds NR and clears its history.
 
 Other versions are refused until they have been tested and added here, unless you allow unrecognized models (above). If you have a different version of the original, open an issue with its file version and SHA-256 only. Never attach the file.
 

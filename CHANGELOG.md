@@ -7,6 +7,11 @@ All notable changes to Overglaze are listed here. The format follows [Keep a Cha
 ### Added
 
 - NR model 310.9.16.0 is a known version (SHA-256 `2bc19bc0…28789f`), next to 310.8.0.0. Its exports and parameter names match 310.8.0.0 apart from one new input Overglaze does not set; the real-NR fixture passes in all four variants on driver 617.14.
+- NR network setting (panel *网络*: 自动 / 1 / 2, beside Style; `SetNrSettings` `network`, integer 0–2, default 0). It sets `DLSSNR.Hint.Render.Preset`, which the model reads only when the NR feature is created; 自动 (0) passes the model's own default, as before. In 310.9.16.0, network 1 is the 310.8.0.0 network and network 2 the newer, smaller one the model uses by default, so the two can be compared inside the same file. Changing it while NR runs rebuilds the NR feature at the next frame, through the same path a resolution change takes: the game shows its own image for a few frames, NR history starts fresh and NR resumes by itself. The panel's hint follows the loaded model; with 310.8.0.0, which has one network, the setting is disabled, and for an unrecognized model the meaning of the numbers is unknown. `nr_runtime.settings.applied_network` reports the network the current feature was created with, and `nr_runtime.model_sha256` the model the bridge loaded. The panel remembers the setting per game (panel preferences version 5; earlier files load with 自动).
+
+### Changed
+
+- Live ABI 26 between the in-game host and the bridge (the settings carry the network; the status carries the network the feature was created with and the loaded model's SHA-256). Both ship in the same package; installed games pick it up with *Update plugin*.
 
 ## [0.2.0-preview.4] - 2026-10-09
 

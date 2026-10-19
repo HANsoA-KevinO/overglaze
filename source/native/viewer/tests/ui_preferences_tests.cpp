@@ -21,21 +21,33 @@ int main(){try{
     const auto restored=lab::OverlayPreferences::parse(model.document());
     need(restored.has_model&&restored.tone==.25f&&restored.structure==.75f&&restored.style==2&&restored.exposure_stops==5.5f&&restored.exposure_auto==1,"Model controls round-trip");
     {lab::OverlayPreferences wide=model;wide.tone=1.85f;wide.structure=2.f;wide.skin=.25f;wide.automask=1;const auto doc=wide.document();
-     need(doc.at("version")==4,"Version 4 writes Skin/AutoMask and extrapolation");const auto back=lab::OverlayPreferences::parse(doc);
-     need(back.tone==1.85f&&back.structure==2.f&&back.skin==.25f&&back.automask==1,"Version 4 round-trip (Tone/Structure 0..2, Skin, AutoMask)");
-     auto v3=doc;v3["version"]=3;v3.erase("extrapolate");v3.erase("extrapolate_factor");const auto three=lab::OverlayPreferences::parse(v3);
+     need(doc.at("version")==5,"Version 5 writes Skin/AutoMask, extrapolation and the network");const auto back=lab::OverlayPreferences::parse(doc);
+     need(back.tone==1.85f&&back.structure==2.f&&back.skin==.25f&&back.automask==1,"Version 5 round-trip (Tone/Structure 0..2, Skin, AutoMask)");
+     auto v3=doc;v3["version"]=3;v3.erase("extrapolate");v3.erase("extrapolate_factor");v3.erase("network");const auto three=lab::OverlayPreferences::parse(v3);
      need(three.has_model&&three.skin==.25f&&three.automask==1&&three.extrapolate==0&&three.extrapolate_factor==2.f,"Version 3 files still load; extrapolation off at factor 2");
-     auto v2=doc;v2["version"]=2;v2.erase("skin");v2.erase("automask");v2.erase("extrapolate");v2.erase("extrapolate_factor");const auto old=lab::OverlayPreferences::parse(v2);
+     auto v2=doc;v2["version"]=2;v2.erase("skin");v2.erase("automask");v2.erase("extrapolate");v2.erase("extrapolate_factor");v2.erase("network");const auto old=lab::OverlayPreferences::parse(v2);
      need(old.has_model&&old.tone==1.85f&&old.skin==1.f&&old.automask==0,"Version 2 files still load; Skin defaults to 1, mask off");
      auto bad=doc;bad["skin"]=3;bool refused=false;try{(void)lab::OverlayPreferences::parse(bad);}catch(const std::exception&){refused=true;}need(refused,"Skin above 2 refused");
-     need(old.extrapolate==0&&old.extrapolate_factor==2.f,"Version 2 files: extrapolation off");}
+     need(old.extrapolate==0&&old.extrapolate_factor==2.f&&old.network==0,"Version 2 files: extrapolation off, network 0");
+     need(three.network==0,"Version 3 files: network 0");}
     // Version 4 (Live ABI25): edit extrapolation and its factor 1..4.
     {lab::OverlayPreferences ext=model;ext.extrapolate=1;ext.extrapolate_factor=3.5f;const auto doc=ext.document();
-     need(doc.at("version")==4&&doc.at("extrapolate")==1&&doc.at("extrapolate_factor")==3.5,"Version 4 writes extrapolation");
+     need(doc.at("version")==5&&doc.at("extrapolate")==1&&doc.at("extrapolate_factor")==3.5,"Version 5 writes extrapolation");
      const auto back=lab::OverlayPreferences::parse(doc);need(back.extrapolate==1&&back.extrapolate_factor==3.5f&&back.tone==.25f,"Extrapolation round-trip");
      for(unsigned i=0;i<6;++i){auto bad=doc;if(i==0)bad["extrapolate_factor"]=.5;if(i==1)bad["extrapolate_factor"]=4.5;if(i==2)bad["extrapolate"]=2;
          if(i==3)bad["extrapolate"]=true;if(i==4)bad.erase("extrapolate_factor");if(i==5){bad["version"]=3;}
-         bool refused=false;try{(void)lab::OverlayPreferences::parse(bad);}catch(const std::exception&){refused=true;}need(refused,"Invalid or mis-versioned extrapolation preference refused");}}
+         bool refused=false;try{(void)lab::OverlayPreferences::parse(bad);}catch(const std::exception&){refused=true;}need(refused,"Invalid or mis-versioned extrapolation preference refused");}
+     // A version 4 file (before the network existed) still loads, with network 0.
+     auto v4=doc;v4["version"]=4;v4.erase("network");const auto four=lab::OverlayPreferences::parse(v4);
+     need(four.extrapolate==1&&four.extrapolate_factor==3.5f&&four.network==0,"Version 4 files still load; network 0 (the DLL's default)");}
+    // Version 5 (Live ABI26): the NR network preset 0..2.
+    {for(const unsigned n:{0u,1u,2u}){lab::OverlayPreferences net=model;net.network=n;const auto doc=net.document();
+         need(doc.at("version")==5&&doc.at("network")==n,"Version 5 writes the network");
+         const auto back=lab::OverlayPreferences::parse(doc);need(back.network==n&&back.tone==.25f&&back.style==2,"Network round-trip");}
+     lab::OverlayPreferences net=model;net.network=2;const auto doc=net.document();
+     for(unsigned i=0;i<6;++i){auto bad=doc;if(i==0)bad["network"]=3;if(i==1)bad["network"]=-1;if(i==2)bad["network"]=1.5;
+         if(i==3)bad["network"]=true;if(i==4)bad.erase("network");if(i==5)bad["version"]=4;
+         bool refused=false;try{(void)lab::OverlayPreferences::parse(bad);}catch(const std::exception&){refused=true;}need(refused,"Invalid or mis-versioned network preference refused");}}
     need(!lab::OverlayPreferences::parse(overlay.document()).has_model,"Version 1 file restores no model controls");
     // The persisted exposure range is the slider's own (-12..10).
     {auto deep=model;deep.exposure_stops=-9.5f;need(lab::OverlayPreferences::parse(deep.document()).exposure_stops==-9.5f,"Exposure below the old -6 floor persists");

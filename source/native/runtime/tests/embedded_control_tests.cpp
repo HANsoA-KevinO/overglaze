@@ -15,6 +15,11 @@ void ack(lab::Controller& c,const lab::json& action,std::uint64_t frame){
     if(action.contains("settings"))r["settings"]={{"observed_revision",action.at("revision")},{"frame",frame},{"read_mask",3u},{"style_read",true},{"observed",action.at("settings")}};
     c.publish_nr_runtime(r);c.acknowledge_nr_mode(action.at("revision"),frame,true,on,on);
 }
+// The settings the runtime client hands the bridge for a mailbox action.
+lab::nr::Settings to_settings(const lab::json& v){
+    return {v.at("tone").get<float>(),v.at("structure").get<float>(),v.at("style").get<unsigned>(),v.value("exposure_stops",0.f),v.value("exposure_auto",0u),v.value("compare_split",0u),
+        v.value("skin",1.f),v.value("automask",0u),v.value("extrapolate",0u),v.value("extrapolate_factor",2.f),v.value("network",0u)};
+}
 }
 int main(){try{
     lab::live::Status runtime_status;lab::nr::Settings staged{.2f,.8f};
@@ -72,5 +77,57 @@ int main(){try{
     need(c.handle_embedded("SetNrSettings",{{"tone",.8},{"structure",.2}},620007)["ok"]==true,"Rebuilding allows staged edit without Evaluate");
     c.publish_host({{"state","failed"},{"error","device removed"}});
     need(c.handle_embedded("SetNrMode",{{"mode","on"}},620008)["error"]["code"]=="backend_failed","No unsafe recovery");
-    std::cout<<"PASS embedded ownership, 5000 staged edits, OFF staging, request/read distinction, explicit takeover/release and lease expiry\n";return 0;
+    // ABI26 network preset, end to end through the controller and the runtime's
+    // own decision (lab::live::network_rebuild_needed). No GPU: the bridge's
+    // Feature creation is modelled by Status::applied_network, and its rebuild
+    // by what begin_rebuild does to Status (rebuild_serial+1, requested_on=0).
+    // The real bridge is exercised by the real-NR controller fixture.
+    {lab::Controller n;n.enable_nr_preparation(true);n.enable_embedded_control();
+     need(n.status()["nr_settings_request"]["values"]["network"]==0,"Network 0 (the DLL's default) by default");
+     need(n.handle_embedded("SetNrSettings",{{"tone",1},{"structure",1},{"network",1}},1)["ok"]==true,"Stage network 1 while OFF");
+     for(const auto& bad:{lab::json(3),lab::json(-1),lab::json(1.5),lab::json(true),lab::json("2")}){const auto revision=n.status()["revision"];
+         need(n.handle_embedded("SetNrSettings",{{"tone",1},{"structure",1},{"network",bad}},1)["error"]["code"]=="bad_config"&&n.status()["revision"]==revision,
+              "Out-of-range or non-integer network rejected without mutation");}
+     need(n.status()["nr_settings_request"]["values"]["network"]==1,"Network staged");
+     need(n.handle_embedded("SetNrMode",{{"mode","on"}},2)["ok"]==true&&n.take_nr_preparation(3),"First ON prepares");
+     n.enable_nr_frame_control("game-rr-experimental-nr",true,true);
+     // The first Feature is created before any settings reach the bridge: network 0.
+     lab::live::Status bridge;bridge.feature_generation=1;bridge.applied_network=0;
+     unsigned rebuilds=0,acknowledged=0;std::uint64_t frame=20;
+     const auto ready=[&]{auto r=runtime();r["rebuild_serial"]=bridge.rebuild_serial;n.publish_nr_runtime(r);};
+     // One mailbox action into the bridge, then one frame: either evaluated
+     // (acknowledged), or the bridge rebuilt and the controller will resume the
+     // user's intent with a new action once the runtime is ready again.
+     const auto deliver=[&](const lab::json& action){
+         const auto mode=action.at("mode")=="on"?1u:0u;
+         if(action.contains("settings")){const auto s=to_settings(action.at("settings"));need(lab::live::apply_request(bridge,true,action.at("revision").get<std::uint64_t>(),mode,&s),"Bridge accepts the request");}
+         else need(lab::live::apply_request(bridge,true,action.at("revision").get<std::uint64_t>(),mode,nullptr),"Bridge accepts the mode");
+         ++frame;
+         if(lab::live::network_rebuild_needed(bridge)){
+             ++rebuilds;++bridge.rebuild_serial;bridge.requested_on=0; // begin_rebuild: nothing recorded on this frame
+             n.interrupt_nr_for_rebuild(bridge.rebuild_serial,frame);
+             auto draining=runtime();draining["state"]="draining";draining["rebuild_serial"]=bridge.rebuild_serial;n.publish_nr_runtime(draining);
+             need(!n.take_nr_mode_request(frame),"Nothing is dispatched while the Feature is rebuilt");
+             bridge.applied_network=bridge.requested_settings.network;++bridge.feature_generation; // prepare(): created with the requested network
+             ready();return false;}
+         ++acknowledged;ack(n,action,frame);return true;};
+     ready();
+     auto action=n.take_nr_mode_request(4);need(action&&action->at("mode")=="on"&&action->at("settings")["network"]==1,"First ON carries the staged network");
+     need(!deliver(*action)&&rebuilds==1&&bridge.applied_network==1,"A network the Feature was not created with is never evaluated: one rebuild");
+     action=n.take_nr_mode_request(5);need(action&&action->at("mode")=="on"&&action->at("settings")["network"]==1,"The controller resumes ON with the same network after the rebuild");
+     need(deliver(*action)&&rebuilds==1&&!n.take_nr_mode_request(6),"The recreated Feature evaluates it; no second rebuild");
+     // Switching while ON: exactly one request, one rebuild, one resumed ON.
+     need(n.handle_embedded("SetNrSettings",{{"tone",1},{"structure",1},{"network",2}},7)["ok"]==true,"Switch to network 2 while ON");
+     action=n.take_nr_mode_request(8);need(action&&action->at("settings")["network"]==2,"One request carries the new network");
+     need(!deliver(*action)&&rebuilds==2&&bridge.applied_network==2,"The switch rebuilds the Feature exactly once");
+     action=n.take_nr_mode_request(9);need(action&&action->at("mode")=="on"&&action->at("settings")["network"]==2,"ON resumes with network 2");
+     need(deliver(*action)&&rebuilds==2&&!n.take_nr_mode_request(10),"Network 2 evaluated on its own Feature");
+     // Other settings never rebuild; neither does OFF, nor ON again with an unchanged network.
+     need(n.handle_embedded("SetNrSettings",{{"tone",.5},{"structure",1}},11)["ok"]==true,"Tone change");
+     action=n.take_nr_mode_request(12);need(action&&action->at("settings")["network"]==2&&deliver(*action)&&rebuilds==2,"A Tone change keeps the network and the Feature");
+     need(n.handle_embedded("SetNrMode",{{"mode","off"}},13)["ok"]==true,"OFF");
+     action=n.take_nr_mode_request(14);need(action&&action->at("mode")=="off"&&deliver(*action)&&rebuilds==2,"OFF never rebuilds");
+     need(n.handle_embedded("SetNrMode",{{"mode","on"}},15)["ok"]==true,"ON again");
+     action=n.take_nr_mode_request(16);need(action&&deliver(*action)&&rebuilds==2&&acknowledged==5,"ON again with the same network reuses the Feature");}
+    std::cout<<"PASS embedded ownership, 5000 staged edits, OFF staging, request/read distinction, explicit takeover/release, lease expiry, network switch = one rebuild\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

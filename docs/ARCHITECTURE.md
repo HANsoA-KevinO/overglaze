@@ -110,15 +110,17 @@ After the upscaler's evaluate call returns, Overglaze records the following on t
 
 A private fence marks GPU completion. Overglaze's own resources, and the game resources it uses, stay referenced until that fence completes. If the game resets the command list before submitting it, the frame is discarded and history is reset; NR stays on.
 
-**History.** A break in the frame sequence (menus, loading screens) resets NR's history and keeps NR on. Only a change in resource size rebuilds the NR feature.
+**History.** A break in the frame sequence (menus, loading screens) resets NR's history and keeps NR on. Only a change in resource size, or a request for another NR network (below), rebuilds the NR feature.
 
 ## The NR session
 
 The bridge:
 
 - loads the user's model directly, with a restricted DLL search path, and checks the SHA-256 of the file and of the module actually loaded;
-- initialises it and creates feature 18 at 1:1 scale;
+- initialises it and creates feature 18 at 1:1 scale, passing the requested network preset (`DLSSNR.Hint.Render.Preset`, 0 = the model's own default);
 - sets the `DLSSNR.*` parameters for each frame.
+
+The network preset is read by the model only at creation, so it is never changed on an existing feature. A request for another network while NR runs is not evaluated: nothing is recorded on that frame, the feature is released once the previous frame has completed on the GPU, and the next frame creates it again with the requested network. This is the same path a resource-size change takes, and history starts fresh.
 
 The parameter object records which parameters the model read during each evaluate. That record is the source of the panel's read-back line and of the evidence levels L1–L3. See [MODEL.md](MODEL.md).
 

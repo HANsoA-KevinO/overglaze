@@ -268,6 +268,8 @@ struct Live {
         demand(!GetModuleHandleW(L"renodx-dlss5.addon64")&&!GetModuleHandleW(L"overglaze_preview.addon64")&&!GetModuleHandleW(L"dlsslab_preview.addon64"),"Conflicting legacy NR or preview loaded");
         auto nr=LoadLibraryExW(sample.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);
         demand(nr&&lab::module_identity(nr).value("sha256","")==sample_sha,"Actually loaded NR identity rejected");
+        // ABI26: which model this is decides what the network numbers mean (panel hint).
+        strncpy_s(status.model_sha256,sample_sha.c_str(),_TRUNCATE);
         D3D12_COMMAND_QUEUE_DESC q{};checked(device->CreateCommandQueue(&q,IID_PPV_ARGS(&init_queue)));
         checked(device->CreateCommandAllocator(q.Type,IID_PPV_ARGS(&init_allocator)));
         checked(device->CreateCommandList(0,q.Type,init_allocator.Get(),nullptr,IID_PPV_ARGS(&init_commands)));
@@ -282,13 +284,19 @@ struct Live {
         for(auto name:{"Width","OutWidth","DLSSNR.Width"})parameters.Set(name,config.width);
         for(auto name:{"Height","OutHeight","DLSSNR.Height"})parameters.Set(name,config.height);
         parameters.Set("DLSSNR.ScalingRatio",1.f);parameters.Set("PerfQualityValue",static_cast<int>(NVSDK_NGX_PerfQuality_Value_DLAA));
-        parameters.Set("CreationNodeMask",1u);parameters.Set("VisibilityNodeMask",1u);parameters.Set("DLSSNR.Hint.Render.Preset",0u);
+        // ABI26: the network preset is read by the DLL at creation only. It is the
+        // requested value as this Feature is created (0 = the DLL's own default)
+        // and is never changed on it; a later request for another network
+        // rebuilds the Feature (enter_owned) and lands here again.
+        const auto network=status.requested_settings.network;
+        parameters.Set("CreationNodeMask",1u);parameters.Set("VisibilityNodeMask",1u);parameters.Set("DLSSNR.Hint.Render.Preset",network);
         init_incomplete=true;const auto result=session->create(init_commands.Get(),&parameters);checked(init_commands->Close());
         const auto create_fence=status.feature_generation+1;
         ID3D12CommandList* command=init_commands.Get();init_queue->ExecuteCommandLists(1,&command);checked(init_queue->Signal(init_fence.Get(),create_fence));
         checked(init_fence->SetEventOnCompletion(create_fence,event.value));demand(WaitForSingleObject(event.value,30000)==WAIT_OBJECT_0,"NR Create GPU timeout");
         checked(device->GetDeviceRemovedReason());session->acknowledge_outer_queue_completion();init_incomplete=false;
         demand(result==NVSDK_NGX_Result_Success,"NR Create failed");
+        status.applied_network=network;
         for(auto v:{std::pair{"DLSSNR.Intensity",1.f},std::pair{"DLSSNR.LocalToneStrength",1.f},std::pair{"DLSSNR.LocalStructureStrength",1.f},std::pair{"DLSSNR.SkinStructureStrength",-1.f}})parameters.Set(v.first,v.second);
         parameters.Set("DLSSNR.UseAutoMask",0);parameters.Set("DLSSNR.UICorrection",0);parameters.Set("DLSSNR.Style",0);
         D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;D3D12_RESOURCE_DESC d{};
@@ -529,6 +537,14 @@ struct Live {
             // research bridge; the controller bridge has no extension at all.
             if(extension)extension->off_frame(*this,f);
             boundary_revision=status.request_revision;return;}
+        // ABI26: NR is requested with another network than this Feature was
+        // created with. The preset is never passed to an existing Feature, so
+        // nothing is recorded on this frame; the rebuild path releases the
+        // Feature once the previous frame retires and creates it again with the
+        // requested network (prepare), history starting fresh. begin_rebuild
+        // clears requested_on, so a change rebuilds exactly once; the controller
+        // resumes the user's ON intent when the runtime is ready again.
+        if(network_rebuild_needed(status)){begin_rebuild(f,"network-changed");boundary_call=f.call;boundary_on=false;boundary_revision=0;++status.off_frames;return;}
         if(repeated_frame){skip_admitted_frame(f,"repeated-game-frame-index");return;}
         if(!retire(true)){
             // The previous recording is still unsubmitted on the game's side (or
@@ -624,6 +640,9 @@ struct Live {
             boundary_settings.values.extrapolate=status.requested_settings.extrapolate;
             boundary_settings.values.extrapolate_factor=status.requested_settings.extrapolate_factor;
             status.applied_extrapolate=status.requested_settings.extrapolate;status.applied_extrapolate_factor=pipeline->extrapolation();
+            // ABI26: the network this Feature was created with; equal to the
+            // request here, since a different one rebuilt before recording.
+            boundary_settings.values.network=status.applied_network;
             // ABI22 optional controls: an unread Skin/UseAutoMask mirrors the request
             // (like exposure) and is flagged unread; a read value is kept and matched.
             if(!boundary_settings.skin_observed)boundary_settings.values.skin=status.requested_settings.skin;

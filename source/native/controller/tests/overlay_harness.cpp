@@ -111,7 +111,21 @@ int wmain(int argc,wchar_t** argv){
                 need(extrapolation["extrapolate"]==1&&factor>2.2f&&factor<2.8f,"倍数 slider spans 1..4 (a click at the middle lands near 2.5)");
                 extrapolation=click("extrapolate",.5f);
                 need(extrapolation["extrapolate"]==0&&extrapolation["extrapolate_factor"]==factor,"Switching extrapolation off keeps the factor");
-                result["extrapolation_input_verified"]={{"factor_at_middle",factor}};}
+                result["extrapolation_input_verified"]={{"factor_at_middle",factor}};
+                // NR network preset (Live ABI26): the 网络 combo opens its list and an
+                // entry stages that network, leaving every other value alone. No
+                // model is loaded here, so the combo is enabled.
+                need(extrapolation["network"]==0,"Network 0 (自动) by default");
+                need(!overlay.snapshot()["controls"].contains("network_1"),"The network list stays closed until the combo is clicked");
+                (void)click("network",.5f);
+                auto network=click("network_2",.5f);
+                need(network["network"]==2&&network["extrapolate"]==0&&network["extrapolate_factor"]==factor&&network["tone"]==settings["tone"],
+                     "网络 entry 2 stages network 2; other settings kept");
+                gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();
+                need(!overlay.snapshot()["controls"].contains("network_1"),"Choosing an entry closes the list");
+                (void)click("network",.5f);network=click("network_0",.5f);
+                need(network["network"]==0,"网络 entry 自动 stages network 0");
+                result["network_input_verified"]=true;}
             result["profiles"].push_back({{"format",unsigned(formats[i])},{"space",unsigned(spaces[i])},{"outside_unchanged",true},{"overlay",status}});
             toggle(window);const auto hidden=overlay.snapshot().at("draws");overlay.present(chain.Get());need(overlay.snapshot().at("draws")==hidden,"Closing stops draws immediately");
             SendMessageW(window,WM_KEYDOWN,'K',0);need(key_events==keys+1,"Closing releases input");hr(chain->Present(0,0));gpu.wait();

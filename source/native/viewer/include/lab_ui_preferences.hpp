@@ -19,8 +19,10 @@ struct OverlayPreferences {
     // persisted; every start remains OFF until the user enables it.
     // Version 3 (Live ABI22) adds Skin and AutoMask; Tone/Structure 0..2.
     // Version 4 (Live ABI25) adds edit extrapolation and its factor (1..4).
+    // Version 5 (Live ABI26) adds the NR network preset (0 = the DLL's default, 1, 2).
     bool has_model=false;float tone=1,structure=1,exposure_stops=0,skin=1;unsigned style=0,exposure_auto=0,automask=0;
     unsigned extrapolate=0;float extrapolate_factor=2;
+    unsigned network=0;
     json document() const;
     static OverlayPreferences parse(const json&);
 };

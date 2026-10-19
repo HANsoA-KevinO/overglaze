@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 HANsoA-KevinO
 // SPDX-License-Identifier: MIT
 #include "lab_nr_settings.hpp"
+#include "lab_model_versions.hpp"
 #include <cstdio>
 #include "lab_input_block.hpp"
 #include <cmath>
@@ -52,6 +53,18 @@ bool panel_toggle(const char* id,bool& value,float scale){
         {origin.x+size.x+3*scale,origin.y+size.y+3*scale},ImGui::GetColorU32(accent),size.y*.5f,0,scale);
     return pressed;
 }
+// What the network numbers mean for the model the bridge loaded (Live ABI26),
+// from static analysis of the two reviewed versions: 310.8.0.0 has one network
+// (every value selects it); 310.9.16.0 has two -- 1 is the 310.8 network, 2 a
+// new smaller one, and any other value (0, automatic) selects 2. Any other
+// model is unrecognized: what its numbers select is unknown.
+enum class NetworkModel {not_loaded,single,two,unrecognized};
+NetworkModel network_model(const std::string& sha256){
+    if(sha256.empty())return NetworkModel::not_loaded;
+    if(sha256==model::kKnownVersions[0].sha256)return NetworkModel::single;
+    if(sha256==model::kKnownVersions[1].sha256)return NetworkModel::two;
+    return NetworkModel::unrecognized;
+}
 }
 struct GameOverlay::Impl {
     Controller& control;mutable std::recursive_mutex mutex;std::mutex input_mutex;
@@ -84,7 +97,7 @@ struct GameOverlay::Impl {
     DXGI_COLOR_SPACE_TYPE space=DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     std::uint64_t sequence=0,draws=0,skipped=0,last_tick=0,last_settings=0,settings_revision=0;
     float tone=1,structure=1,exposure_stops=0,paper_white=203,skin=1,extrapolate_factor=2;bool settings_dirty=false,settings_loaded=false,exposure_auto=false,compare_split=false,automask=false,extrapolate=false;
-    int model_style=0;
+    int model_style=0,network=0;
     std::string error;json controls=json::object();
     static inline std::atomic<Impl*> input_owner=nullptr;
     OverlayPreferences saved_model;bool settings_restored=false;
@@ -381,21 +394,24 @@ struct GameOverlay::Impl {
         ImGui::TextDisabled("请求 %s · 启动时默认关闭",requested_mode);
         ImGui::EndChild();ImGui::PopStyleVar();
         if(panel.failed&&!panel.error.empty())ImGui::TextWrapped("%s",panel.error.c_str());
-        if(panel.preparing||panel.rebuilding)ImGui::TextWrapped("等待可用帧…");
+        if(panel.preparing||panel.rebuilding)
+            ImGui::TextWrapped("%s",panel.rebuilding&&nr.is_object()&&nr.value("rebuild_reason",std::string())=="network-changed"?"正在按所选网络重建 NR（历史已清空）…":"等待可用帧…");
         if(nr.is_object()&&nr.value("consecutive_skips",0u))
             ImGui::TextColored(warning,"连续 %u 帧未插入 · 原因见下方诊断",nr.value("consecutive_skips",0u));
         if(panel.other_owner)ImGui::TextWrapped("外部工具控制中，面板只读。");
         const auto requested=status.value("nr_settings_request",json());
         if(requested.is_object()&&(!settings_loaded||(!settings_dirty&&!ImGui::IsAnyItemActive()&&requested.value("revision",0ULL)!=settings_revision))){
             const auto v=requested.at("values");tone=v.value("tone",1.f);structure=v.value("structure",1.f);exposure_stops=v.value("exposure_stops",0.f);exposure_auto=v.value("exposure_auto",0u)!=0;compare_split=v.value("compare_split",0u)!=0;model_style=v.value("style",0);skin=v.value("skin",1.f);automask=v.value("automask",0u)!=0;
-            extrapolate=v.value("extrapolate",0u)!=0;extrapolate_factor=v.value("extrapolate_factor",2.f);settings_loaded=true;settings_revision=requested.value("revision",0ULL);}
+            extrapolate=v.value("extrapolate",0u)!=0;extrapolate_factor=v.value("extrapolate_factor",2.f);network=int(std::min(v.value("network",0u),nr::Settings::max_network));
+            settings_loaded=true;settings_revision=requested.value("revision",0ULL);}
         ImGui::Spacing();product::eyebrow("外观");
         const bool writable=!panel.other_owner&&!panel.failed;bool released=false;
         // Restore the last requested controls once per process as a staged
         // request (OFF allowed). The ON gate itself is never restored.
         if(saved_model.has_model&&!settings_restored&&writable&&requested.is_object()){settings_restored=true;
             dispatch("SetNrSettings",{{"tone",saved_model.tone},{"structure",saved_model.structure},{"style",saved_model.style},{"exposure_stops",saved_model.exposure_stops},{"exposure_auto",saved_model.exposure_auto},
-                {"skin",saved_model.skin},{"automask",saved_model.automask},{"extrapolate",saved_model.extrapolate},{"extrapolate_factor",saved_model.extrapolate_factor}});}
+                {"skin",saved_model.skin},{"automask",saved_model.automask},{"extrapolate",saved_model.extrapolate},{"extrapolate_factor",saved_model.extrapolate_factor},
+                {"network",saved_model.network}});}
         ImGui::BeginDisabled(!writable);
         const float style_width=(ImGui::GetContentRegionAvail().x-ImGui::GetStyle().ItemSpacing.x*2)/3;
         for(int i=0;i<3;++i){if(i)ImGui::SameLine();const char* labels[]{"Style 0","Style 1","Style 2"};
@@ -404,6 +420,26 @@ struct GameOverlay::Impl {
             if(selected&&model_style!=i){model_style=i;settings_dirty=true;released=true;}}
         ImGui::Spacing();
         const float label_x=ImGui::GetCursorPosX()+92*dpi;
+        // NR network preset (Live ABI26). The DLL reads it only when the Feature
+        // is created, so a change while NR runs rebuilds NR and clears its
+        // history. What the numbers mean depends on the model actually loaded.
+        {const auto kind=network_model(nr.is_object()&&nr.value("model_sha256",json()).is_string()?nr.value("model_sha256",std::string()):std::string());
+         ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("网络");ImGui::SameLine(label_x);ImGui::SetNextItemWidth(-1);
+         // The combo's own rect: once its popup is open, the last item is the popup window.
+         {const auto at=ImGui::GetCursorScreenPos();controls["network"]={at.x,at.y,ImGui::GetContentRegionAvail().x,ImGui::GetFrameHeight()};}
+         ImGui::BeginDisabled(kind==NetworkModel::single);
+         const char* names[]{"自动","1","2"};
+         if(ImGui::BeginCombo("##network",names[network])){
+             for(int i=0;i<3;++i){if(ImGui::Selectable(names[i],network==i)&&network!=i){network=i;settings_dirty=true;released=true;}
+                 mark(i==0?"network_0":i==1?"network_1":"network_2");if(network==i)ImGui::SetItemDefaultFocus();}
+             ImGui::EndCombo();}
+         ImGui::EndDisabled();
+         ImGui::SetItemTooltip("NR 网络在创建时选定；开启中切换会重建 NR。");
+         const char* hint=kind==NetworkModel::single?"此模型只有一套网络。":
+             kind==NetworkModel::two?"1 = 旧网络（与 310.8 相同），2 = 新网络（自动时使用）。切换会重建 NR 并清空历史。":
+             kind==NetworkModel::unrecognized?"未识别模型：网络编号含义未知。切换会重建 NR 并清空历史。":
+             "首次开启 NR 后按已加载的模型说明编号。切换会重建 NR 并清空历史。";
+         ImGui::PushTextWrapPos(0);ImGui::TextDisabled("%s",hint);ImGui::PopTextWrapPos();}
         // 0..2 since Live ABI22 (the model has no hard cap; RenoDX uses 1.85/2.00).
         ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("Tone");ImGui::SameLine(label_x);ImGui::SetNextItemWidth(-1);
         if(ImGui::SliderFloat("##tone",&tone,0,nr::Settings::max_tone_structure,"%.2f",ImGuiSliderFlags_AlwaysClamp))settings_dirty=true;
@@ -461,7 +497,7 @@ struct GameOverlay::Impl {
         ImGui::EndDisabled();
         if(settings_dirty&&writable&&(released||GetTickCount64()-last_settings>=100)){
             dispatch("SetNrSettings",{{"tone",tone},{"structure",structure},{"style",model_style},{"exposure_stops",exposure_stops},{"exposure_auto",exposure_auto?1:0},{"compare_split",compare_split?1:0},
-                {"skin",skin},{"automask",automask?1:0},{"extrapolate",extrapolate?1:0},{"extrapolate_factor",extrapolate_factor}});last_settings=GetTickCount64();settings_dirty=false;}
+                {"skin",skin},{"automask",automask?1:0},{"extrapolate",extrapolate?1:0},{"extrapolate_factor",extrapolate_factor},{"network",network}});last_settings=GetTickCount64();settings_dirty=false;}
         if(!on)ImGui::TextDisabled("参数在开启后生效");
 #ifdef LAB_OVERLAY_RESEARCH
         ImGui::Spacing();ImGui::Separator();ImGui::TextDisabled("CAPTURE");
@@ -509,7 +545,10 @@ struct GameOverlay::Impl {
                     char skin_text[16]="未读";if(skin_read)std::snprintf(skin_text,sizeof skin_text,"%.2f",v.value("skin",0.f));
                     if(skin_read||mask_read)ImGui::TextDisabled("Skin %s · AutoMask %s",skin_text,mask_read?(v.value("automask",0u)?"开":"关"):"未读");
                     else ImGui::TextDisabled("Skin / AutoMask：本代未读取");}
-                else ImGui::TextDisabled("本代暂无读取记录");}
+                else ImGui::TextDisabled("本代暂无读取记录");
+                // ABI26: what this Feature was created with (null before the first creation).
+                if(const auto n=s.value("applied_network",json());n.is_number_unsigned()&&n.get<unsigned>()<=nr::Settings::max_network){
+                    const char* names[]{"自动","1","2"};ImGui::TextDisabled("网络：创建时传入 %s",names[n.get<unsigned>()]);}}
             else ImGui::TextDisabled("本代暂无读取记录");
             // What this host has actually seen work, accumulated over the process.
             // Sticky on purpose: turning NR off does not un-prove a read-back.
@@ -543,7 +582,7 @@ struct GameOverlay::Impl {
         ImGui::Spacing();ImGui::TextDisabled("%s 收起  ·  Esc 返回游戏",key_name);
         {OverlayPreferences current;current.hotkey=hotkey.load();current.white=paper_white;
          if(settings_loaded){current.has_model=true;current.tone=tone;current.structure=structure;current.style=unsigned(model_style);current.exposure_stops=exposure_stops;current.exposure_auto=exposure_auto?1u:0u;current.skin=skin;current.automask=automask?1u:0u;
-             current.extrapolate=extrapolate?1u:0u;current.extrapolate_factor=extrapolate_factor;}
+             current.extrapolate=extrapolate?1u:0u;current.extrapolate_factor=extrapolate_factor;current.network=unsigned(network);}
          // A settings file must never take the panel down. A file range check
          // narrower than the slider's (-6..10 against -12..10) once made this
          // throw on every frame: render failed, the panel hid, and each Insert

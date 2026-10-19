@@ -19,7 +19,7 @@ namespace lab::live {
 // preparation probes, boundary audit) lives in the separately versioned
 // lab_nr_live_research_api.hpp, which only the research bridge implements.
 // A host asks LabNrLiveCapabilities which variant it loaded before using them.
-inline constexpr unsigned version=25; // 25: edit extrapolation (extrapolate, extrapolate_factor) in Settings, the applied factor in Status; 24: the game's exposure (texture, pre-exposure, scale) in Frame, auto exposure's source in Status; 23: frame regions (crop) and display-resolution motion; 22: Tone/Structure 0..2, Skin + UseAutoMask in Settings and read receipts; 13: exposure_stops; 14: skip counters; 15: auto exposure; 16: compare split, unlimited skips; 17: history gaps; 18: capture collector availability; 19: discarded recordings, submission skips; 20: research collectors split out, capabilities; 21: render-queue handoff, named completion-signal reasons, signal_retries
+inline constexpr unsigned version=26; // 26: network preset in Settings (passed at Feature creation; a change rebuilds), the network last created with and the loaded model's SHA-256 in Status; 25: edit extrapolation (extrapolate, extrapolate_factor) in Settings, the applied factor in Status; 24: the game's exposure (texture, pre-exposure, scale) in Frame, auto exposure's source in Status; 23: frame regions (crop) and display-resolution motion; 22: Tone/Structure 0..2, Skin + UseAutoMask in Settings and read receipts; 13: exposure_stops; 14: skip counters; 15: auto exposure; 16: compare split, unlimited skips; 17: history gaps; 18: capture collector availability; 19: discarded recordings, submission skips; 20: research collectors split out, capabilities; 21: render-queue handoff, named completion-signal reasons, signal_retries
 enum class State:unsigned {waiting_frame,probing_queue,preparing,ready,failed,stopped,draining,waiting_rebuild_frame};
 // ABI24. Why a frame carries no usable game exposure, or why auto exposure used
 // the GPU meter instead of the game's value. Never a reason to skip a frame or
@@ -119,7 +119,14 @@ struct Status {
     // ABI25. Edit extrapolation on the last recorded ON frame: the switch as
     // applied, and the factor the composite actually used (1 = plain composite).
     float applied_extrapolate_factor=1;unsigned applied_extrapolate=0;
+    // ABI26. The network preset (DLSSNR.Hint.Render.Preset) passed when the
+    // current Feature was created -- never changed on it; meaningful once
+    // feature_generation is nonzero. A request for another network rebuilds.
+    unsigned applied_network=0,network_reserved=0;
     char rebuild_reason[64]{};
+    // ABI26. SHA-256 of the model file the bridge verified and loaded: 64
+    // lowercase hex digits, NUL-terminated; empty until the first preparation.
+    char model_sha256[72]{};
     nr::Settings requested_settings{},observed_settings{};
     std::uint64_t settings_requested_revision=0,settings_observed_revision=0,settings_frame=0;
     unsigned settings_read_mask=0;
@@ -197,6 +204,14 @@ inline bool apply_request(Status& s,bool ready,std::uint64_t revision,unsigned o
     if(!ready||!revision||on>2||revision<=s.request_revision||(settings&&!settings->valid())||(!on&&settings))return false;
     s.request_revision=revision;s.requested_on=on;
     if(settings){s.requested_settings=*settings;s.settings_requested_revision=revision;}return true;
+}
+// ABI26. The network preset is passed only when the Feature is created. An ON
+// (or compute-only) request for another network than the current Feature was
+// created with is never evaluated on that Feature: the runtime records nothing
+// on that frame and rebuilds the Feature with the requested network instead
+// (Live::enter_owned, rebuild reason "network-changed"); history starts fresh.
+inline bool network_rebuild_needed(const Status& s) noexcept {
+    return s.requested_on!=0&&s.requested_settings.network!=s.applied_network;
 }
 using Enter=void(__cdecl*)(void*,const Frame*);
 // Acknowledges recording at the matching successful host-call boundary only.

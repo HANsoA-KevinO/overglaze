@@ -83,6 +83,7 @@ Uninstall each game from the Game Library **before** you move or delete the Over
 | Tone (0–2, default 1) | Sets `DLSSNR.LocalToneStrength`. In our tests it mostly changes colour and tone. |
 | Structure (0–2, default 1) | Sets `DLSSNR.LocalStructureStrength`. In our tests it mostly changes detail. |
 | Style (0, 1, 2) | Sets `DLSSNR.Style`. The three styles are not mapped to any official names. |
+| Network (自动, 1, 2) | Sets `DLSSNR.Hint.Render.Preset`, which picks the NR network when NR starts. Model 310.9.16.0 has two: 1 is the 310.8.0.0 network, 2 the newer one it uses on 自动. Switching while NR runs rebuilds NR and clears its history. Disabled for 310.8.0.0, which has one network. |
 | AutoMask and Skin (0–2) | Set `DLSSNR.UseAutoMask` and `DLSSNR.SkinStructureStrength`. Skin only takes effect while AutoMask is on; 0 leaves skin almost untouched. Moving Skin turns AutoMask on. |
 | Extrapolate (off by default; factor ×1–×4, default ×2) | Overglaze's own composite step, not a model parameter. NR runs once, and the change it made is multiplied by the factor before it is written back. Beyond what the model was designed for: sharpening overshoot and fine grain are amplified too. |
 | Input exposure | Overglaze's own colour preparation, not a model parameter. Either a manual value in stops, or automatic: the game's own exposure when it passes a usable one, otherwise Overglaze's metering, with your value as an offset. The panel shows which source is in use. |

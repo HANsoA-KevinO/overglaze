@@ -656,6 +656,42 @@ int wmain(int argc,wchar_t** argv){
             report["extrapolation"].push_back({{"requested",extrapolate},{"applied_factor",r["settings"].value("applied_extrapolate_factor",0.f)},{"evaluates",r.value("evaluates",0ULL)}});
         }
 
+        // NR network preset (Live ABI26) through the real bridge. The Feature was
+        // created with 0 (the DLL's own default) and reports the model it loaded.
+        // Requesting network 1 while ON must release and recreate the Feature
+        // exactly once (rebuild reason network-changed), the controller must then
+        // resume ON by itself, the recreated Feature must report network 1 and
+        // be evaluated with an exact settings receipt, and further frames must
+        // not rebuild again.
+        {
+            s=status_now();const auto before=s["nr_runtime"];
+            const auto serial=before.value("rebuild_serial",0ULL),releases=before.value("feature_releases",0ULL),generation=before.value("feature_generation",0ULL);
+            need(before["settings"].value("applied_network",json())==0u,"The first Feature was created with network 0: "+before["settings"].value("applied_network",json()).dump());
+            const auto model=before.value("model_sha256",json());
+            need(model.is_string()&&model.get<std::string>().size()==64,"The bridge reports the model it loaded: "+model.dump());
+            need(lab::pipe_request(GetCurrentProcessId(),request("SetNrSettings",{{"tone",1},{"structure",1},{"network",1}},s)).value("ok",false),"Request network 1");
+            const auto rebuilt=await([&](const json& st){const auto& r=st.at("nr_runtime");const auto set=r.value("settings",json::object());const auto o=set.value("observed",json());
+                return r.value("rebuild_serial",0ULL)>serial&&r.value("state","")=="ready"&&r.value("execution_mode","")=="on"&&
+                    set.value("applied_network",json())==1u&&o.is_object()&&o.value("network",9u)==1u&&set.value("frame",0ULL)>r.value("rebuild_frame",0ULL)&&
+                    st.at("nr_frame_control").value("state","")=="applied";},"the bridge to rebuild with network 1 and resume ON",submit_frame,60);
+            const auto& r=rebuilt["nr_runtime"];
+            need(r.value("rebuild_serial",0ULL)==serial+1,"A network change rebuilds exactly once: "+std::to_string(r.value("rebuild_serial",0ULL)-serial));
+            need(r.value("rebuild_reason","")==std::string("network-changed"),"Rebuild reason network-changed: "+r.value("rebuild_reason",""));
+            need(r.value("feature_releases",0ULL)==releases+1&&r.value("feature_generation",0ULL)>generation,"The old Feature was released and a new one created");
+            need(r.value("error","").empty(),"A network change never stops NR: "+r.value("error",""));
+            need(r.value("model_sha256",json())==model,"Same model after the rebuild");
+            // The two ABI26 keys still fit the runtime report's 8 KiB bound unclipped.
+            need(!r.contains("clipped"),"The runtime report is not clipped: "+r.value("clipped",json()).dump());
+            // Further frames on the same network never rebuild again.
+            const auto evaluates=r.value("evaluates",0ULL);
+            for(unsigned i=0;i<4;++i)submit_frame();
+            const auto steady=await([&](const json& st){return st.at("nr_runtime").value("evaluates",0ULL)>evaluates+2;},"NR to keep running on network 1",submit_frame,40);
+            need(steady["nr_runtime"].value("rebuild_serial",0ULL)==serial+1&&steady["nr_runtime"]["settings"].value("applied_network",json())==1u,"No second rebuild on an unchanged network");
+            report["network"]={{"model_sha256",model},{"applied_network",1},{"rebuild_reason",r.value("rebuild_reason","")},
+                {"rebuilds",r.value("rebuild_serial",0ULL)-serial},{"feature_releases",r.value("feature_releases",0ULL)-releases},
+                {"evaluates_after",steady["nr_runtime"].value("evaluates",0ULL)},{"nr_runtime_bytes",r.dump().size()}};
+        }
+
         // Compute-only: the conversion, NR and composite all run, but the game's
         // colour is never written back. It is the controller's own diagnostic
         // mode, and without enable_nr_compute_only() the request is refused, so

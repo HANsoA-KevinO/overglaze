@@ -15,7 +15,7 @@ int main(){try{
     need(!lab::nr::Settings{std::numeric_limits<float>::quiet_NaN(),1}.valid(),"NaN");
     lab::Controller c;c.enable_nr_frame_control("synthetic-input-real-nr",true);
     const lab::json values={{"tone",.5f},{"structure",0.f},{"style",2u},{"exposure_stops",0.f},{"exposure_auto",0u},{"compare_split",0u},{"skin",1.f},{"automask",0u},
-        {"extrapolate",0u},{"extrapolate_factor",2.f}};
+        {"extrapolate",0u},{"extrapolate_factor",2.f},{"network",0u}};
     // ABI22: Tone/Structure 0..2, Skin 0..2, AutoMask 0/1.
     need(lab::nr::Settings{2,2}.valid()&&!lab::nr::Settings{2.01f,1}.valid()&&!lab::nr::Settings{1,2.01f}.valid(),"Tone/Structure range 0..2");
     {lab::nr::Settings s;need(s.skin==1.f&&s.automask==0&&s.valid(),"Default Skin 1, AutoMask off");s.skin=2.f;s.automask=1;need(s.valid(),"Skin 2 with mask");
@@ -37,6 +37,16 @@ int main(){try{
      lab::nr::Settings want{1,1,0};want.extrapolate=1;want.extrapolate_factor=3;
      need(lab::nr::SettingsReads{lab::nr::Settings{1,1,0},3,true}.matches(want),"DLL reads never include extrapolation");
      need(want.model_equal(lab::nr::Settings{1,1,0}),"Extrapolation is not a model parameter");}
+    // ABI26 network preset: 0 (the DLL's default) by default, 1 and 2 valid, 3
+    // refused. It is read at Feature creation, so neither the per-Evaluate read
+    // receipt nor model_equal looks at it.
+    {lab::nr::Settings s;need(s.network==0&&s.valid(),"Network 0 (the DLL's own default) by default");
+     for(const unsigned n:{1u,2u}){s.network=n;need(s.valid(),"Network 1 and 2 are valid");}
+     for(const unsigned n:{3u,4u,0xffffffffu}){s.network=n;need(!s.valid(),"Network above 2 is refused");}
+     lab::nr::Settings want{1,1,0};want.network=2;
+     need(lab::nr::SettingsReads{lab::nr::Settings{1,1,0},3,true}.matches(want),"Per-Evaluate reads never include the network");
+     need(want.model_equal(lab::nr::Settings{1,1,0}),"model_equal compares per-Evaluate parameters only, not the creation-time network");
+     need(!(want==lab::nr::Settings{1,1,0}),"The network is still part of the settings value");}
     need(lab::nr::SettingsReads{lab::nr::Settings{.5f,0.f,2,0.f},3,true}.matches(lab::nr::Settings{.5f,0.f,2,4.f}),"DLL reads never include host exposure");
     need(c.handle(req(c,"SetNrSettings",values),1)["error"]["code"]=="nr_off","OFF parameter request");
     c.handle(req(c,"SetNrMode",{{"mode","on"}}),2);auto on=c.take_nr_mode_request(3);c.acknowledge_nr_mode(on->at("revision"),1,true,true,true);
@@ -45,7 +55,10 @@ int main(){try{
         lab::json{{"tone",0},{"structure",1},{"extrapolate_factor",.99}},lab::json{{"tone",0},{"structure",1},{"extrapolate_factor",4.0000001}},
         lab::json{{"tone",0},{"structure",1},{"extrapolate_factor",0}},lab::json{{"tone",0},{"structure",1},{"extrapolate_factor","2"}},
         lab::json{{"tone",0},{"structure",1},{"extrapolate_factor",true}},lab::json{{"tone",0},{"structure",1},{"extrapolate_factor",std::numeric_limits<double>::quiet_NaN()}},
-        lab::json{{"tone",0},{"structure",1},{"extrapolate_factor",std::numeric_limits<double>::infinity()}}})
+        lab::json{{"tone",0},{"structure",1},{"extrapolate_factor",std::numeric_limits<double>::infinity()}},
+        lab::json{{"tone",0},{"structure",1},{"network",3}},lab::json{{"tone",0},{"structure",1},{"network",-1}},lab::json{{"tone",0},{"structure",1},{"network",1.5}},
+        lab::json{{"tone",0},{"structure",1},{"network",1.0}},lab::json{{"tone",0},{"structure",1},{"network",true}},lab::json{{"tone",0},{"structure",1},{"network","2"}},
+        lab::json{{"tone",0},{"structure",1},{"network",4294967297ULL}}})
         need(c.handle(req(c,"SetNrSettings",bad),4)["error"]["code"]=="bad_config","Bad parameter request");
     auto r=req(c,"SetNrSettings",values);const auto accepted=c.handle(r,5);need(accepted["ok"]==true&&c.handle(r,6)==accepted,"Idempotency");
     need(c.handle(req(c,"SetNrMode",{{"mode","off"}}),7)["error"]["code"]=="pending","No concurrent mutation");
@@ -81,9 +94,29 @@ int main(){try{
      c.publish_nr_runtime({{"profile","cyberpunk-rr-experimental-v1"},{"state","ready"},{"settings",{
          {"observed_revision",sent->at("revision")},{"frame",4u},{"read_mask",3u},{"style_read",true},{"observed",observed}}}});
      c.acknowledge_nr_mode(sent->at("revision"),4,true,true,true);}
+    // Network round trip: the request carries it to the runtime mailbox, other
+    // values are kept, and a receipt must report the network the Feature was
+    // created with -- another one is no receipt.
+    {need(c.handle(req(c,"SetNrSettings",{{"tone",.5},{"structure",0},{"network",2}}),9)["ok"]==true,"Network 2 accepted");
+     auto sent=c.take_nr_mode_request(9);
+     need(sent&&sent->at("settings")["network"]==2&&sent->at("settings")["extrapolate_factor"]==3.5&&sent->at("settings")["style"]==2,"Network reaches the runtime mailbox; other values kept");
+     auto observed=sent->at("settings");observed["network"]=0u;
+     c.publish_nr_runtime({{"profile","cyberpunk-rr-experimental-v1"},{"state","ready"},{"settings",{
+         {"observed_revision",sent->at("revision")},{"frame",5u},{"read_mask",3u},{"style_read",true},{"observed",observed}}}});
+     refused=false;try{c.acknowledge_nr_mode(sent->at("revision"),5,true,true,true);}catch(const std::logic_error&){refused=true;}
+     need(refused,"A runtime that reports another network is no receipt");
+     observed["network"]=2u;
+     c.publish_nr_runtime({{"profile","cyberpunk-rr-experimental-v1"},{"state","ready"},{"settings",{
+         {"observed_revision",sent->at("revision")},{"frame",5u},{"read_mask",3u},{"style_read",true},{"observed",observed}}}});
+     c.acknowledge_nr_mode(sent->at("revision"),5,true,true,true);
+     need(c.handle(req(c,"SetNrSettings",{{"tone",.5},{"structure",0}}),9)["ok"]==true,"Omitted network");
+     sent=c.take_nr_mode_request(9);need(sent&&sent->at("settings")["network"]==2,"An omitted network keeps the current one");
+     c.publish_nr_runtime({{"profile","cyberpunk-rr-experimental-v1"},{"state","ready"},{"settings",{
+         {"observed_revision",sent->at("revision")},{"frame",6u},{"read_mask",3u},{"style_read",true},{"observed",sent->at("settings")}}}});
+     c.acknowledge_nr_mode(sent->at("revision"),6,true,true,true);}
     auto unconsumed=c.handle(req(c,"SetNrSettings",{{"tone",1.85},{"structure",2},{"skin",.5},{"automask",true}}),10);need(unconsumed["ok"]==true,"Tone/Structure above 1, Skin and AutoMask accepted");
     const auto expired=c.take_nr_mode_request(11011);need(expired&&expired->at("mode")=="off"&&!expired->contains("settings"),"Lease cancels unconsumed settings and requests OFF");
     c.publish_host({{"state","failed"},{"error","test"}});need(c.status()["capabilities"]["nr_settings"]==false,"Failure revokes capability");
     need(c.handle(req(c,"SetNrSettings",values),11012)["error"]["code"]=="backend_failed","No resurrection");
-    std::cout<<"PASS: settings range (Tone/Structure 0..2, Skin, AutoMask, extrapolation 1..4), mailbox, idempotency, exact DLL-read receipt, expiry and failure\n";return 0;
+    std::cout<<"PASS: settings range (Tone/Structure 0..2, Skin, AutoMask, extrapolation 1..4, network 0..2), mailbox, idempotency, exact DLL-read receipt, expiry and failure\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
