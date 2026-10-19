@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 HANsoA-KevinO
 // SPDX-License-Identifier: MIT
-// Live ABI boundary between the runtime and research bridge variants (ABI26 adds the network preset to
+// Live ABI boundary between the runtime and research bridge variants (ABI27 adds the compare split
+// position to Settings and the applied position to Status; ABI26 adds the network preset to
 // Settings and the network last created with plus the loaded model's SHA-256 to
 // Status; ABI25 adds edit extrapolation to
 // Settings and the applied factor to Status; ABI24 adds the game's exposure to
@@ -21,6 +22,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -80,15 +82,18 @@ int main(int argc,char** argv){try{
     // The runtime ABI carries no collector type. A research structure that
     // found its way back into Frame/Status would change these sizes.
     static_assert(std::is_trivially_copyable_v<Frame>&&std::is_trivially_copyable_v<Status>);
-    static_assert(sizeof(Frame)==176&&sizeof(Status)==1264&&sizeof(Capabilities)==92, // ABI26: Settings network, Status applied network and model SHA-256
-        "Live ABI26 runtime layout changed; review every host and bump the version");
-    static_assert(sizeof(lab::nr::Settings)==44,"ABI26 Settings: network after the extrapolation factor");
-    static_assert(offsetof(lab::nr::Settings,extrapolate)==32&&offsetof(lab::nr::Settings,extrapolate_factor)==36&&offsetof(lab::nr::Settings,network)==40);
+    static_assert(sizeof(Frame)==176&&sizeof(Status)==1272&&sizeof(Capabilities)==92, // ABI27: Settings compare split position, Status applied position
+        "Live ABI27 runtime layout changed; review every host and bump the version");
+    static_assert(sizeof(lab::nr::Settings)==48,"ABI27 Settings: compare split position after the network");
+    static_assert(offsetof(lab::nr::Settings,extrapolate)==32&&offsetof(lab::nr::Settings,extrapolate_factor)==36&&offsetof(lab::nr::Settings,network)==40&&
+        offsetof(lab::nr::Settings,compare_split_position)==44);
     static_assert(offsetof(Status,applied_extrapolate_factor)==offsetof(Status,meter_reserved)+4&&offsetof(Status,applied_extrapolate)==offsetof(Status,applied_extrapolate_factor)+4,
         "ABI25: the applied extrapolation sits beside the applied exposure");
     static_assert(offsetof(Status,applied_network)==offsetof(Status,applied_extrapolate)+4&&offsetof(Status,model_sha256)==offsetof(Status,rebuild_reason)+64&&
         sizeof(Status::model_sha256)>64,"ABI26: the applied network beside the applied extrapolation; room for 64 hex digits and a NUL");
-    static_assert(version==26);
+    static_assert(offsetof(Status,applied_compare_split_position)==offsetof(Status,applied_network)+4&&offsetof(Status,rebuild_reason)==offsetof(Status,applied_compare_split_position)+4,
+        "ABI27: the applied split position in the slot ABI26 reserved beside the applied network");
+    static_assert(version==27);
     static_assert(exposure_note_count==19&&static_cast<unsigned>(ExposureSource::game)==2,"ABI24 exposure enums");
     {   // A frame source that says nothing about exposure says "no texture", at
         // pre-exposure and scale 1: the runtime then stays on its meter.
@@ -114,11 +119,19 @@ int main(int argc,char** argv){try{
         s.applied_network=2;need(!network_rebuild_needed(s),"Created with the requested network: no rebuild");
         lab::nr::Settings tone=two;tone.tone=.5f;need(apply_request(s,true,2,1,&tone)&&!network_rebuild_needed(s),"Other settings never rebuild");
         lab::nr::Settings automatic;need(apply_request(s,true,3,1,&automatic)&&network_rebuild_needed(s),"Back to 0 (automatic) is a change too");}
+    {   // ABI27 compare split position: the middle by default, applied in the
+        // middle until a frame says otherwise; outside finite 0..1 never reaches
+        // the runtime; a position change never asks for a rebuild.
+        Status s;need(s.requested_settings.compare_split_position==.5f&&s.applied_compare_split_position==.5f,"Split in the middle by default");
+        for(const float p:{-.1f,1.1f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}){
+            lab::nr::Settings bad;bad.compare_split=1;bad.compare_split_position=p;need(!apply_request(s,true,1,1,&bad)&&s.request_revision==0,"Position outside finite 0..1 refused at the ABI");}
+        lab::nr::Settings edge;edge.compare_split=1;edge.compare_split_position=0;need(apply_request(s,true,1,1,&edge)&&s.requested_settings.compare_split_position==0.f,"Position 0 carried through the ABI");
+        edge.compare_split_position=1;need(apply_request(s,true,2,1,&edge)&&s.requested_settings.compare_split_position==1.f&&!network_rebuild_needed(s),"Position 1 carried; no rebuild");}
     need(research_entry_point_count==15,"Research entry point list (15, including the chain capture)");
     Capabilities capabilities;
     need(capabilities.size==sizeof(Capabilities)&&capabilities.abi==version&&!capabilities.variant,"Capabilities default to an unknown variant");
 
-    if(argc==1){std::cout<<"PASS "<<checks<<" live ABI26 layout checks; runtime structures free of research collectors\n";return 0;}
+    if(argc==1){std::cout<<"PASS "<<checks<<" live ABI27 layout checks; runtime structures free of research collectors\n";return 0;}
     need(argc==3,"Usage: lab_live_abi_tests [controller|research <bridge dll>]");
     const std::string variant=argv[1];
     const auto names=exported_names(std::filesystem::canonical(argv[2]));

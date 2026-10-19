@@ -12,7 +12,11 @@
 //   3. the result is still the bounded per-channel ratio transfer onto the
 //      saved working image, H x clamp((decode(N') + e) / (S + e), .01, 10) / E;
 //   4. with it on, the invalid-RGB guard and the compare split behave as before;
-//   5. the factor contract: finite 1..4, changed only between frames.
+//   5. the factor contract: finite 1..4, changed only between frames;
+//   6. the compare split position (Live ABI27): left of split = round(position x
+//      width) the untouched working RGB, a neutral grey divider of max(1, width /
+//      1920) columns at the boundary (none at position 0 or 1), the plain
+//      composite right of it; NR's input never changes; the position contract.
 #include "lab_prepost_ratio_codec.hpp"
 #include "lab_preconvert_reference.hpp"
 #include <d3d12.h>
@@ -20,6 +24,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -71,9 +76,9 @@ struct Gpu {
     void barrier(ID3D12Resource* r,D3D12_RESOURCE_STATES a,D3D12_RESOURCE_STATES b){
         if(a==b)return;D3D12_RESOURCE_BARRIER x{};x.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;x.Transition={r,0,a,b};list->ResourceBarrier(1,&x);
     }
-    ComPtr<ID3D12Resource> texture(DXGI_FORMAT f,bool uav){
+    ComPtr<ID3D12Resource> texture(DXGI_FORMAT f,bool uav,unsigned width=W){
         D3D12_HEAP_PROPERTIES hp{};hp.Type=D3D12_HEAP_TYPE_DEFAULT;D3D12_RESOURCE_DESC d{};d.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        d.Width=W;d.Height=H;d.DepthOrArraySize=1;d.MipLevels=1;d.Format=f;d.SampleDesc.Count=1;
+        d.Width=width;d.Height=H;d.DepthOrArraySize=1;d.MipLevels=1;d.Format=f;d.SampleDesc.Count=1;
         d.Flags=uav?D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS:D3D12_RESOURCE_FLAG_NONE;
         ComPtr<ID3D12Resource> r;hr(device->CreateCommittedResource(&hp,D3D12_HEAP_FLAG_NONE,&d,
             uav?D3D12_RESOURCE_STATE_UNORDERED_ACCESS:D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&r)),"texture");return r;
@@ -116,18 +121,23 @@ struct Gpu {
 struct Output {Bytes prepared,composite,hdr,sdr;};
 // One codec, one frame per entry of `factors` with the same inputs; the
 // readbacks of the last frame. A factor of 0 means set_extrapolation is never
-// called for that frame.
-Output composite(Gpu& g,bool half,bool guard,bool split,std::initializer_list<float> factors,const Bytes& source,const Bytes& neural){
+// called for that frame. `positions`, when given, holds one compare split
+// position per frame (a negative one: set_compare_split_position not called).
+Output composite(Gpu& g,bool half,bool guard,bool split,std::initializer_list<float> factors,const Bytes& source,const Bytes& neural,
+                 unsigned width=W,std::vector<float> positions={}){
     const auto f=half?DXGI_FORMAT_R16G16B16A16_FLOAT:DXGI_FORMAT_R32G32B32A32_FLOAT;
-    auto original=g.texture(f,false),prepared=g.texture(f,true),nr=g.texture(f,true),out=g.texture(f,true),hdr=g.texture(f,true),sdr=g.texture(f,true);
+    auto original=g.texture(f,false,width),prepared=g.texture(f,true,width),nr=g.texture(f,true,width),out=g.texture(f,true,width),
+        hdr=g.texture(f,true,width),sdr=g.texture(f,true,width);
     g.upload(original.Get(),source,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     g.upload(nr.Get(),neural,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);g.run();
     lab::nr::PrePostColorInputs inputs{original.Get(),prepared.Get(),nr.Get(),out.Get(),hdr.Get(),sdr.Get(),true,!guard,guard};
     lab::nr::PrePostColorCodec codec(g.device.Get(),inputs);codec.set_compare_split(split);
-    lab::nr::PrePostColorConstants c{};c.width=W;c.height=H;c.pre_post=1;c.tonemap_operator=3;c.exposure=exposure;c.sigma=10;c.gamma=.454f;
+    lab::nr::PrePostColorConstants c{};c.width=width;c.height=H;c.pre_post=1;c.tonemap_operator=3;c.exposure=exposure;c.sigma=10;c.gamma=.454f;
     c.pre_matrix={{{1,0,0,0},{0,1,0,0},{0,0,1,0}}};c.post_matrix=c.pre_matrix;
+    need(positions.empty()||positions.size()==factors.size(),"One split position per frame");std::size_t frame=0;
     for(const float factor:factors){
         if(factor>0)codec.set_extrapolation(factor);
+        if(!positions.empty()&&positions[frame]>=0)codec.set_compare_split_position(positions[frame]);++frame;
         codec.prepare(g.list.Get(),c);codec.composite(g.list.Get());codec.bind_completion(g.fence.Get(),g.value+1);g.run();
         need(codec.retire_if_complete(),"Frame retired");
     }
@@ -135,15 +145,35 @@ Output composite(Gpu& g,bool half,bool guard,bool split,std::initializer_list<fl
     return {g.read(prepared.Get(),nps),g.read(out.Get(),nps),g.read(hdr.Get(),nps),g.read(sdr.Get(),nps)};
 }
 bool same(float a,float b){return (std::isnan(a)&&std::isnan(b))||std::memcmp(&a,&b,4)==0;}
+// The divider's working RGB with the identity matrices used here: an exposed grey
+// of 1 (S = .5 under operator 3) divided back by the exposure.
+constexpr float divider_grey=1.f/exposure;
+bool divider(float v,bool half){return std::abs(v-divider_grey)<=divider_grey*(half?1e-3f:1e-6f);}
+// A split composite against the plain one of the same inputs: the untouched
+// original left of the split, the divider on its columns, the plain composite
+// right of it, alpha kept everywhere. Returns the number of divider columns.
+unsigned check_split(const Output& plain,const Output& split,const Bytes& source,unsigned width,float position,bool half){
+    const auto cols=lab::nr::compare_split_columns(position,width);
+    need(split.prepared==plain.prepared,"The split never changes what NR is given");
+    for(unsigned i=0;i<width*H;++i){const unsigned x=i%width;
+        for(unsigned ch=0;ch<4;++ch){const float b=get(split.composite,i*4+ch,half),o=get(source,i*4+ch,half);
+            if(x>=cols.line_begin&&x<cols.line_end){
+                if(ch==3)need(same(b,o),"The divider keeps the original alpha");
+                else need(divider(b,half),"The divider is the neutral grey");}
+            else if(x<cols.split)need(same(b,o),"Left of the split: the untouched original");
+            else need(same(b,get(plain.composite,i*4+ch,half)),"Right of the split: the plain composite");}}
+    return cols.line_end-cols.line_begin;
+}
 }
 
 int main(){try{
     Gpu g;
     // Working RGB from deep shadow to highlights; NR output anywhere in [0, 1.05].
-    const auto inputs=[](bool half,bool poison){
-        Bytes source(N*4*(half?2:4)),neural(source.size());std::uint32_t seed=0x5eed;
+    const auto inputs_wide=[](unsigned width,bool half,bool poison){
+        const unsigned pixels=width*H;
+        Bytes source(pixels*4*(half?2:4)),neural(source.size());std::uint32_t seed=0x5eed;
         const auto random=[&]{seed=seed*1664525u+1013904223u;return static_cast<float>(seed>>8)/static_cast<float>(1u<<24);};
-        for(unsigned i=0;i<N;++i){
+        for(unsigned i=0;i<pixels;++i){
             for(unsigned ch=0;ch<3;++ch){put(source,i*4+ch,.0005f*std::pow(1.9f,static_cast<float>((i*3+ch)%19)),half);put(neural,i*4+ch,random()*1.05f,half);}
             put(source,i*4+3,static_cast<float>(i%5)/4,half);put(neural,i*4+3,0,half);
             if(poison)switch(i%7){
@@ -157,6 +187,7 @@ int main(){try{
         }
         return std::pair{source,neural};
     };
+    const auto inputs=[&](bool half,bool poison){return inputs_wide(W,half,poison);};
 
     // ---- 1. off and a factor of 1 are the plain composite, byte for byte
     for(bool half:{false,true})for(bool guard:{false,true})for(bool split:{false,true}){
@@ -202,7 +233,10 @@ int main(){try{
     need(clamped_low>0&&clamped_high>0,"N' was clamped at 0 and at 1 somewhere");
     need(ratio_low>0&&ratio_high>0,"The ratio bounds .01 and 10 were both reached");
 
-    // ---- 4. guard and split with extrapolation on
+    // ---- 4. guard and split with extrapolation on (the split at its default
+    // middle: round(.5 x 37) = 19, a one-column divider there)
+    const auto middle=lab::nr::compare_split_columns(.5f,W);
+    need(middle.split==19&&middle.line_begin==19&&middle.line_end==20,"Default split columns at width 37");
     for(bool half:{false,true}){
         const auto [source,neural]=inputs(half,true);
         const auto ext=composite(g,half,true,false,{4.f},source,neural);
@@ -216,8 +250,9 @@ int main(){try{
                 if(kind<6)need(same(a,o),"An invalid source or model value passes the original pixel through, extrapolated or not");
                 else need(std::isfinite(a),"A valid neighbour stays finite");
                 const float b=get(split.composite,i*4+ch,half);
-                if(x<W/2)need(same(b,o),"Split: the left half is the untouched original");
-                else need(same(b,a),"Split: the right half is the extrapolated composite");}
+                if(x==middle.line_begin)need(ch==3?same(b,o):divider(b,half),"Split: the divider, alpha kept");
+                else if(x<middle.split)need(same(b,o),"Split: left of the middle is the untouched original");
+                else need(same(b,a),"Split: right of the middle is the extrapolated composite");}
         }
     }
 
@@ -238,10 +273,75 @@ int main(){try{
         codec.composite(g.list.Get());codec.bind_completion(g.fence.Get(),g.value+1);g.run();need(codec.retire_if_complete(),"Contract frame retired");
         codec.set_extrapolation(1.f);need(codec.extrapolation()==1.f,"Changed again between frames");
     }
+    // ---- 6. the compare split position (Live ABI27)
+    {   // Columns: split = round(position x width); the divider max(1, width/1920)
+        // columns centred on the boundary, none at an edge.
+        using Columns=std::array<unsigned,3>;
+        const auto cols=[](float p,unsigned w){const auto c=lab::nr::compare_split_columns(p,w);return Columns{c.split,c.line_begin,c.line_end};};
+        need(cols(.5f,3840)==Columns{1920,1919,1921},"4K middle: two columns across the boundary");
+        need(cols(.5f,5120)==Columns{2560,2559,2561},"5K middle: two columns");
+        need(cols(.25f,3840)==Columns{960,959,961},"4K quarter");
+        need(cols(.5f,1920)==Columns{960,960,961},"1080p: one column");
+        need(cols(.5f,7680)==Columns{3840,3838,3842},"8K: four columns");
+        need(cols(1.f/7680,7680)==Columns{1,0,4},"Near the left edge the divider is clipped at 0, still four wide");
+        need(cols(.3f,37)==Columns{11,11,12}&&cols(.77f,37)==Columns{28,28,29},"Rounded to the nearest column");
+        for(const unsigned w:{37u,1920u,3840u}){
+            need(cols(0.f,w)==Columns{0,0,0},"Position 0: no original column, no divider");
+            need(cols(1.f,w)==Columns{w,0,0},"Position 1: every column original, no divider");}
+        need(cols(.0001f,3840)==Columns{0,0,0}&&cols(.9999f,3840)==Columns{3840,0,0},"A split that rounds to an edge draws no divider");
+        for(const float bad:{-.001f,1.001f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity(),-std::numeric_limits<float>::infinity()})
+            refused([&]{(void)lab::nr::compare_split_columns(bad,3840);},"Columns refused outside finite 0..1");}
+    for(bool half:{false,true})for(bool guard:{false,true}){
+        const auto [source,neural]=inputs(half,false);
+        const auto plain=composite(g,half,guard,false,{0.f},source,neural);
+        for(const float position:{0.f,.3f,.5f,.77f,1.f}){
+            const auto split=composite(g,half,guard,true,{0.f},source,neural,W,{position});
+            const auto lines=check_split(plain,split,source,W,position,half);
+            need(lines==(position==0.f||position==1.f?0u:1u),"One divider column at width 37, none at 0 or 1");
+            if(position==0.f)need(split.composite==plain.composite,"Position 0: NR everywhere, byte for byte");
+            if(position==1.f)need(split.composite==source,"Position 1: the original everywhere, byte for byte");}
+        // The position applies from the next frame and changes only between frames:
+        // a frame at .3 then one at .77 is the single frame at .77; the default is .5.
+        const auto moved=composite(g,half,guard,true,{0.f,0.f},source,neural,W,{.3f,.77f});
+        const auto direct=composite(g,half,guard,true,{0.f},source,neural,W,{.77f});
+        need(moved.composite==direct.composite,"A moved split draws where it was last set");
+        const auto default_split=composite(g,half,guard,true,{0.f},source,neural);
+        const auto middle_split=composite(g,half,guard,true,{0.f},source,neural,W,{.5f});
+        need(default_split.composite==middle_split.composite,"The default position is the middle");
+        // The position is ignored while the split is off.
+        const auto off=composite(g,half,guard,false,{0.f},source,neural,W,{.3f});
+        need(off.composite==plain.composite,"With the split off the position changes nothing");}
+    // Wide enough for a two-column divider (3840: 2 px), with extrapolation and
+    // the guard on: the divider is drawn over invalid pixels too.
+    for(bool half:{false,true}){
+        constexpr unsigned wide=3840;
+        const auto [source,neural]=inputs_wide(wide,half,true);
+        const auto plain=composite(g,half,true,false,{2.f},source,neural,wide);
+        for(const float position:{.25f,.5f}){
+            const auto split=composite(g,half,true,true,{2.f},source,neural,wide,{position});
+            need(check_split(plain,split,source,wide,position,half)==2,"Two divider columns at 3840");}}
+    // The position contract.
+    {   const auto [source,neural]=inputs(false,false);
+        auto original=g.texture(DXGI_FORMAT_R32G32B32A32_FLOAT,false);
+        std::vector<ComPtr<ID3D12Resource>> t;for(unsigned i=0;i<5;++i)t.push_back(g.texture(DXGI_FORMAT_R32G32B32A32_FLOAT,true));
+        g.upload(original.Get(),source,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);g.run();
+        lab::nr::PrePostColorCodec codec(g.device.Get(),{original.Get(),t[0].Get(),t[1].Get(),t[2].Get(),t[3].Get(),t[4].Get(),true,false,true});
+        need(codec.compare_split_position()==.5f,"A new codec splits in the middle");
+        for(const float bad:{-.01f,1.01f,-1.f,2.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()})
+            refused([&]{codec.set_compare_split_position(bad);},"Position outside finite 0..1 refused");
+        need(codec.compare_split_position()==.5f,"A refused position changes nothing");
+        for(const float edge:{0.f,1.f,.42f}){codec.set_compare_split_position(edge);need(codec.compare_split_position()==edge,"Positions 0, 1 and between accepted");}
+        codec.set_compare_split(true);
+        lab::nr::PrePostColorConstants c{};c.width=W;c.height=H;c.pre_post=1;c.tonemap_operator=3;c.exposure=1;c.sigma=10;c.gamma=.454f;
+        c.pre_matrix={{{1,0,0,0},{0,1,0,0},{0,0,1,0}}};c.post_matrix=c.pre_matrix;
+        codec.prepare(g.list.Get(),c);refused([&]{codec.set_compare_split_position(.6f);},"No position change inside a frame");
+        codec.composite(g.list.Get());codec.bind_completion(g.fence.Get(),g.value+1);g.run();need(codec.retire_if_complete(),"Position contract frame retired");
+        codec.set_compare_split_position(.6f);need(codec.compare_split_position()==.6f,"Changed again between frames");
+    }
     const auto errors=g.errors();
     for(const auto& e:errors)std::cerr<<"D3D12: "<<e<<'\n';
     need(errors.empty(),"No debug-layer error");
-    std::cout<<"PASS "<<checks<<" edit extrapolation checks on WARP (structural max rel "<<worst_structural<<", ratio reference max rel "<<worst_reference
+    std::cout<<"PASS "<<checks<<" edit extrapolation and compare split checks on WARP (structural max rel "<<worst_structural<<", ratio reference max rel "<<worst_reference
              <<"; N' clamped "<<clamped_low<<" low / "<<clamped_high<<" high); debug layer "<<(g.info?"on":"unavailable")<<"; no NR, no game\n";
     return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

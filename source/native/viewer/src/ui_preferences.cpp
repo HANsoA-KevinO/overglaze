@@ -31,11 +31,11 @@ ViewerPreferences ViewerPreferences::parse(const json& j){need(j.is_object()&&((
     for(const auto* key:{"nearest","library","hdr"})flag(j,key);p.nearest=j.at("nearest");p.library=j.at("library");p.hdr=j.at("hdr");return p;}
 json OverlayPreferences::document() const{
     if(!has_model)return {{"version",1},{"kind","overglaze-overlay-preferences"},{"hotkey",hotkey},{"white_nits",white}};
-    return {{"version",5},{"kind","overglaze-overlay-preferences"},{"hotkey",hotkey},{"white_nits",white},
+    return {{"version",6},{"kind","overglaze-overlay-preferences"},{"hotkey",hotkey},{"white_nits",white},
         {"tone",tone},{"structure",structure},{"style",style},{"exposure_stops",exposure_stops},{"exposure_auto",exposure_auto},{"skin",skin},{"automask",automask},
-        {"extrapolate",extrapolate},{"extrapolate_factor",extrapolate_factor},{"network",network}};}
+        {"extrapolate",extrapolate},{"extrapolate_factor",extrapolate_factor},{"network",network},{"compare_split_position",compare_split_position}};}
 OverlayPreferences OverlayPreferences::parse(const json& j){
-    need(j.is_object()&&j.at("kind")=="overglaze-overlay-preferences"&&((j.size()==4&&j.at("version")==1)||(j.size()==9&&j.at("version")==2)||(j.size()==11&&j.at("version")==3)||(j.size()==13&&j.at("version")==4)||(j.size()==14&&j.at("version")==5)),"Unknown overlay preference version/fields");OverlayPreferences p;
+    need(j.is_object()&&j.at("kind")=="overglaze-overlay-preferences"&&((j.size()==4&&j.at("version")==1)||(j.size()==9&&j.at("version")==2)||(j.size()==11&&j.at("version")==3)||(j.size()==13&&j.at("version")==4)||(j.size()==14&&j.at("version")==5)||(j.size()==15&&j.at("version")==6)),"Unknown overlay preference version/fields");OverlayPreferences p;
     need(j.at("hotkey").is_number_integer(),"Hotkey must be an integer");const auto k=j.at("hotkey").get<std::int64_t>();need(k==VK_INSERT||k==VK_F7||k==VK_F8||k==VK_F9,"Unsupported panel hotkey");p.hotkey=unsigned(k);p.white=number(j,"white_nits",80,300);
     if(j.at("version")!=1){p.has_model=true;p.tone=number(j,"tone",0,nr::Settings::max_tone_structure);p.structure=number(j,"structure",0,nr::Settings::max_tone_structure);p.exposure_stops=number(j,"exposure_stops",nr::Settings::min_exposure_stops,nr::Settings::max_exposure_stops);
         need(j.at("style").is_number_integer()&&j.at("style")>=0&&j.at("style")<=2,"Style must be 0..2");p.style=j.at("style").get<unsigned>();
@@ -46,7 +46,9 @@ OverlayPreferences OverlayPreferences::parse(const json& j){
         if(j.at("version")>=4){need(j.at("extrapolate").is_number_integer()&&j.at("extrapolate")>=0&&j.at("extrapolate")<=1,"extrapolate must be 0/1");p.extrapolate=j.at("extrapolate").get<unsigned>();
             p.extrapolate_factor=number(j,"extrapolate_factor",nr::Settings::min_extrapolate_factor,nr::Settings::max_extrapolate_factor);}
         // Files before version 5 load with network 0 (the DLL's own default).
-        if(j.at("version")==5){need(j.at("network").is_number_integer()&&j.at("network")>=0&&j.at("network")<=nr::Settings::max_network,"network must be 0..2");p.network=j.at("network").get<unsigned>();}}
+        if(j.at("version")>=5){need(j.at("network").is_number_integer()&&j.at("network")>=0&&j.at("network")<=nr::Settings::max_network,"network must be 0..2");p.network=j.at("network").get<unsigned>();}
+        // Files before version 6 load with the split in the middle.
+        if(j.at("version")==6)p.compare_split_position=number(j,"compare_split_position",0,1);}
     return p;}
 struct UiPreferencesFile::Impl {
     mutable std::mutex mutex;std::condition_variable changed;std::thread worker;std::filesystem::path file;json initial,last;std::optional<json> pending;

@@ -36,11 +36,12 @@ json bound_status(json data,std::size_t limit,const char* channel){
 }
 constexpr char bad_settings_message[]="Tone/Structure must be finite 0..2; optional Style must be integer 0, 1 or 2; optional exposure_stops must be finite -12..10; "
     "optional skin must be finite 0..2; optional exposure_auto, compare_split, automask and extrapolate must be a boolean or 0/1; optional extrapolate_factor must be finite 1..4; "
-    "optional network must be integer 0, 1 or 2";
+    "optional network must be integer 0, 1 or 2; optional compare_split_position must be finite 0..1";
 bool parse_settings(const json& p,const json& previous,json& result){
     if(!p.is_object()||!p.contains("tone")||!p.contains("structure"))return false;
     const std::size_t expected=2u+(p.contains("style")?1u:0u)+(p.contains("exposure_stops")?1u:0u)+(p.contains("exposure_auto")?1u:0u)+(p.contains("compare_split")?1u:0u)
-        +(p.contains("skin")?1u:0u)+(p.contains("automask")?1u:0u)+(p.contains("extrapolate")?1u:0u)+(p.contains("extrapolate_factor")?1u:0u)+(p.contains("network")?1u:0u);
+        +(p.contains("skin")?1u:0u)+(p.contains("automask")?1u:0u)+(p.contains("extrapolate")?1u:0u)+(p.contains("extrapolate_factor")?1u:0u)+(p.contains("network")?1u:0u)
+        +(p.contains("compare_split_position")?1u:0u);
     if(p.size()!=expected)return false;
     for(const char* k:{"tone","structure"}){if(!p[k].is_number())return false;const auto v=p[k].get<double>();if(!std::isfinite(v)||v<0||v>nr::Settings::max_tone_structure)return false;}
     unsigned style=previous.value("style",0u);
@@ -85,8 +86,15 @@ bool parse_settings(const json& p,const json& previous,json& result){
     // omitted keeps the current value. An integer like Style, never a boolean.
     unsigned network=previous.value("network",0u);
     if(p.contains("network")){if(!p["network"].is_number_integer()||p["network"]<0||p["network"]>nr::Settings::max_network)return false;network=p["network"].get<unsigned>();}
+    // ABI27: where the compare split lies, a fraction of the output width. A
+    // composite-time value like the extrapolation factor; optional, omitted
+    // keeps the current value, kept while compare_split is off.
+    float compare_split_position=previous.value("compare_split_position",nr::Settings::default_compare_split_position);
+    if(p.contains("compare_split_position")){if(!p["compare_split_position"].is_number())return false;const auto v=p["compare_split_position"].get<double>();
+        if(!std::isfinite(v)||v<0||v>1)return false;compare_split_position=static_cast<float>(v);}
     result={{"tone",p["tone"].get<float>()},{"structure",p["structure"].get<float>()},{"style",style},{"exposure_stops",exposure_stops},{"exposure_auto",exposure_auto},{"compare_split",compare_split},
-        {"skin",skin},{"automask",automask},{"extrapolate",extrapolate},{"extrapolate_factor",extrapolate_factor},{"network",network}};return true;
+        {"skin",skin},{"automask",automask},{"extrapolate",extrapolate},{"extrapolate_factor",extrapolate_factor},{"network",network},
+        {"compare_split_position",compare_split_position}};return true;
 }
 }
 Controller::Controller(bool synthetic) : synthetic_(synthetic), session_(uuid()) {

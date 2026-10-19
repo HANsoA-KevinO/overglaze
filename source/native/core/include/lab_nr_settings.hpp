@@ -19,8 +19,9 @@ struct Settings {
     // 0: exposure_stops is the absolute host gain. 1: the host meters the frame
     // (mean log2 luminance -> mid-grey) and exposure_stops is an offset on top.
     std::uint32_t exposure_auto=0;
-    // Diagnostic view only: left half of the composite shows the untouched
-    // working RGB, right half the NR result. Captures are refused while set.
+    // Diagnostic view only: left of the split the composite shows the untouched
+    // working RGB, right of it the NR result. Captures are refused while set.
+    // Where the split lies is compare_split_position (Live ABI27, below).
     std::uint32_t compare_split=0;
     // DLSSNR.SkinStructureStrength and DLSSNR.UseAutoMask (Live ABI22).
     // Skin only acts while UseAutoMask=1 (offline: with the mask off, Skin 0/1/2
@@ -45,6 +46,11 @@ struct Settings {
     // the bridge rebuild the Feature (history resets). Not a per-Evaluate read,
     // so it is outside model_equal and SettingsReads::matches.
     std::uint32_t network=0;
+    // Compare split position (Live ABI27), a composite-time value the DLL never
+    // reads: the fraction of the output width left of the split, 0..1, default
+    // the middle. Acts only while compare_split=1; a change never rebuilds the
+    // Feature or resets history. 0 shows NR everywhere, 1 the original.
+    float compare_split_position=.5f;
     // Manual exposure (and the offset on top of auto). The floor was -6, which
     // cannot reach scene-referred input such as Alan Wake 2 in daylight.
     static constexpr float min_exposure_stops=-12.f, max_exposure_stops=10.f;
@@ -54,12 +60,15 @@ struct Settings {
     static constexpr float max_tone_structure=2.f, max_skin=2.f;
     static constexpr float min_extrapolate_factor=1.f, max_extrapolate_factor=4.f;
     static constexpr std::uint32_t max_network=2;
+    static constexpr float default_compare_split_position=.5f;
+    static constexpr bool valid_compare_split_position(float v) noexcept {return v>=0.f&&v<=1.f;} // false for NaN; +-inf is outside
     bool valid() const noexcept {
         return std::isfinite(tone)&&std::isfinite(structure)&&std::isfinite(exposure_stops)&&std::isfinite(skin)&&
             tone>=0.f&&tone<=max_tone_structure&&structure>=0.f&&structure<=max_tone_structure&&style<3&&
             exposure_stops>=min_exposure_stops&&exposure_stops<=max_exposure_stops&&exposure_auto<=1&&compare_split<=1&&
             skin>=0.f&&skin<=max_skin&&automask<=1&&extrapolate<=1&&std::isfinite(extrapolate_factor)&&
-            extrapolate_factor>=min_extrapolate_factor&&extrapolate_factor<=max_extrapolate_factor&&network<=max_network;
+            extrapolate_factor>=min_extrapolate_factor&&extrapolate_factor<=max_extrapolate_factor&&network<=max_network&&
+            valid_compare_split_position(compare_split_position);
     }
     // The factor the composite applies: 1 (the plain composite) while off.
     float applied_extrapolation() const noexcept {return extrapolate?extrapolate_factor:1.f;}
@@ -77,8 +86,9 @@ struct SettingsReads {
     // ABI22. Skin and UseAutoMask are matched when the DLL read them, never
     // required: an unread optional control is reported, not a fault.
     bool skin_observed=false,automask_observed=false;
-    // Only DLL-read fields are matched; exposure_stops and extrapolation are
-    // host-applied, and the network is read at Feature creation, not per Evaluate.
+    // Only DLL-read fields are matched; exposure_stops, extrapolation and the
+    // compare split are host-applied, and the network is read at Feature
+    // creation, not per Evaluate.
     bool matches(const Settings& expected) const noexcept {
         return mask==3&&style_observed&&values.tone==expected.tone&&values.structure==expected.structure&&values.style==expected.style&&
             (!skin_observed||values.skin==expected.skin)&&(!automask_observed||values.automask==expected.automask);

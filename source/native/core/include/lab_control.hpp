@@ -127,7 +127,7 @@ private:
     bool embedded_enabled_=false;
     std::uint64_t embedded_sequence_=0,settings_revision_=0;
     json desired_settings_={{"tone",1.0f},{"structure",1.0f},{"style",0u},{"exposure_stops",0.0f},{"exposure_auto",0u},{"compare_split",0u},{"skin",1.0f},{"automask",0u},
-        {"extrapolate",0u},{"extrapolate_factor",2.0f},{"network",0u}};
+        {"extrapolate",0u},{"extrapolate_factor",2.0f},{"network",0u},{"compare_split_position",0.5f}};
     bool nr_intent_dirty_=false;
     std::shared_ptr<ManualCapture> capture_;
     std::string nr_origin_;

@@ -601,6 +601,9 @@ struct Live {
         }
         colors.exposure=std::exp2(applied_exposure_stops);
         pipeline->set_compare_split(status.requested_settings.compare_split!=0);
+        // Where the split lies (ABI27): composite-time only, like the switch; it
+        // never rebuilds the Feature or resets history.
+        pipeline->set_compare_split_position(status.requested_settings.compare_split_position);
         // Edit extrapolation (ABI25) acts on the composite only; the DLL never
         // reads it, and NR keeps its own output as history.
         pipeline->set_extrapolation(status.requested_settings.applied_extrapolation());
@@ -637,6 +640,8 @@ struct Live {
             boundary_settings.values.exposure_stops=status.requested_settings.exposure_stops;
             boundary_settings.values.exposure_auto=status.requested_settings.exposure_auto;status.applied_exposure_stops=applied_exposure_stops;
             boundary_settings.values.compare_split=status.requested_settings.compare_split;
+            boundary_settings.values.compare_split_position=status.requested_settings.compare_split_position;
+            status.applied_compare_split_position=pipeline->compare_split_position();
             boundary_settings.values.extrapolate=status.requested_settings.extrapolate;
             boundary_settings.values.extrapolate_factor=status.requested_settings.extrapolate_factor;
             status.applied_extrapolate=status.requested_settings.extrapolate;status.applied_extrapolate_factor=pipeline->extrapolation();

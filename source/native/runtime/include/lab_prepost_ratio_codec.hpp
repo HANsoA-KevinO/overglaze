@@ -22,6 +22,14 @@ struct PrePostColorConstants {
     std::uint32_t width=0,height=0,pre_post=0,reserved=0;
 };
 static_assert(sizeof(PrePostColorConstants)==128);
+// The diagnostic compare split's columns for an image `width` wide (Live
+// ABI27). Columns below `split` show the untouched working RGB, the rest the
+// composite; split = round(position * width). The divider covers
+// [line_begin, line_end): max(1, width / 1920) columns centred on the
+// boundary, none when the split lies at an edge (split 0 or width, which
+// position 0 and 1 always give). Throws for a position outside finite 0..1.
+struct CompareSplitColumns {std::uint32_t split=0,line_begin=0,line_end=0;};
+CompareSplitColumns compare_split_columns(float position,std::uint32_t width);
 // All six allocations must be distinct and remain valid through last consumers.
 // Finite nonnegative working RGB must be established by the host, not inferred
 // from an FP texture format. Matrices/exposure are supplied explicitly per game.
@@ -60,10 +68,16 @@ public:
     void discard_recorded(); // list Reset before submission: nothing of this frame ran
     std::uint64_t prepare_count() const;
     std::uint64_t composite_count() const;
-    // Diagnostic: composite writes the untouched original on the left half.
-    // Recorded into the next prepare's constants; never part of the official recipe.
+    // Diagnostic: composite writes the untouched original left of the split
+    // (compare_split_columns above). Recorded into the next prepare's
+    // constants; never part of the official recipe.
     void set_compare_split(bool);
     bool compare_split() const;
+    // Where the split lies (Live ABI27): a fraction of the width, finite 0..1,
+    // default .5. Used only while compare split is on; applied from the next
+    // prepare, changed only between frames like the switch itself.
+    void set_compare_split_position(float);
+    float compare_split_position() const;
     // Lab extension, edit extrapolation (Live ABI25): composite reads the NR
     // output as N' = saturate(C + factor * (N - C)) per channel, with C the
     // prepared (encoded) NR input, then transfers it as usual. 1 is the plain

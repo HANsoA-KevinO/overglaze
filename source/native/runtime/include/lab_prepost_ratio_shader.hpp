@@ -8,7 +8,7 @@ cbuffer Params : register(b0) {
     float4 Pre0, Pre1, Pre2, Post0, Post1, Post2;
     float Exposure, Sigma, Gamma; uint Operator;
     uint Width, Height, PrePost, Reserved;
-    float Extrapolate; uint3 ExtrapolatePad;
+    float Extrapolate; uint SplitX, SplitLineBegin, SplitLineEnd;
 };
 Texture2D<float4> Original : register(t0);
 Texture2D<float4> Neural : register(t1);
@@ -49,6 +49,17 @@ float3 tonemap(float3 h) {
 bool safe_rgb(float3 v) {
     return all(isfinite(v)) && all(v>=0) && (!(Reserved&2) || all(v<=65504));
 }
+// The compare split's divider: a neutral grey at the level the NR input shows as
+// half grey (S = .5, about .74 sRGB-encoded) -- an exposed grey of 1 under the
+// compression operators 1-3 -- taken back to working RGB the way the composite
+// takes NR's result back (post matrix, then / Exposure), so it reads as light
+// grey whatever the scene's scale. Without PrePost the working RGB is NR's own
+// linear domain, where the same half grey is .5.
+float3 divider() {
+    if(!PrePost) return .5;
+    float3 g=1;
+    return float3(dot(Post0.xyz,g),dot(Post1.xyz,g),dot(Post2.xyz,g))/Exposure;
+}
 [numthreads(8,8,1)]
 void Prepare(uint3 id : SV_DispatchThreadID) {
     if(id.x>=Width || id.y>=Height) return;
@@ -70,7 +81,13 @@ void Prepare(uint3 id : SV_DispatchThreadID) {
 void Composite(uint3 id : SV_DispatchThreadID) {
     if(id.x>=Width || id.y>=Height) return;
     float4 x=Original.Load(int3(id.xy,0));float3 raw=Neural.Load(int3(id.xy,0)).rgb;
-    if((Reserved&4) && id.x<Width/2) {Output[id.xy]=x;return;} // diagnostic split: left = untouched working RGB
+    // Diagnostic compare split (Reserved&4): left of SplitX the untouched working
+    // RGB, a divider over [SplitLineBegin, SplitLineEnd) (empty at an edge), the
+    // composite from SplitX on. The codec computes all three columns.
+    if(Reserved&4) {
+        if(id.x>=SplitLineBegin && id.x<SplitLineEnd) {Output[id.xy]=float4(divider(),x.a);return;}
+        if(id.x<SplitX) {Output[id.xy]=x;return;}
+    }
     if(Reserved&1) {
         float3 e=x.rgb*Exposure;
         float3 h=PrePost ? float3(dot(Pre0.xyz,e),dot(Pre1.xyz,e),dot(Pre2.xyz,e)) : x.rgb;

@@ -144,6 +144,7 @@ The model takes display-referred colour, while the upscaler's output is linear f
 - **N** = sRGB_decode(NR output)
 - **r** = clamp((**N** + ε) / (**S** + ε), 0.01, 10), per channel, with ε = 10⁻⁶
 - **result** = M_post · (**H** ⊙ **r**) / E, written back in place. Alpha is kept.
+- Diagnostic **compare split** (off by default, position p in 0–1, default 0.5): columns left of round(p · width) keep the original pixel, and a divider of max(1, width / 1920) columns across the boundary is written as M_post · (1, 1, 1) / E, the grey the compression operator maps to half level. None at p = 0 or 1. NR's input and history are unaffected.
 
 **Properties**
 

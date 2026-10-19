@@ -139,6 +139,8 @@ public:
         }catch(...){stage_=Stage::failed;throw;}
     }
     void set_compare_split(bool v){owner();codec_.set_compare_split(v);}
+    void set_compare_split_position(float position){owner();codec_.set_compare_split_position(position);}
+    float compare_split_position() const {owner();return codec_.compare_split_position();}
     void set_extrapolation(float factor){owner();codec_.set_extrapolation(factor);}
     float extrapolation() const {owner();return codec_.extrapolation();}
     bool ready() const {owner();return stage_==Stage::idle;}

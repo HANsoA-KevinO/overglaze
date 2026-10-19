@@ -125,7 +125,49 @@ int wmain(int argc,wchar_t** argv){
                 need(!overlay.snapshot()["controls"].contains("network_1"),"Choosing an entry closes the list");
                 (void)click("network",.5f);network=click("network_0",.5f);
                 need(network["network"]==0,"网络 entry 自动 stages network 0");
-                result["network_input_verified"]=true;}
+                result["network_input_verified"]=true;
+                // Compare split position (Live ABI27). The split controls sit low in the
+                // panel, which on this 800 px surface may scroll: wheel the panel, as a
+                // user would, until the control is fully in view, then use it.
+                const auto reveal=[&](const char* control){
+                    for(unsigned step=0;step<40;++step){
+                        for(unsigned settle=0;settle<2;++settle){gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();}
+                        const auto controls=overlay.snapshot()["controls"];need(controls.contains(control),"Panel control laid out");
+                        const auto rect=controls[control];const float top=rect[1].get<float>(),bottom=top+rect[3].get<float>();
+                        if(top>=0.f&&bottom<=792.f)return rect;
+                        const LONG wx=LONG(200*client.right/1280),wy=LONG(400*client.bottom/800);POINT screen{wx,wy};ClientToScreen(window,&screen);
+                        SendMessageW(window,WM_MOUSEMOVE,0,MAKELPARAM(wx,wy));
+                        SendMessageW(window,WM_MOUSEWHEEL,MAKEWPARAM(0,WORD(short(top<0.f?WHEEL_DELTA:-WHEEL_DELTA))),MAKELPARAM(screen.x,screen.y));}
+                    throw std::runtime_error(std::string("Panel never scrolled ")+control+" into view");};
+                const auto press=[&](const POINT& p,WPARAM keys,UINT message){SendMessageW(window,message,keys,MAKELPARAM(p.x,p.y));gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();};
+                const auto values=[&]{return controller.status()["nr_settings_request"]["values"];};
+                need(!overlay.snapshot()["controls"].contains("compare_split_position"),"No split position slider while the split is off");
+                need(values()["compare_split_position"]==.5f,"Split in the middle by default");
+                {const auto hit=point(reveal("compare_split"),.5f);press(hit,0,WM_MOUSEMOVE);press(hit,MK_LBUTTON,WM_LBUTTONDOWN);press(hit,0,WM_LBUTTONUP);}
+                need(values()["compare_split"]==1&&values()["compare_split_position"]==.5f,"对比分屏 toggle stages the split at the middle");
+                // Drag the slider from 20% to 80% with the button held. The panel sends
+                // settings while a slider moves, at most every 100 ms: the new position
+                // must reach the controller before the button is released.
+                const auto split_slider=reveal("compare_split_position");
+                const auto from=point(split_slider,.2f),to=point(split_slider,.8f);
+                press(from,0,WM_MOUSEMOVE);press(from,MK_LBUTTON,WM_LBUTTONDOWN);
+                Sleep(120);press({(from.x+to.x)/2,to.y},MK_LBUTTON,WM_MOUSEMOVE);
+                Sleep(120);press(to,MK_LBUTTON,WM_MOUSEMOVE);
+                Sleep(120);press(to,MK_LBUTTON,WM_MOUSEMOVE);
+                const auto dragging=values()["compare_split_position"].get<float>();
+                need(dragging>.7f&&dragging<.9f,"Dragging sends the split position before release (live, throttled to 100 ms)");
+                press(to,0,WM_LBUTTONUP);
+                const auto released=values()["compare_split_position"].get<float>();
+                need(released>.7f&&released<.9f&&values()["compare_split"]==1&&values()["tone"]==settings["tone"],"Release keeps the dragged position; other settings untouched");
+                {const auto hit=point(reveal("compare_split_center"),.5f);press(hit,0,WM_MOUSEMOVE);press(hit,MK_LBUTTON,WM_LBUTTONDOWN);press(hit,0,WM_LBUTTONUP);}
+                need(values()["compare_split_position"]==.5f,"居中 puts the split back in the middle");
+                {const auto hit=point(reveal("compare_split_position"),.25f);press(hit,0,WM_MOUSEMOVE);press(hit,MK_LBUTTON,WM_LBUTTONDOWN);press(hit,0,WM_LBUTTONUP);}
+                const auto kept=values()["compare_split_position"].get<float>();need(kept>.15f&&kept<.35f,"A click at a quarter lands near 25%");
+                {const auto hit=point(reveal("compare_split"),.5f);press(hit,0,WM_MOUSEMOVE);press(hit,MK_LBUTTON,WM_LBUTTONDOWN);press(hit,0,WM_LBUTTONUP);}
+                need(values()["compare_split"]==0&&values()["compare_split_position"]==kept,"Switching the split off keeps the position");
+                gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();
+                need(!overlay.snapshot()["controls"].contains("compare_split_position"),"The slider hides with the split off");
+                result["compare_split_input_verified"]={{"while_dragging",dragging},{"after_release",released},{"kept_while_off",kept}};}
             result["profiles"].push_back({{"format",unsigned(formats[i])},{"space",unsigned(spaces[i])},{"outside_unchanged",true},{"overlay",status}});
             toggle(window);const auto hidden=overlay.snapshot().at("draws");overlay.present(chain.Get());need(overlay.snapshot().at("draws")==hidden,"Closing stops draws immediately");
             SendMessageW(window,WM_KEYDOWN,'K',0);need(key_events==keys+1,"Closing releases input");hr(chain->Present(0,0));gpu.wait();

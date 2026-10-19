@@ -18,7 +18,8 @@ void ack(lab::Controller& c,const lab::json& action,std::uint64_t frame){
 // The settings the runtime client hands the bridge for a mailbox action.
 lab::nr::Settings to_settings(const lab::json& v){
     return {v.at("tone").get<float>(),v.at("structure").get<float>(),v.at("style").get<unsigned>(),v.value("exposure_stops",0.f),v.value("exposure_auto",0u),v.value("compare_split",0u),
-        v.value("skin",1.f),v.value("automask",0u),v.value("extrapolate",0u),v.value("extrapolate_factor",2.f),v.value("network",0u)};
+        v.value("skin",1.f),v.value("automask",0u),v.value("extrapolate",0u),v.value("extrapolate_factor",2.f),v.value("network",0u),
+        v.value("compare_split_position",lab::nr::Settings::default_compare_split_position)};
 }
 }
 int main(){try{
@@ -43,6 +44,13 @@ int main(){try{
         auto p=bad;p["tone"]=1;p["structure"]=1;const auto revision=c.status()["revision"];
         need(c.handle_embedded("SetNrSettings",p,1)["error"]["code"]=="bad_config"&&c.status()["revision"]==revision,"Out-of-range extrapolation rejected without mutation");}
     need(c.status()["nr_settings_request"]["values"]["extrapolate"]==1&&c.status()["nr_settings_request"]["values"]["extrapolate_factor"]==3.5,"Extrapolation staged");
+    // ABI27 compare split position: staged while OFF, refused out of range without mutation.
+    need(c.status()["nr_settings_request"]["values"]["compare_split_position"]==.5,"Split in the middle by default");
+    need(c.handle_embedded("SetNrSettings",{{"tone",1},{"structure",1},{"compare_split",true},{"compare_split_position",.7}},1)["ok"]==true,"Stage the split position while OFF");
+    for(const auto& bad:{lab::json{{"compare_split_position",1.5}},lab::json{{"compare_split_position",-.5}},lab::json{{"compare_split_position",false}}}){
+        auto p=bad;p["tone"]=1;p["structure"]=1;const auto revision=c.status()["revision"];
+        need(c.handle_embedded("SetNrSettings",p,1)["error"]["code"]=="bad_config"&&c.status()["revision"]==revision,"Out-of-range split position rejected without mutation");}
+    need(c.status()["nr_settings_request"]["values"]["compare_split_position"]==.7f&&c.status()["nr_settings_request"]["values"]["compare_split"]==1,"Split position staged");
     for(const auto& style:{lab::json(-1),lab::json(3),lab::json(.5),lab::json(1.0),lab::json(true),lab::json("A"),lab::json(4294967296ULL)}){
         const auto revision=c.status()["revision"];
         need(c.handle_embedded("SetNrSettings",{{"tone",1},{"structure",1},{"style",style}},1)["error"]["code"]=="bad_config","Reject guessed, fractional or out-of-range Style");
@@ -56,7 +64,8 @@ int main(){try{
     need(c.handle_embedded("SetNrMode",{{"mode","on"}},6001)["ok"]==true&&c.take_nr_preparation(6002),"Local first ON prepares once");
     c.enable_nr_frame_control("game-rr-experimental-nr",true,true);c.publish_nr_runtime(runtime());
     auto action=c.take_nr_mode_request(6003);need(action&&action->at("settings")["tone"]==.25f,"First ON carries staged values");
-    need(action->at("settings")["extrapolate"]==1&&action->at("settings")["extrapolate_factor"]==3.5,"First ON carries the staged extrapolation");ack(c,*action,10);
+    need(action->at("settings")["extrapolate"]==1&&action->at("settings")["extrapolate_factor"]==3.5,"First ON carries the staged extrapolation");
+    need(action->at("settings")["compare_split_position"]==.7f&&to_settings(action->at("settings")).compare_split_position==.7f,"First ON carries the staged split position to the bridge");ack(c,*action,10);
     c.frame_boundary(11,600000);need(c.status()["nr_lifecycle"]["desired_mode"]=="on"&&!c.take_nr_mode_request(600001),"Hidden panel needs no heartbeat");
     auto claim=external(c,"TakeControl");auto accepted=c.handle(claim,600002);
     need(accepted["ok"]==true&&c.handle(claim,600003)==accepted,"External takeover idempotent");
@@ -125,9 +134,13 @@ int main(){try{
      // Other settings never rebuild; neither does OFF, nor ON again with an unchanged network.
      need(n.handle_embedded("SetNrSettings",{{"tone",.5},{"structure",1}},11)["ok"]==true,"Tone change");
      action=n.take_nr_mode_request(12);need(action&&action->at("settings")["network"]==2&&deliver(*action)&&rebuilds==2,"A Tone change keeps the network and the Feature");
+     // ABI27: moving the compare split is composite-time only; it never rebuilds.
+     need(n.handle_embedded("SetNrSettings",{{"tone",.5},{"structure",1},{"compare_split",true},{"compare_split_position",.2}},12)["ok"]==true,"Split position change while ON");
+     action=n.take_nr_mode_request(12);need(action&&action->at("settings")["compare_split_position"]==.2f&&deliver(*action)&&rebuilds==2&&bridge.requested_settings.compare_split_position==.2f,
+          "A split position change reaches the bridge and keeps the Feature");
      need(n.handle_embedded("SetNrMode",{{"mode","off"}},13)["ok"]==true,"OFF");
      action=n.take_nr_mode_request(14);need(action&&action->at("mode")=="off"&&deliver(*action)&&rebuilds==2,"OFF never rebuilds");
      need(n.handle_embedded("SetNrMode",{{"mode","on"}},15)["ok"]==true,"ON again");
-     action=n.take_nr_mode_request(16);need(action&&deliver(*action)&&rebuilds==2&&acknowledged==5,"ON again with the same network reuses the Feature");}
-    std::cout<<"PASS embedded ownership, 5000 staged edits, OFF staging, request/read distinction, explicit takeover/release, lease expiry, network switch = one rebuild\n";return 0;
+     action=n.take_nr_mode_request(16);need(action&&deliver(*action)&&rebuilds==2&&acknowledged==6,"ON again with the same network reuses the Feature");}
+    std::cout<<"PASS embedded ownership, 5000 staged edits, OFF staging, request/read distinction, explicit takeover/release, lease expiry, network switch = one rebuild, split position never rebuilds\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

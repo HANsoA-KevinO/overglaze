@@ -8,6 +8,7 @@
 #include <thread>
 #include <string>
 #include <stdexcept>
+#include <algorithm>
 #include <cmath>
 using Microsoft::WRL::ComPtr;
 namespace lab::nr {
@@ -22,11 +23,12 @@ bool supported_color_format(DXGI_FORMAT f,bool game_facing) noexcept {
     if(f==DXGI_FORMAT_R16G16B16A16_FLOAT||f==DXGI_FORMAT_R32G32B32A32_FLOAT)return true;
     return game_facing&&f==DXGI_FORMAT_R11G11B10_FLOAT;
 }
-// The root constants: the caller's constants, then the codec's own block
-// (cbuffer Extrapolate + padding to a whole 16-byte register).
+// The root constants: the caller's constants, then the codec's own block, one
+// 16-byte register: cbuffer Extrapolate, then the compare split's columns
+// (SplitX, SplitLineBegin, SplitLineEnd; Live ABI27, in what was padding).
 struct ShaderConstants {
     PrePostColorConstants base{};
-    float extrapolate=1;std::uint32_t pad[3]{};
+    float extrapolate=1;std::uint32_t split_x=0,split_line_begin=0,split_line_end=0;
 };
 static_assert(sizeof(ShaderConstants)==144);
 constexpr UINT shader_constant_count=sizeof(ShaderConstants)/4;
@@ -53,6 +55,15 @@ void validate(const PrePostColorConstants& c,unsigned w,unsigned h) {
     }
 }
 }
+CompareSplitColumns compare_split_columns(float position,std::uint32_t width){
+    if(!Settings::valid_compare_split_position(position))throw std::logic_error("Compare split position must be finite 0..1");
+    CompareSplitColumns c;
+    c.split=static_cast<std::uint32_t>(std::min(static_cast<double>(width),std::floor(static_cast<double>(position)*width+.5)));
+    // About 2 px at 4K-ish widths, never thinner than 1; no divider at an edge.
+    if(c.split>0&&c.split<width){const std::uint32_t line=std::max<std::uint32_t>(1,width/1920);
+        c.line_begin=c.split>=line/2?c.split-line/2:0;c.line_end=std::min(width,c.line_begin+line);}
+    return c;
+}
 struct PrePostColorCodec::Impl {
     ComPtr<ID3D12Device> device;
     std::array<ComPtr<ID3D12Resource>,6> textures;
@@ -70,6 +81,7 @@ struct PrePostColorCodec::Impl {
     unsigned width=0,height=0,stride=0;
     bool first_prepare=true,first_composite=true,compare_split=false;unsigned guard_flags=0;
     float extrapolation=1.f; // set_extrapolation; recorded into the next prepare
+    float split_position=Settings::default_compare_split_position; // set_compare_split_position; likewise
     std::uint64_t fence_value=0,pre_count=0,post_count=0;
     ShaderConstants constants{};
     void check_owner() const {access.require();}
@@ -167,7 +179,12 @@ void PrePostColorCodec::prepare(ID3D12GraphicsCommandList* commands,const PrePos
     // Extrapolation is entered only for a factor other than 1, so 1 (and off)
     // runs exactly the plain composite.
     s.constants.base=c;s.constants.base.reserved=s.guard_flags|(s.compare_split?4u:0u)|(s.extrapolation!=1.f?8u:0u);
-    s.constants.extrapolate=s.extrapolation;s.commands=commands;s.stage=Impl::Stage::prepared;
+    s.constants.extrapolate=s.extrapolation;
+    // The split's columns, from the position recorded into this frame; all zero
+    // (unused by the shader) while the split is off.
+    const auto split=s.compare_split?compare_split_columns(s.split_position,c.width):CompareSplitColumns{};
+    s.constants.split_x=split.split;s.constants.split_line_begin=split.line_begin;s.constants.split_line_end=split.line_end;
+    s.commands=commands;s.stage=Impl::Stage::prepared;
     for(unsigned i:{1U,4U,5U})if(!s.first_prepare)transition(commands,s.textures[i].Get(),D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     s.dispatch(0);
     for(unsigned i:{1U,4U,5U})transition(commands,s.textures[i].Get(),D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -207,6 +224,10 @@ void PrePostColorCodec::discard_recorded() {
 }
 void PrePostColorCodec::set_compare_split(bool v){impl_->check_owner();if(impl_->stage!=Impl::Stage::idle)throw std::logic_error("Compare split changes only between frames");impl_->compare_split=v;}
 bool PrePostColorCodec::compare_split() const {impl_->check_owner();return impl_->compare_split;}
+void PrePostColorCodec::set_compare_split_position(float position){impl_->check_owner();
+    if(!Settings::valid_compare_split_position(position))throw std::logic_error("Compare split position must be finite 0..1");
+    if(impl_->stage!=Impl::Stage::idle)throw std::logic_error("Compare split position changes only between frames");impl_->split_position=position;}
+float PrePostColorCodec::compare_split_position() const {impl_->check_owner();return impl_->split_position;}
 void PrePostColorCodec::set_extrapolation(float factor){impl_->check_owner();
     if(!std::isfinite(factor)||factor<Settings::min_extrapolate_factor||factor>Settings::max_extrapolate_factor)throw std::logic_error("Extrapolation factor must be finite 1..4");
     if(impl_->stage!=Impl::Stage::idle)throw std::logic_error("Extrapolation changes only between frames");impl_->extrapolation=factor;}

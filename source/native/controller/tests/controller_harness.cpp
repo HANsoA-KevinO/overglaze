@@ -656,6 +656,35 @@ int wmain(int argc,wchar_t** argv){
             report["extrapolation"].push_back({{"requested",extrapolate},{"applied_factor",r["settings"].value("applied_extrapolate_factor",0.f)},{"evaluates",r.value("evaluates",0ULL)}});
         }
 
+        // Compare split position (Live ABI27) through the real bridge: the split on
+        // at 30% is applied by the composite with real NR, reported as the position
+        // the composite held, matched by the settings receipt (observed ==
+        // requested, position included), and neither rebuilds the Feature nor
+        // resets NR history on the receipt frame. Then the split off again, the
+        // position kept.
+        {
+            s=status_now();const auto before=s["nr_runtime"];
+            const auto serial=before.value("rebuild_serial",0ULL),generation=before.value("feature_generation",0ULL),releases=before.value("feature_releases",0ULL);
+            report["compare_split"]=json::array();
+            for(const bool split:{true,false}){
+                s=status_now();const auto evaluates=s["nr_runtime"].value("evaluates",0ULL);
+                need(lab::pipe_request(GetCurrentProcessId(),request("SetNrSettings",{{"tone",1},{"structure",1},{"compare_split",split},{"compare_split_position",.3}},s)).value("ok",false),
+                     "Request the compare split at 30%");
+                const auto applied=await([&](const json& st){const auto& r=st.at("nr_runtime");const auto set=r.value("settings",json::object());const auto o=set.value("observed",json());
+                    return r.value("evaluates",0ULL)>evaluates+2&&set.value("applied_compare_split_position",0.f)==.3f&&
+                        o.is_object()&&o.value("compare_split",2u)==(split?1u:0u)&&o.value("compare_split_position",0.f)==.3f&&
+                        st.at("nr_frame_control").value("state","")=="applied";},"the bridge to apply and acknowledge the compare split position",submit_frame,40);
+                const auto& r=applied["nr_runtime"];
+                need(r.value("state","")=="ready"&&r.value("error","").empty()&&r.value("execution_mode","")=="on","The compare split never stops NR: "+r.value("error",""));
+                need(r.value("rebuild_serial",0ULL)==serial&&r.value("feature_generation",0ULL)==generation&&r.value("feature_releases",0ULL)==releases,
+                     "The compare split position never rebuilds the Feature");
+                need(!r["settings"].value("history_reset_requested",true),"The compare split never resets NR history");
+                report["compare_split"].push_back({{"compare_split",split},{"applied_position",r["settings"].value("applied_compare_split_position",0.f)},
+                    {"observed_position",r["settings"]["observed"].value("compare_split_position",0.f)},{"rebuild_serial",r.value("rebuild_serial",0ULL)},
+                    {"history_reset_requested",r["settings"].value("history_reset_requested",true)},{"evaluates",r.value("evaluates",0ULL)}});
+            }
+        }
+
         // NR network preset (Live ABI26) through the real bridge. The Feature was
         // created with 0 (the DLL's own default) and reports the model it loaded.
         // Requesting network 1 while ON must release and recreate the Feature

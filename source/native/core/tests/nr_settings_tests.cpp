@@ -15,7 +15,7 @@ int main(){try{
     need(!lab::nr::Settings{std::numeric_limits<float>::quiet_NaN(),1}.valid(),"NaN");
     lab::Controller c;c.enable_nr_frame_control("synthetic-input-real-nr",true);
     const lab::json values={{"tone",.5f},{"structure",0.f},{"style",2u},{"exposure_stops",0.f},{"exposure_auto",0u},{"compare_split",0u},{"skin",1.f},{"automask",0u},
-        {"extrapolate",0u},{"extrapolate_factor",2.f},{"network",0u}};
+        {"extrapolate",0u},{"extrapolate_factor",2.f},{"network",0u},{"compare_split_position",.5f}};
     // ABI22: Tone/Structure 0..2, Skin 0..2, AutoMask 0/1.
     need(lab::nr::Settings{2,2}.valid()&&!lab::nr::Settings{2.01f,1}.valid()&&!lab::nr::Settings{1,2.01f}.valid(),"Tone/Structure range 0..2");
     {lab::nr::Settings s;need(s.skin==1.f&&s.automask==0&&s.valid(),"Default Skin 1, AutoMask off");s.skin=2.f;s.automask=1;need(s.valid(),"Skin 2 with mask");
@@ -47,6 +47,17 @@ int main(){try{
      need(lab::nr::SettingsReads{lab::nr::Settings{1,1,0},3,true}.matches(want),"Per-Evaluate reads never include the network");
      need(want.model_equal(lab::nr::Settings{1,1,0}),"model_equal compares per-Evaluate parameters only, not the creation-time network");
      need(!(want==lab::nr::Settings{1,1,0}),"The network is still part of the settings value");}
+    // ABI27 compare split position: the middle by default, finite 0..1 whether
+    // or not the split is on; a composite-time value, never a DLL read.
+    {lab::nr::Settings s;need(s.compare_split_position==.5f&&s.valid(),"Split in the middle by default");
+     for(const float p:{0.f,.25f,1.f}){s.compare_split_position=p;need(s.valid(),"Positions 0, .25 and 1 are valid");s.compare_split=1;need(s.valid(),"Also with the split on");s.compare_split=0;}
+     for(const float p:{-.001f,1.001f,-1.f,2.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity(),-std::numeric_limits<float>::infinity()}){
+         s.compare_split_position=p;need(!s.valid(),"Position outside finite 0..1 refused");s.compare_split=1;need(!s.valid(),"Refused with the split on too");s.compare_split=0;}
+     need(lab::nr::Settings::valid_compare_split_position(0.f)&&lab::nr::Settings::valid_compare_split_position(1.f)&&
+          !lab::nr::Settings::valid_compare_split_position(std::numeric_limits<float>::quiet_NaN()),"The shared position check");
+     lab::nr::Settings want{1,1,0};want.compare_split=1;want.compare_split_position=.3f;
+     need(lab::nr::SettingsReads{lab::nr::Settings{1,1,0},3,true}.matches(want),"DLL reads never include the compare split");
+     need(want.model_equal(lab::nr::Settings{1,1,0}),"The split position is not a model parameter");}
     need(lab::nr::SettingsReads{lab::nr::Settings{.5f,0.f,2,0.f},3,true}.matches(lab::nr::Settings{.5f,0.f,2,4.f}),"DLL reads never include host exposure");
     need(c.handle(req(c,"SetNrSettings",values),1)["error"]["code"]=="nr_off","OFF parameter request");
     c.handle(req(c,"SetNrMode",{{"mode","on"}}),2);auto on=c.take_nr_mode_request(3);c.acknowledge_nr_mode(on->at("revision"),1,true,true,true);
@@ -58,7 +69,12 @@ int main(){try{
         lab::json{{"tone",0},{"structure",1},{"extrapolate_factor",std::numeric_limits<double>::infinity()}},
         lab::json{{"tone",0},{"structure",1},{"network",3}},lab::json{{"tone",0},{"structure",1},{"network",-1}},lab::json{{"tone",0},{"structure",1},{"network",1.5}},
         lab::json{{"tone",0},{"structure",1},{"network",1.0}},lab::json{{"tone",0},{"structure",1},{"network",true}},lab::json{{"tone",0},{"structure",1},{"network","2"}},
-        lab::json{{"tone",0},{"structure",1},{"network",4294967297ULL}}})
+        lab::json{{"tone",0},{"structure",1},{"network",4294967297ULL}},
+        lab::json{{"tone",0},{"structure",1},{"compare_split_position",-.01}},lab::json{{"tone",0},{"structure",1},{"compare_split_position",1.0000001}},
+        lab::json{{"tone",0},{"structure",1},{"compare_split_position",2}},lab::json{{"tone",0},{"structure",1},{"compare_split_position","0.5"}},
+        lab::json{{"tone",0},{"structure",1},{"compare_split_position",true}},lab::json{{"tone",0},{"structure",1},{"compare_split_position",nullptr}},
+        lab::json{{"tone",0},{"structure",1},{"compare_split_position",std::numeric_limits<double>::quiet_NaN()}},
+        lab::json{{"tone",0},{"structure",1},{"compare_split_position",std::numeric_limits<double>::infinity()}}})
         need(c.handle(req(c,"SetNrSettings",bad),4)["error"]["code"]=="bad_config","Bad parameter request");
     auto r=req(c,"SetNrSettings",values);const auto accepted=c.handle(r,5);need(accepted["ok"]==true&&c.handle(r,6)==accepted,"Idempotency");
     need(c.handle(req(c,"SetNrMode",{{"mode","off"}}),7)["error"]["code"]=="pending","No concurrent mutation");
@@ -114,9 +130,34 @@ int main(){try{
      c.publish_nr_runtime({{"profile","cyberpunk-rr-experimental-v1"},{"state","ready"},{"settings",{
          {"observed_revision",sent->at("revision")},{"frame",6u},{"read_mask",3u},{"style_read",true},{"observed",sent->at("settings")}}}});
      c.acknowledge_nr_mode(sent->at("revision"),6,true,true,true);}
+    // Compare split position round trip: carried to the runtime mailbox with the
+    // split, kept when omitted and while the split is off, and a runtime that
+    // reports another position is no receipt.
+    {need(c.handle(req(c,"SetNrSettings",{{"tone",.5},{"structure",0},{"compare_split",true},{"compare_split_position",.25}}),9)["ok"]==true,"Split position accepted");
+     auto sent=c.take_nr_mode_request(9);
+     need(sent&&sent->at("settings")["compare_split"]==1&&sent->at("settings")["compare_split_position"]==.25f&&sent->at("settings")["network"]==2,"Position reaches the runtime mailbox; other values kept");
+     auto observed=sent->at("settings");observed["compare_split_position"]=.5f;
+     c.publish_nr_runtime({{"profile","cyberpunk-rr-experimental-v1"},{"state","ready"},{"settings",{
+         {"observed_revision",sent->at("revision")},{"frame",7u},{"read_mask",3u},{"style_read",true},{"observed",observed}}}});
+     refused=false;try{c.acknowledge_nr_mode(sent->at("revision"),7,true,true,true);}catch(const std::logic_error&){refused=true;}
+     need(refused,"A runtime that reports another split position is no receipt");
+     observed["compare_split_position"]=.25f;
+     c.publish_nr_runtime({{"profile","cyberpunk-rr-experimental-v1"},{"state","ready"},{"settings",{
+         {"observed_revision",sent->at("revision")},{"frame",7u},{"read_mask",3u},{"style_read",true},{"observed",observed}}}});
+     c.acknowledge_nr_mode(sent->at("revision"),7,true,true,true);
+     need(c.handle(req(c,"SetNrSettings",{{"tone",.5},{"structure",0},{"compare_split",false}}),9)["ok"]==true,"Split off");
+     sent=c.take_nr_mode_request(9);need(sent&&sent->at("settings")["compare_split"]==0&&sent->at("settings")["compare_split_position"]==.25f,"Off and omitted keep the position");
+     c.publish_nr_runtime({{"profile","cyberpunk-rr-experimental-v1"},{"state","ready"},{"settings",{
+         {"observed_revision",sent->at("revision")},{"frame",8u},{"read_mask",3u},{"style_read",true},{"observed",sent->at("settings")}}}});
+     c.acknowledge_nr_mode(sent->at("revision"),8,true,true,true);
+     for(const double p:{0.0,1.0}){need(c.handle(req(c,"SetNrSettings",{{"tone",.5},{"structure",0},{"compare_split_position",p}}),9)["ok"]==true,"Edges 0 and 1 accepted");
+         sent=c.take_nr_mode_request(9);need(sent&&sent->at("settings")["compare_split_position"]==static_cast<float>(p),"Edge position carried");
+         c.publish_nr_runtime({{"profile","cyberpunk-rr-experimental-v1"},{"state","ready"},{"settings",{
+             {"observed_revision",sent->at("revision")},{"frame",9u},{"read_mask",3u},{"style_read",true},{"observed",sent->at("settings")}}}});
+         c.acknowledge_nr_mode(sent->at("revision"),9,true,true,true);}}
     auto unconsumed=c.handle(req(c,"SetNrSettings",{{"tone",1.85},{"structure",2},{"skin",.5},{"automask",true}}),10);need(unconsumed["ok"]==true,"Tone/Structure above 1, Skin and AutoMask accepted");
     const auto expired=c.take_nr_mode_request(11011);need(expired&&expired->at("mode")=="off"&&!expired->contains("settings"),"Lease cancels unconsumed settings and requests OFF");
     c.publish_host({{"state","failed"},{"error","test"}});need(c.status()["capabilities"]["nr_settings"]==false,"Failure revokes capability");
     need(c.handle(req(c,"SetNrSettings",values),11012)["error"]["code"]=="backend_failed","No resurrection");
-    std::cout<<"PASS: settings range (Tone/Structure 0..2, Skin, AutoMask, extrapolation 1..4, network 0..2), mailbox, idempotency, exact DLL-read receipt, expiry and failure\n";return 0;
+    std::cout<<"PASS: settings range (Tone/Structure 0..2, Skin, AutoMask, extrapolation 1..4, network 0..2, split position 0..1), mailbox, idempotency, exact DLL-read receipt, expiry and failure\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

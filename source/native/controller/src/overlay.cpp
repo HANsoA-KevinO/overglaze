@@ -96,7 +96,7 @@ struct GameOverlay::Impl {
     unsigned width=0,height=0,rtv_stride=0,srv_stride=0;DXGI_FORMAT format=DXGI_FORMAT_UNKNOWN;
     DXGI_COLOR_SPACE_TYPE space=DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     std::uint64_t sequence=0,draws=0,skipped=0,last_tick=0,last_settings=0,settings_revision=0;
-    float tone=1,structure=1,exposure_stops=0,paper_white=203,skin=1,extrapolate_factor=2;bool settings_dirty=false,settings_loaded=false,exposure_auto=false,compare_split=false,automask=false,extrapolate=false;
+    float tone=1,structure=1,exposure_stops=0,paper_white=203,skin=1,extrapolate_factor=2,compare_split_position=nr::Settings::default_compare_split_position;bool settings_dirty=false,settings_loaded=false,exposure_auto=false,compare_split=false,automask=false,extrapolate=false;
     int model_style=0,network=0;
     std::string error;json controls=json::object();
     static inline std::atomic<Impl*> input_owner=nullptr;
@@ -403,6 +403,7 @@ struct GameOverlay::Impl {
         if(requested.is_object()&&(!settings_loaded||(!settings_dirty&&!ImGui::IsAnyItemActive()&&requested.value("revision",0ULL)!=settings_revision))){
             const auto v=requested.at("values");tone=v.value("tone",1.f);structure=v.value("structure",1.f);exposure_stops=v.value("exposure_stops",0.f);exposure_auto=v.value("exposure_auto",0u)!=0;compare_split=v.value("compare_split",0u)!=0;model_style=v.value("style",0);skin=v.value("skin",1.f);automask=v.value("automask",0u)!=0;
             extrapolate=v.value("extrapolate",0u)!=0;extrapolate_factor=v.value("extrapolate_factor",2.f);network=int(std::min(v.value("network",0u),nr::Settings::max_network));
+            compare_split_position=std::clamp(v.value("compare_split_position",nr::Settings::default_compare_split_position),0.f,1.f);
             settings_loaded=true;settings_revision=requested.value("revision",0ULL);}
         ImGui::Spacing();product::eyebrow("外观");
         const bool writable=!panel.other_owner&&!panel.failed;bool released=false;
@@ -411,7 +412,7 @@ struct GameOverlay::Impl {
         if(saved_model.has_model&&!settings_restored&&writable&&requested.is_object()){settings_restored=true;
             dispatch("SetNrSettings",{{"tone",saved_model.tone},{"structure",saved_model.structure},{"style",saved_model.style},{"exposure_stops",saved_model.exposure_stops},{"exposure_auto",saved_model.exposure_auto},
                 {"skin",saved_model.skin},{"automask",saved_model.automask},{"extrapolate",saved_model.extrapolate},{"extrapolate_factor",saved_model.extrapolate_factor},
-                {"network",saved_model.network}});}
+                {"network",saved_model.network},{"compare_split_position",saved_model.compare_split_position}});}
         ImGui::BeginDisabled(!writable);
         const float style_width=(ImGui::GetContentRegionAvail().x-ImGui::GetStyle().ItemSpacing.x*2)/3;
         for(int i=0;i<3;++i){if(i)ImGui::SameLine();const char* labels[]{"Style 0","Style 1","Style 2"};
@@ -487,17 +488,33 @@ struct GameOverlay::Impl {
         ImGui::Spacing();ImGui::Separator();ImGui::Spacing();
         ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("分屏对照");
         ImGui::SameLine(ImGui::GetWindowContentRegionMax().x-48*dpi);
-        if(panel_toggle("对比分屏：左半原图 / 右半 NR",compare_split,dpi)){settings_dirty=true;released=true;}mark("compare_split");
+        if(panel_toggle("对比分屏：左侧原图 / 右侧 NR",compare_split,dpi)){settings_dirty=true;released=true;}mark("compare_split");
 #ifdef LAB_OVERLAY_RESEARCH
         ImGui::SetItemTooltip("仅诊断视图；开启时不允许采集。");
 #else
         ImGui::SetItemTooltip("仅诊断视图；不作为画质验收依据。");
 #endif
+        // Where the split lies (Live ABI27): a composite-time value, so moving it
+        // never rebuilds NR or clears its history. Like every slider here it is
+        // sent while dragging (at most every 100 ms) and once more on release.
+        if(compare_split){
+            ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("分界位置");ImGui::SameLine(label_x);
+            const float center_width=ImGui::CalcTextSize("居中").x+ImGui::GetStyle().FramePadding.x*2;
+            ImGui::SetNextItemWidth(std::max(1.f,ImGui::GetContentRegionAvail().x-center_width-ImGui::GetStyle().ItemSpacing.x));
+            float percent=compare_split_position*100;
+            if(ImGui::SliderFloat("##compare_split_position",&percent,0,100,"%.0f%%",ImGuiSliderFlags_AlwaysClamp|ImGuiSliderFlags_NoRoundToFormat)){
+                compare_split_position=std::clamp(percent/100.f,0.f,1.f);settings_dirty=true;}
+            mark("compare_split_position");released|=ImGui::IsItemDeactivatedAfterEdit();
+            ImGui::SetItemTooltip("左侧原图占画面宽度的比例，默认 50%%。");
+            ImGui::SameLine();
+            if(ImGui::Button("居中")){compare_split_position=nr::Settings::default_compare_split_position;settings_dirty=true;released=true;}mark("compare_split_center");
+            ImGui::SetItemTooltip("分界回到画面中央。");}
         ImGui::TextDisabled("左侧原图  /  右侧 NR");
         ImGui::EndDisabled();
         if(settings_dirty&&writable&&(released||GetTickCount64()-last_settings>=100)){
             dispatch("SetNrSettings",{{"tone",tone},{"structure",structure},{"style",model_style},{"exposure_stops",exposure_stops},{"exposure_auto",exposure_auto?1:0},{"compare_split",compare_split?1:0},
-                {"skin",skin},{"automask",automask?1:0},{"extrapolate",extrapolate?1:0},{"extrapolate_factor",extrapolate_factor},{"network",network}});last_settings=GetTickCount64();settings_dirty=false;}
+                {"skin",skin},{"automask",automask?1:0},{"extrapolate",extrapolate?1:0},{"extrapolate_factor",extrapolate_factor},{"network",network},
+                {"compare_split_position",compare_split_position}});last_settings=GetTickCount64();settings_dirty=false;}
         if(!on)ImGui::TextDisabled("参数在开启后生效");
 #ifdef LAB_OVERLAY_RESEARCH
         ImGui::Spacing();ImGui::Separator();ImGui::TextDisabled("CAPTURE");
@@ -582,7 +599,7 @@ struct GameOverlay::Impl {
         ImGui::Spacing();ImGui::TextDisabled("%s 收起  ·  Esc 返回游戏",key_name);
         {OverlayPreferences current;current.hotkey=hotkey.load();current.white=paper_white;
          if(settings_loaded){current.has_model=true;current.tone=tone;current.structure=structure;current.style=unsigned(model_style);current.exposure_stops=exposure_stops;current.exposure_auto=exposure_auto?1u:0u;current.skin=skin;current.automask=automask?1u:0u;
-             current.extrapolate=extrapolate?1u:0u;current.extrapolate_factor=extrapolate_factor;current.network=unsigned(network);}
+             current.extrapolate=extrapolate?1u:0u;current.extrapolate_factor=extrapolate_factor;current.network=unsigned(network);current.compare_split_position=compare_split_position;}
          // A settings file must never take the panel down. A file range check
          // narrower than the slider's (-6..10 against -12..10) once made this
          // throw on every frame: render failed, the panel hid, and each Insert
