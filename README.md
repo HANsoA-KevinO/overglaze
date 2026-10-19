@@ -8,9 +8,9 @@ Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Ren
 
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
-## 0.2.0-preview.4
+## 0.2.0-preview.5
 
-Denuvo and anti-cheat are now risk notices instead of refusals: the install confirmation names what the check found, and installing is your acknowledgement. Denuvo games are set up from the Games page with late loading, and the page gives you the Steam launch option to paste. Automatic exposure prefers the game's own DLSS exposure and falls back to Overglaze's metering. The panel adds edit extrapolation (*外推*, ×1–×4). An unrecognized model can be allowed in Settings, off by default and at your own risk. Fixes cover window sizing on high-scale monitors, finding the game EXE in large and Xbox app folders, and NGX games whose motion vectors are padded differently from depth.
+NR model 310.9.16.0 is now a known version alongside 310.8.0.0. It carries two networks, and the panel's new *网络* setting picks one when NR is created: 1 is the 310.8.0.0 network, 2 the newer, smaller one the model uses by default, so both can be compared in the same file; switching rebuilds NR and clears its history. The compare split gets an adjustable boundary (*分界位置*, 0–100%) with a thin divider line, applied without rebuilding NR.
 
 After updating the application, choose *Update plugin* for each installed game. The model is still supplied by you. This preview does not add game certifications or new image-quality, performance or stability results. See [CHANGELOG.md](CHANGELOG.md).
 
