@@ -2,6 +2,12 @@
 
 All notable changes to Overglaze are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- NR model 310.9.16.0 is a known version (SHA-256 `2bc19bc0…28789f`), next to 310.8.0.0. Its exports and parameter names match 310.8.0.0 apart from one new input Overglaze does not set; the real-NR fixture passes in all four variants on driver 617.14.
+
 ## [0.2.0-preview.4] - 2026-10-09
 
 ### Added

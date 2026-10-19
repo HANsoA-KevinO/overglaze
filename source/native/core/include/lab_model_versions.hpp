@@ -31,6 +31,7 @@ inline constexpr const char* kFileName="nvngx_dlssnr.dll";
 struct KnownVersion {const char* sha256;const char* label;};
 inline constexpr KnownVersion kKnownVersions[]{
     {"e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e","v1 (reviewed baseline)"},
+    {"2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f","v2 310.9.16 (October 2026)"},
 };
 // nullptr when the hash names no reviewed version.
 inline const KnownVersion* known(std::string_view sha256) noexcept {

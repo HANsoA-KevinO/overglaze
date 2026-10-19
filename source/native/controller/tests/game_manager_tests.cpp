@@ -531,7 +531,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     {lab::games::Manager table(root,std::nullopt,{},false);
      const auto ms=table.model_status();need(ms.present&&!ms.known&&ms.sha256==model_hash,"the synthetic model is not a reviewed version");
      const auto mj=lab::games::model_json(ms);
-     need(mj["reason"]["code"]=="model-unknown-version"&&mj["known_versions"].size()==1&&mj["known_versions"][0]["sha256"]=="e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e","the status names the unknown version and the table");
+     need(mj["reason"]["code"]=="model-unknown-version"&&mj["known_versions"].size()==std::size(lab::model::kKnownVersions)&&mj["known_versions"][0]["sha256"]=="e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e","the status names the unknown version and the table");
      fs::create_directory(root/L"game12");put(root/L"game12/Twelve.exe",pe64(standard,"twelve"));put(root/L"game12/sl.interposer.dll","sl twelve");put(root/L"game12/sl.dlss_d.dll","dlss_d twelve");
      auto g12=table.add(root/L"game12/Twelve.exe");
      {auto s=st(table,g12);need(s.state=="needs-package"&&!s.can_make_package&&has_reason(s,"model-unknown-version")&&s.refusals.at("make-package").code=="model-unknown-version","an unknown model stops packaging, named");}
