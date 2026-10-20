@@ -337,9 +337,20 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     {auto s=st(m,dn);need(s.state=="available"&&s.can_install&&s.load_mode=="late_d3d12"&&s.other_loaders==std::vector<std::string>{"dxgi.dll"}&&
           s.risks==std::vector<std::string>{"anti-tamper","other-loaders"},"late loading: a root dxgi.dll is a notice, beside the anti-tamper risk");
      need(check_named(s.checks,"root-proxy")==nullptr,"and no root-proxy check applies to it");}
+    // Installed beside it, uninstalled, removed from the library: the other
+    // tool's dxgi.dll blocks none of it and is never touched.
+    {const auto foreign=lab::sha256(root/L"game6/dxgi.dll");
+     m.install(dn.id,true,"fixture consent: late loading beside another tool's dxgi.dll");
+     {auto s=st(m,dn);need(s.state=="installed"&&s.load_mode=="late_d3d12"&&fs::exists(root/L"game6/overglaze/overglaze_controller.dll"),"late loading installs beside it");
+      const auto txj=read(store/lab::wide(dn.id)/L"transaction.json");
+      need(!txj["files"].contains("dxgi.dll")&&txj["other_loaders"]==json::array({"dxgi.dll"})&&txj["risks"]==json::array({"anti-tamper","other-loaders"}),"nothing written at the root; the notice is recorded");}
+     {std::string said;try{m.forget(dn.id);}catch(const std::exception& x){said=x.what();}need(said.find("安装记录")!=std::string::npos,"while installed, forget is refused for the install record");}
+     m.uninstall(dn.id,true);need(!fs::exists(root/L"game6/overglaze")&&lab::sha256(root/L"game6/dxgi.dll")==foreign,"uninstall removes only Overglaze's files");
+     const auto before=m.list().size();m.forget(dn.id);
+     need(m.list().size()==before-1&&lab::sha256(root/L"game6/dxgi.dll")==foreign,"another tool's dxgi.dll does not block forget, and stays exactly as it was");}
     fs::remove(root/L"game6/dxgi.dll");
-    // Leave the registry and the package set exactly as the assertions below expect.
-    m.forget(dn.id);fs::remove_all(root/L"app/adapters/denuvo-ngx");
+    // Leave the package set exactly as the assertions below expect (the game is forgotten above).
+    fs::remove_all(root/L"app/adapters/denuvo-ngx");
     put(root/L"game3/Cheat.exe",pe64(standard,"cheat"));put(root/L"game3/sl.interposer.dll","sl");put(root/L"game3/sl.dlss_d.dll","dlss_d");put(root/L"game3/EasyAntiCheat_EOS.dll","eac");
     auto c=m.add(root/L"game3/Cheat.exe");{auto s=st(m,c);need(s.state=="needs-package"&&s.can_make_package&&s.preflight["anticheat_markers"].size()==1&&s.preflight["verdict"]=="sl-rr-ready","an anti-cheat game is not refused");
      need(check_named(s.checks,"anticheat")->outcome==lab::games::Outcome::fail&&s.anticheat==std::vector<std::string>{"Easy Anti-Cheat"}&&s.risks==std::vector<std::string>{"anticheat"}&&has_reason(s,"risk-anticheat"),"the marker is a failed check and a risk, named by product");}
@@ -504,6 +515,18 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      need(fs::file_size(root/L"game7/version.dll")==22,"the other tool's file is untouched");
      auto s=st(m,g);need(s.state=="installed"&&s.other_loaders==std::vector<std::string>{"version.dll"}&&has_reason(s,"risk-other-loaders"),"an installed game still names it");}
     fs::remove(root/L"game7/version.dll");
+    // ---- forget: refused while Overglaze's own plugin is installed, by its record
+    // or by a dxgi.dll that hashes to ours; another tool's dxgi.dll never blocks it.
+    {std::string said;try{m.forget(g.id);}catch(const std::exception& x){said=x.what();}
+     need(said.find("安装记录")!=std::string::npos&&fs::exists(root/L"game7/dxgi.dll"),"a root-proxy game still installed cannot be forgotten, and says why");
+     const auto listed=m.list();need(std::any_of(listed.begin(),listed.end(),[&](const lab::games::Entry& x){return x.id==g.id;}),"and stays in the library");}
+    {fs::create_directory(root/L"game13");put(root/L"game13/Thirteen.exe",pe64(standard,"thirteen"));auto t=m.add(root/L"game13/Thirteen.exe");
+     need(CopyFileW((root/L"game7/dxgi.dll").c_str(),(root/L"game13/dxgi.dll").c_str(),TRUE)!=FALSE,"our proxy, left without any record");
+     std::string said;try{m.forget(t.id);}catch(const std::exception& x){said=x.what();}
+     need(said.find("dxgi.dll 是釉光的")!=std::string::npos&&said.find(lab::sha256(root/L"game13/dxgi.dll").substr(0,12))!=std::string::npos,"a dxgi.dll with one of our hashes blocks forget, named as ours");
+     put(root/L"game13/dxgi.dll","another tool's dxgi.dll");m.forget(t.id);
+     const auto listed=m.list();need(std::none_of(listed.begin(),listed.end(),[&](const lab::games::Entry& x){return x.id==t.id;})&&fs::file_size(root/L"game13/dxgi.dll")==23,"another tool's dxgi.dll: forgotten, the file untouched");
+     fs::remove_all(root/L"game13");}
     {auto expected=lab::games::operation_stages("install");expected.erase(std::find(expected.begin(),expected.end(),"verify"));
      need(started(ev,"install","")==expected,"install reports its stages in order");
      unsigned done=0,skipped=0;for(const auto& x:ev){need(x.status!="failed","no failure");if(x.status=="done")++done;if(x.status=="skipped"){++skipped;need(x.stage=="verify","only the checker is skipped");}

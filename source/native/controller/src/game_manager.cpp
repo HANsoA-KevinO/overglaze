@@ -1526,8 +1526,29 @@ json Manager::plan_install(const std::string& id)const{
             {"ok",de?json(nullptr):json(data_space.available>=kDataDiskReserveBytes)},{"note","the staging copy is removed after a successful install"}}}};
     out["checker"]={{"path",text(p->directory/L"overglaze_install_check.exe")},{"sha256",p->checker_sha256}};
     return out;}
-void Manager::forget(const std::string& id){Writer writer(store_);const auto e=find(id);const auto dir=e.exe.parent_path();const auto tx=store_/wide(id)/L"transaction.json";if(fs::exists(tx))need(receipt(tx,e).at("state")=="removed","请先卸载或清理未完成安装");
-    for(const auto* n:{L"dxgi.dll",L"overglaze.install.json",L"overglaze_nvngx.dll",L"dlsslab.install.json",L"dlsslab_nvngx.dll"})need(!fs::exists(dir/n),"路径仍有插件文件，请先处理；不把移除记录当卸载");auto j=registry(store_);auto& items=j["entries"];for(auto it=items.begin();it!=items.end();++it)if(it->at("id")==id){items.erase(it);break;}save(store_/L"games.json",j);}
+// Removing a game from the library is refused only while Overglaze's own
+// plugin is still installed for it -- so that removing the record is never
+// mistaken for uninstalling: an install record that is not fully removed,
+// Overglaze's own config or bridge in the game directory, or a dxgi.dll beside
+// the EXE whose SHA-256 is one of ours (the install record's, the package's or
+// a published host's). Another tool's dxgi.dll -- next to a late-loading
+// install, which writes nothing at the root -- never blocks it and is never
+// touched: only the registry entry goes.
+void Manager::forget(const std::string& id){Writer writer(store_);const auto e=find(id);const auto dir=e.exe.parent_path();const auto tx=store_/wide(id)/L"transaction.json";
+    std::set<std::string> ours; // every dxgi.dll Overglaze wrote, or would write, for this game
+    if(fs::exists(tx)){const auto j=receipt(tx,e);
+        need(j.at("state")=="removed","这款游戏还装着釉光插件（安装记录尚未清除）：请先卸载或清理未完成的安装，再从列表移除");
+        if(j.at("files").contains("dxgi.dll"))ours.insert(j.at("files").at("dxgi.dll").get<std::string>());}
+    for(const auto* n:{L"overglaze.install.json",L"overglaze_nvngx.dll",L"dlsslab.install.json",L"dlsslab_nvngx.dll"})
+        need(!fs::exists(dir/n),"游戏目录里还有釉光的插件文件（"+text(fs::path(n))+"）：请先卸载，再从列表移除；不把移除记录当作卸载");
+    if(const auto root_dxgi=dir/L"dxgi.dll";fs::exists(root_dxgi)){
+        try{if(const Policy* p=match(local(e.exe))){if(p->payload.contains("dxgi.dll"))ours.insert(p->payload.at("dxgi.dll"));for(const auto& h:p->accepted_hosts)ours.insert(h);}}catch(...){}
+        for(const auto& published:{root_/L"app"/L"plugin"/L"dxgi.dll",root_/L"app"/L"research"/L"host"/L"dxgi.dll"}){std::error_code ec;
+            if(fs::is_regular_file(published,ec))try{ours.insert(digest(published));}catch(...){}}
+        std::string h;
+        try{h=lab::sha256(root_dxgi);}catch(const std::exception& ex){throw std::runtime_error("无法读取游戏目录里的 dxgi.dll（"+std::string(ex.what())+"）：不能确认它不是釉光的，暂不从列表移除");}
+        need(!ours.contains(h),"游戏目录里的 dxgi.dll 是釉光的（SHA-256 "+h.substr(0,12)+"，与安装记录或已发布插件一致）：插件仍在，请先卸载，再从列表移除");}
+    auto j=registry(store_);auto& items=j["entries"];for(auto it=items.begin();it!=items.end();++it)if(it->at("id")==id){items.erase(it);break;}save(store_/L"games.json",j);}
 StorageUsage Manager::storage_usage()const{StorageUsage u;
     {std::error_code ec;const auto space=fs::space(root_/L"data",ec);if(ec)u.complete=false;else u.data_disk_available=space.available;}
     unsigned visited=0;constexpr unsigned kBound=65536;

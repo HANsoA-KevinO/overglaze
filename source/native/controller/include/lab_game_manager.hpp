@@ -324,7 +324,11 @@ public:
     // verdict: no preflight verdict produces that route.)
     std::vector<Entry> list() const;
     Entry add(const std::filesystem::path& exe);
-    void forget(const std::string& id); // registry only; refuses installed/pending
+    // Registry only. Refused only while Overglaze's own plugin is still
+    // installed: an unfinished install record, its config / bridge in the game
+    // directory, or a dxgi.dll there whose SHA-256 is one of ours. Another
+    // tool's dxgi.dll does not block it and is left untouched.
+    void forget(const std::string& id);
     Status inspect(const Entry&) const;
     Preflight preflight(const Entry&) const;
     // Writes app/adapters/<name>/ from the published host. Refuses an existing
