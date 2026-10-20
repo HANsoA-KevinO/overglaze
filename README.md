@@ -6,9 +6,9 @@ Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Ren
 
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
-## 0.2.0-preview.6
+## 0.2.0-preview.7
 
-A fix for adding games. When you add a game by folder, an Unreal game EXE that is not named `*-Shipping.exe` (common in Xbox app builds) is now listed first, and crash reporters, launch helpers and anti-cheat launchers are listed last, so the preselected entry is the game. The check also looks for anti-cheat files at the game's root, so Easy Anti-Cheat installed beside an Xbox app package is now shown as a risk in the install confirmation.
+One-click updates. The desktop program now checks the project's GitHub releases when it starts (at most once a day; turn off *启动时检查更新* in Settings to stop it) and can download and install a newer version itself. Every update carries a manifest signed with the project's release key, and nothing is installed unless that signature verifies. Portable copies only show the new version and a link to the download page. The in-game components never connect to the network. This version has to be installed by hand once; later versions arrive through the update notice.
 
 The in-game plugin files are unchanged from 0.2.0-preview.5: games already updated for it need nothing, and games on an older plugin show *Update plugin* as before. The model is still supplied by you. This preview does not add game certifications or new image-quality, performance or stability results. See [CHANGELOG.md](CHANGELOG.md).
 
