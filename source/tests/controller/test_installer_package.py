@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -152,6 +153,50 @@ class InstallerPackageTests(unittest.TestCase):
         if result.returncode:
             self.skipTest("Junction creation unavailable on this filesystem")
         self.refused("Reparse point refused", payload=junction)
+
+
+class InstallerScriptTests(unittest.TestCase):
+    """Static checks of Overglaze.iss for the self-update hand-over; no compiler needed.
+
+    The desktop program starts the downloaded Setup with
+    /SILENT /SUPPRESSMSGBOXES /NORESTART /DIR="<root>" /WAITPID=<pid> /RELAUNCH.
+    """
+
+    def setUp(self):
+        self.text = (ROOT / "source/installer/Overglaze.iss").read_text(encoding="utf-8")
+
+    def section(self, start):
+        body = self.text[self.text.index(start):]
+        return body[:body.index("\nend;")]
+
+    def test_app_id_matches_the_program(self):
+        app_id = re.search(r"^AppId=\{(\{[0-9A-F-]{36}\})$", self.text, re.M).group(1)
+        header = (ROOT / "source/native/controller/include/lab_self_update.hpp").read_text(encoding="utf-8")
+        self.assertIn(f'kSetupAppId=L"{app_id}"', header, "the program finds its Setup registration by this AppId")
+        self.assertIn(app_id + "_is1", self.text)
+
+    def test_waitpid_waits_up_to_60_seconds_before_the_existing_checks(self):
+        initialize = self.section("function InitializeSetup")
+        self.assertIn("{param:WAITPID|0}", initialize)
+        self.assertIn("WaitForSingleObject(Process, WaitPidMilliseconds)", initialize)
+        self.assertIn("WaitPidMilliseconds = 60000;", self.text)
+        self.assertIn("Result := True;", initialize)
+        self.assertNotIn("Result := False", initialize, "waiting never refuses by itself; the existing checks decide")
+        self.assertLess(self.text.index("function InitializeSetup"), self.text.index("function PrepareToInstall"))
+
+    def test_relaunch_after_a_successful_install_also_when_silent(self):
+        runs = [line for line in self.text.splitlines() if line.startswith("Filename:") and "overglaze_viewer.exe" in line]
+        relaunch = [line for line in runs if "Check: ShouldRelaunch" in line]
+        self.assertEqual(len(relaunch), 1, runs)
+        self.assertNotIn("skipifsilent", relaunch[0])
+        self.assertNotIn("postinstall", relaunch[0])
+        self.assertIn("HasSwitch('/RELAUNCH')", self.section("function ShouldRelaunch"))
+        self.assertIn("not ShouldRelaunch", self.section("function MayLaunch"), "no second launch from the finish page")
+
+    def test_existing_refusals_remain(self):
+        self.assertIn("'update'", self.section("function PrepareToInstall"))
+        self.assertIn("RaiseException(Error)", self.section("procedure CurStepChanged"))
+        self.assertIn("'uninstall'", self.section("function InitializeUninstall"))
 
 
 if __name__ == "__main__":

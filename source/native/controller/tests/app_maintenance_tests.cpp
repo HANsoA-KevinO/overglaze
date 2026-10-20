@@ -12,8 +12,28 @@ void put(const fs::path& p,const std::string& s){fs::create_directories(p.parent
 void put(const fs::path& p,const lab::json& j){put(p,j.dump());}
 template<class F>void refuses(F f,const char* why){bool caught=false;try{f();}catch(const std::exception&){caught=true;}need(caught,why);}
 bool allows(const fs::path& root,const char* op){return lab::games::app_maintenance_check(root,op).allowed;}
+fs::path self_path(){std::wstring p(32768,L'\0');p.resize(GetModuleFileNameW(nullptr,p.data(),DWORD(p.size())));return p;}
+// Starts a command line (the program quoted inside it); waits at most 30 s for its exit code.
+DWORD run(const std::wstring& command){
+    std::vector<wchar_t> line(command.begin(),command.end());line.push_back(L'\0');
+    STARTUPINFOW si{};si.cb=sizeof si;PROCESS_INFORMATION pi{};
+    if(!CreateProcessW(nullptr,line.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&si,&pi))throw std::runtime_error("child process not started");
+    CloseHandle(pi.hThread);DWORD code=99;
+    if(WaitForSingleObject(pi.hProcess,30000)==WAIT_OBJECT_0)GetExitCodeProcess(pi.hProcess,&code);else TerminateProcess(pi.hProcess,98);
+    CloseHandle(pi.hProcess);return code;}
+// Child modes, run by copies of this program inside the synthetic application root.
+// --check <root>: 0 allowed, 2 blocked only by a running application, 3 otherwise.
+// --spawn-check <root> <checker>: runs "<checker> --check <root>" as its own child.
+// --sleep: a process that is nobody's ancestor.
+int child(int argc,wchar_t** argv){
+    const std::wstring mode=argv[1];
+    if(mode==L"--check"&&argc==3){const auto r=lab::games::app_maintenance_check(argv[2],"update");if(r.allowed)return 0;
+        for(const auto& b:r.blockers)if(b.at("code")!="application-running")return 3;return 2;}
+    if(mode==L"--spawn-check"&&argc==4)return int(run(L"\""+std::wstring(argv[3])+L"\" --check \""+argv[2]+L"\""));
+    if(mode==L"--sleep"&&argc==2){Sleep(30000);return 0;}
+    return 64;}
 }
-int main(){fs::path base;try{
+int wmain(int argc,wchar_t** argv){if(argc>1)return child(argc,argv);fs::path base;try{
     const auto temp=fs::temp_directory_path();base=temp/lab::wide("overglaze-maintenance-test-"+lab::uuid());
     need(fs::create_directory(base),"unique fixture directory");put(base/L"PURPOSE.json",lab::json{{"synthetic",true},{"game_started",false},{"nr_executed",false}});
     const auto root=base/L"installed app 中文";
@@ -25,6 +45,25 @@ int main(){fs::path base;try{
     put(root/L"app/release-manifest.json",lab::json{{"schema","overglaze-release-v2"},{"platform","windows-x64"},{"version","0.2.0-preview.2"}});
     need(allows(root,"update")&&allows(root,"uninstall"),"known application permits maintenance");
     need(!fs::exists(root/L"data"),"recognised-root preflight does not create a data directory");
+    // Self-update: the downloaded Setup runs from <root>\data\updates\<version>\ and waits for
+    // the Setup it unpacked, which runs this check. Only that ancestor, only from there.
+    {const auto self=self_path();
+     auto copy_to=[&](const fs::path& where){fs::create_directories(where.parent_path());fs::copy_file(self,where,fs::copy_options::overwrite_existing);return where;};
+     auto spawn_check=[&](const fs::path& from){const auto exe=copy_to(from);
+        const auto code=run(L"\""+exe.native()+L"\" --spawn-check \""+root.native()+L"\" \""+self.native()+L"\"");std::error_code ec;fs::remove(exe,ec);return code;};
+     need(spawn_check(root/L"data/updates/9.9.9/Overglaze-Setup-9.9.9-win64.exe")==0,"the self-update Setup in the program's update folder does not block its own check");
+     need(spawn_check(root/L"app/helper.exe")==2,"an ancestor running from the application directory still blocks");
+     need(spawn_check(root/L"data/other/helper.exe")==2,"only the update folder is exempt");
+     const auto sleeper=copy_to(root/L"data/updates/9.9.9/other.exe");
+     std::wstring command=L"\""+sleeper.native()+L"\" --sleep";STARTUPINFOW si{};si.cb=sizeof si;PROCESS_INFORMATION pi{};
+     need(CreateProcessW(nullptr,command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&si,&pi)!=FALSE,"sleeper started");
+     const auto blocked=lab::games::app_maintenance_check(root,"update");
+     TerminateProcess(pi.hProcess,0);WaitForSingleObject(pi.hProcess,10000);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);
+     bool running=false;for(const auto& b:blocked.blockers)running=running||b.at("code")=="application-running";
+     need(!blocked.allowed&&running,"a process in the update folder that is not our ancestor still blocks");
+     // An exited image can stay mapped for a moment: retry briefly.
+     for(unsigned attempt=0;;++attempt){std::error_code ec;fs::remove_all(root/L"data",ec);fs::remove(root/L"app/helper.exe",ec);
+        if(!fs::exists(root/L"data")&&!fs::exists(root/L"app/helper.exe"))break;need(attempt<50,"self-update fixture removed");Sleep(100);}}
     const auto store=root/L"data/settings/plugin-manager";const std::string id="{D17BE316-A35A-44AA-BF60-F46368171D41}";
     const auto game=base/L"synthetic-game/Game.exe";const auto box=store/lab::wide(id);
     const auto library=lab::json{{"schema","overglaze-game-library-v1"},{"entries",lab::json::array({{{"id",id},{"title","Synthetic game 中文"},{"exe",lab::utf8(game.wstring())}}})}};

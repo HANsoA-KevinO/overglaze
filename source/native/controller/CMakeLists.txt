@@ -62,8 +62,14 @@ add_executable(lab_game_status_tests tests/game_status_tests.cpp)
 target_link_libraries(lab_game_status_tests PRIVATE lab_game_manager)
 add_test(NAME native_game_status COMMAND lab_game_status_tests)
 set_tests_properties(native_game_status PROPERTIES TIMEOUT 30)
+# Self-update of the desktop program: the GitHub release check, the signed
+# manifest (ECDSA P-256 through CNG), the Setup download and the hand-over.
+# Out of game only: the viewer and overglaze_games link it, nothing that runs in
+# a game does (test_controller_link_closure.py checks their imports).
+add_library(lab_self_update STATIC src/self_update.cpp)
+target_link_libraries(lab_self_update PUBLIC lab_controller_includes lab_core lab_root_locator lab_game_manager winhttp bcrypt)
 add_executable(overglaze_games src/games_cli.cpp)
-target_link_libraries(overglaze_games PRIVATE lab_game_manager)
+target_link_libraries(overglaze_games PRIVATE lab_game_manager lab_self_update)
 # The Steam launch-option launcher for games that refuse any Lab file in their own
 # directory (RE9): starts the game unchanged, injects on the player's first Insert.
 add_executable(overglaze_launch WIN32 src/launcher.cpp)
@@ -88,7 +94,7 @@ target_link_libraries(lab_game_manager_ui_tests PRIVATE lab_game_manager lab_img
 add_test(NAME native_game_manager_ui COMMAND lab_game_manager_ui_tests)
 set_tests_properties(native_game_manager_ui PROPERTIES TIMEOUT 45)
 
-add_executable(overglaze_viewer WIN32 src/viewer.cpp src/game_manager_ui.cpp)
+add_executable(overglaze_viewer WIN32 src/viewer.cpp src/game_manager_ui.cpp src/self_update_ui.cpp)
 if(LAB_BUILD_PYTHON)
   set(OVERGLAZE_ICON_PATH "${CMAKE_CURRENT_BINARY_DIR}/overglaze.ico")
   set(OVERGLAZE_RESOURCE_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/resources/resource.h")
@@ -103,13 +109,20 @@ if(LAB_BUILD_PYTHON)
 else()
   message(FATAL_ERROR "Python is required to generate the Overglaze application icon")
 endif()
-target_link_libraries(overglaze_viewer PRIVATE lab_controller_includes lab_game_manager lab_capture_library lab_preview_export lab_ui_preferences lab_imgui d3dcompiler dwmapi shell32 comdlg32)
+target_link_libraries(overglaze_viewer PRIVATE lab_controller_includes lab_game_manager lab_self_update lab_capture_library lab_preview_export lab_ui_preferences lab_imgui d3dcompiler dwmapi shell32 comdlg32)
 add_test(NAME native_capture_viewer_smoke COMMAND overglaze_viewer --smoke-test)
 set_tests_properties(native_capture_viewer_smoke PROPERTIES TIMEOUT 40)
 add_test(NAME native_capture_viewer_controls COMMAND lab_capture_library_tests --viewer $<TARGET_FILE:overglaze_viewer>)
 set_tests_properties(native_capture_viewer_controls PROPERTIES TIMEOUT 40)
 add_test(NAME native_color_contract_viewer_controls COMMAND lab_color_contract_tests --viewer $<TARGET_FILE:overglaze_viewer>)
 set_tests_properties(native_color_contract_viewer_controls PROPERTIES TIMEOUT 40)
+# Self-update without the network: versions, ephemeral-key signatures, canned
+# GitHub JSON, manifests, install/portable, download folders, and check +
+# download + verify against a loopback HTTP server.
+add_executable(lab_self_update_tests tests/self_update_tests.cpp)
+target_link_libraries(lab_self_update_tests PRIVATE lab_self_update ws2_32)
+add_test(NAME native_self_update COMMAND lab_self_update_tests --viewer $<TARGET_FILE:overglaze_viewer>)
+set_tests_properties(native_self_update PROPERTIES TIMEOUT 120)
 
 add_executable(overglaze_console WIN32 src/console.cpp src/console_ui.cpp)
 target_link_libraries(overglaze_console PRIVATE lab_controller_includes lab_core lab_pair_preview lab_root_locator lab_imgui windowscodecs shell32)

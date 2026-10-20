@@ -1559,11 +1559,19 @@ AppMaintenanceStatus app_maintenance_check(const fs::path& selected,const std::s
         std::set<DWORD> ancestors;DWORD ancestor=GetCurrentProcessId();
         for(unsigned depth=0;depth<16;++depth){const auto it=parents.find(ancestor);if(it==parents.end()||!it->second||!ancestors.insert(it->second).second)break;ancestor=it->second;}
         const auto prefix=out.root.native()+L"\\";
+        auto under=[](const std::wstring& image,const std::wstring& folder){
+            return image.size()>folder.size()&&CompareStringOrdinal(image.data(),int(folder.size()),folder.data(),int(folder.size()),TRUE)==CSTR_EQUAL;};
+        // The desktop program's self-update starts the downloaded Setup from
+        // <root>\data\updates\<version>\; that loader waits for the Setup it
+        // unpacked, which runs this check. Exempt only such a process on our
+        // own ancestry chain, only for update, only from that folder.
+        const auto updates=(out.root/L"data"/L"updates").native()+L"\\";
         for(const auto& process_info:processes){const auto& proc=process_info;if(proc.th32ProcessID==GetCurrentProcessId())continue;Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,proc.th32ProcessID));
             if(!process.valid()){if(wcsncmp(proc.szExeFile,L"overglaze",9)==0)block("process-unreadable","无法确认某个 Overglaze 进程已退出");continue;}
             std::wstring image(32768,0);DWORD count=DWORD(image.size());if(!QueryFullProcessImageNameW(process.value,0,image.data(),&count))continue;image.resize(count);
             if(operation=="uninstall"&&ancestors.contains(proc.th32ProcessID)&&winpath::same_spelling(fs::path(image),out.root/L"app/unins000.exe"))continue;
-            if(image.size()>prefix.size()&&CompareStringOrdinal(image.data(),int(prefix.size()),prefix.data(),int(prefix.size()),TRUE)==CSTR_EQUAL)
+            if(operation=="update"&&ancestors.contains(proc.th32ProcessID)&&under(image,updates))continue;
+            if(under(image,prefix))
                 block("application-running","请先退出应用："+text(fs::path(image).filename()),fs::path(image));
         }
         const auto store=out.root/L"data"/L"settings"/L"plugin-manager";

@@ -13,6 +13,13 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 HANsoA-KevinO"
 SPDX-License-Identifier = "MIT"
 
+# The release public key (a binary BCRYPT_ECCPUBLIC_BLOB) that verifies signed updates.
+[[annotations]]
+path = "assets/release-key/overglaze-release-p256.public.blob"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 HANsoA-KevinO"
+SPDX-License-Identifier = "MIT"
+
 # THIRD_PARTY_NOTICES.md reproduces the notices of the components it lists, so it
 # carries their licences as well as the project's own.
 [[annotations]]

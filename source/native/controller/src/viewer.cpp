@@ -13,6 +13,7 @@
 #include "lab_product_ui.hpp"
 #include "lab_root_locator.hpp"
 #include "lab_model_setup.hpp"
+#include "lab_self_update_ui.hpp"
 #include <imgui.h>
 #include <imgui_impl_win32.h>
 #include <imgui_impl_dx11.h>
@@ -133,6 +134,7 @@ struct View {
     bool games_page=false,manager_allowed=true;std::unique_ptr<lab::GameManagerPage> manager;
     bool about=false;std::string about_error;std::future<lab::games::ModelStatus> model_job;lab::games::ModelStatus model;bool model_checked=false;
     std::unique_ptr<lab::ModelSetupPreferences> model_setup;
+    std::unique_ptr<lab::UpdatePanel> updates; // check, notice and hand-over to the Setup (out of game only)
     bool setup_requested=false,setup_importing=false,startup_model_check=false;std::string setup_error;
     Renderer::Draw ui{&gpu,0,0},a{&gpu,1,1},b{&gpu,1,2},delta{&gpu,2,1};
     lab::ViewerPreferences preferences()const{lab::ViewerPreferences p;p.display=gpu.display;p.processing=gpu.processing_enabled;p.nearest=gpu.pixel_nearest;p.library=library_visible;p.hdr=hdr_preferred;p.view=difference?2u:wipe?1u:0u;p.wipe=wipe_position;return p;}
@@ -159,7 +161,7 @@ struct View {
         const std::filesystem::path selected_model(path.data());const auto root=library_root().parent_path();setup_error.clear();setup_importing=true;startup_model_check=false;
         const bool allow=allow_unrecognized();
         model_job=std::async(std::launch::async,[root,selected_model,allow]{lab::games::Manager m(root);m.allow_unrecognized_model(allow);return m.import_model(selected_model);});}
-    void poll(){using namespace std::chrono_literals;
+    void poll(){using namespace std::chrono_literals;if(updates)updates->poll();
         if(model_job.valid()&&model_job.wait_for(0ms)==std::future_status::ready){const bool imported=setup_importing;
             try{auto checked=model_job.get();if(imported&&!checked.error.empty())setup_error=checked.error;else{model=std::move(checked);model_checked=true;
                     if(imported&&model.usable()){if(model_setup)model_setup->remember(lab::ModelSetupState::Decision::completed);manager.reset();}}}
@@ -281,7 +283,7 @@ struct View {
         ImGui::SetNextWindowPos({io.DisplaySize.x*.5f,io.DisplaySize.y*.5f},ImGuiCond_Appearing,{.5f,.5f});
         {const float w=std::min(620*dpi,io.DisplaySize.x-48*dpi);ImGui::SetNextWindowSizeConstraints({w,0},{w,FLT_MAX});}
         if(ImGui::BeginPopupModal("设置##product",&about,ImGuiWindowFlags_AlwaysAutoResize)){
-            lab::product::wordmark(dpi);ImGui::Spacing();ImGui::TextDisabled("0.2.0 Preview 3  /  WINDOWS · DX12");ImGui::Spacing();
+            lab::product::wordmark(dpi);ImGui::Spacing();ImGui::TextDisabled("%s  /  WINDOWS · DX12",updates&&!updates->version().empty()?updates->version().c_str():"版本未知");ImGui::Spacing();
             ImGui::TextWrapped("NR 控制与采集浏览");
             ImGui::Spacing();ImGui::SeparatorText("模型");
             const bool unrecognized_in_use=model_checked&&model.usable()&&!model.known;
@@ -310,11 +312,13 @@ struct View {
                 ImGui::TextWrapped("数据：%s",lab::utf8(library_root().wstring()).c_str());
                 ImGui::TextWrapped("不同安装目录的数据独立。");
                 if(ImGui::SmallButton("复制根目录路径"))ImGui::SetClipboardText(root.c_str());}
+            if(updates){ImGui::Spacing();updates->settings(window,dpi);}
             ImGui::Spacing();ImGui::SeparatorText("使用范围");ImGui::TextWrapped("适合离线单人游戏；联网或带反作弊的游戏风险自负。NR 默认关闭。");
-            ImGui::TextWrapped("离线工具，无遥测。非 NVIDIA 官方产品。");
+            ImGui::TextWrapped("无遥测。只有检查更新时联网（读取 GitHub 公开发布信息，可关闭）；游戏内组件从不联网。非 NVIDIA 官方产品。");
             ImGui::Spacing();ImGui::TextDisabled("MIT · 第三方许可见 THIRD_PARTY_NOTICES.md");
             if(ImGui::Button("关闭",{100*dpi,36*dpi}))ImGui::CloseCurrentPopup();mark("app.about.close");ImGui::EndPopup();}
         ImGui::Dummy({0,12*dpi});ImGui::Separator();ImGui::Dummy({0,8*dpi});
+        if(updates){updates->banner(window,dpi);if(updates->take_open_games())games_page=true;}
         if(games_page){if(manager_allowed){if(!manager)manager=std::make_unique<lab::GameManagerPage>(library_root().parent_path(),true,allow_unrecognized());manager->draw(window,dpi);}else ImGui::TextDisabled("采集回归模式：不读写游戏管理登记。");ImGui::End();return;}
         ImGui::PushFont(nullptr,26);ImGui::TextUnformatted("采集浏览");ImGui::PopFont();
         ImGui::SameLine(ImGui::GetWindowWidth()-252*dpi);
@@ -448,6 +452,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
         view.games_page=!smoke&&!captures&&(games||source.empty());view.manager_allowed=!smoke;
         view.model_setup=std::make_unique<lab::ModelSetupPreferences>(smoke?std::filesystem::path{}:library_root());
         if(!smoke)view.check_model(true);
+        // The regression modes never touch the network or the update record.
+        view.updates=std::make_unique<lab::UpdatePanel>(!smoke);
         auto previous=library_root()/L"settings"/L"viewer.json";
         for(const auto* name:{L"viewer-display-v2.json",L"viewer-display-v3.json"})if(std::filesystem::exists(library_root()/L"settings"/name))previous=library_root()/L"settings"/name;
         lab::UiPreferencesFile preferences(smoke?std::filesystem::path{}:library_root()/L"settings"/L"viewer-display-v4.json",lab::ViewerPreferences{}.document(),smoke?std::filesystem::path{}:previous,smoke?std::filesystem::path{}:library_root());view.restore(lab::ViewerPreferences::parse(preferences.loaded()));view.test_folder_dispatch=smoke;
@@ -466,7 +472,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
             {"export",[&]{return !view.last_export.empty()&&!view.exporting.valid();}}};
         bool quit=false,display_ui_configured=false,processing_qa_started=false;unsigned frames=0,test_phase=0,test_step=0;std::uint64_t next_output=0;const auto start=GetTickCount64();lab::json background_checks=lab::json::object(),wipe_checks=nullptr,final_checks=lab::json::object(),processing_checks=lab::json::array();
         while(!quit){MSG m{};while(PeekMessageW(&m,nullptr,0,0,PM_REMOVE)){TranslateMessage(&m);DispatchMessageW(&m);if(m.message==WM_QUIT)quit=true;}if(quit)break;
-            view.poll();if(resize_width&&resize_height){gpu.resize(resize_width,resize_height,gpu.hdr);resize_width=resize_height=0;}
+            view.poll();if(view.updates&&view.updates->exit_requested())break; // the Setup takes over
+            if(resize_width&&resize_height){gpu.resize(resize_width,resize_height,gpu.hdr);resize_width=resize_height=0;}
             if(view_check&&view.raw&&!processing_qa_started){need(view.raw->color_contract(2).reconstruction_available,"No supported reference for view check");
                 processing_qa_started=true;view.set_pair(1,2);view.fit=false;view.zoom=1;view.difference=view.wipe=view.hdr_preferred=false;gpu.apply_hdr_preference(false);
                 gpu.display.exposure=0;gpu.display.mapping=3;gpu.display.nr_reconstruct=0;}

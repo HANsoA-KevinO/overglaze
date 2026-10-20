@@ -131,6 +131,7 @@
    "test_game_reason_codes.py",
    "test_live_abi_header.py",
    "test_out_of_game_paths.py",
+   "test_sign_release.py",
    "test_track_boundaries.py"
   ]
  },
@@ -926,6 +927,21 @@
   },
   "runtime/tests/color_test_gpu.hpp": {
    "track": "runtime"
+  },
+  "controller/include/lab_self_update.hpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_self_update_ui.hpp": {
+   "track": "controller"
+  },
+  "controller/src/self_update.cpp": {
+   "track": "controller"
+  },
+  "controller/src/self_update_ui.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/self_update_tests.cpp": {
+   "track": "controller"
   }
  }
 }

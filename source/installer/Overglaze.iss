@@ -90,22 +90,68 @@ Name: "{autodesktop}\Overglaze"; Filename: "{app}\app\overglaze_viewer.exe"; Wor
 
 [Run]
 Filename: "{app}\app\overglaze_viewer.exe"; Description: "{cm:LaunchProgram}"; Flags: nowait postinstall skipifsilent unchecked; Check: MayLaunch
+; The desktop program's self-update passes /RELAUNCH: reopen it after a
+; successful installation, silent or not. Not reached when installation fails.
+Filename: "{app}\app\overglaze_viewer.exe"; WorkingDir: "{app}"; Flags: nowait; Check: ShouldRelaunch
 
 [Code]
 const
   UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{66B920DD-3026-4D7D-AC73-64E349940B95}_is1';
+  SYNCHRONIZE = $00100000;
+  WAIT_TIMEOUT = $00000102;
+  WaitPidMilliseconds = 60000;
 var
   PreviousRoot: String;
   HelperExtracted: Boolean;
 
-function MayLaunch: Boolean;
+function OpenProcess(DesiredAccess, InheritHandle, ProcessId: Longword): Longword;
+external 'OpenProcess@kernel32.dll stdcall';
+function WaitForSingleObject(Handle, Milliseconds: Longword): Longword;
+external 'WaitForSingleObject@kernel32.dll stdcall';
+function CloseHandle(Handle: Longword): Longword;
+external 'CloseHandle@kernel32.dll stdcall';
+
+function HasSwitch(const Name: String): Boolean;
 var
   I: Integer;
 begin
-  Result := not WizardSilent;
+  Result := False;
   for I := 1 to ParamCount do
-    if CompareText(ParamStr(I), '/NOLAUNCH') = 0 then
-      Result := False;
+    if CompareText(ParamStr(I), Name) = 0 then
+      Result := True;
+end;
+
+function ShouldRelaunch: Boolean;
+begin
+  Result := HasSwitch('/RELAUNCH');
+end;
+
+function MayLaunch: Boolean;
+begin
+  Result := not WizardSilent and not HasSwitch('/NOLAUNCH') and not ShouldRelaunch;
+end;
+
+// The desktop program's self-update passes its own process id: wait up to 60 s
+// for it to exit. Whatever happens, the existing checks still decide afterwards
+// (PrepareToInstall refuses while an Overglaze program or a registered game runs).
+function InitializeSetup: Boolean;
+var
+  Pid: Integer;
+  Process, Waited: Longword;
+begin
+  Result := True;
+  Pid := StrToIntDef(ExpandConstant('{param:WAITPID|0}'), 0);
+  if Pid > 0 then begin
+    Process := OpenProcess(SYNCHRONIZE, 0, Pid);
+    if Process <> 0 then begin
+      Log('Waiting for process ' + IntToStr(Pid) + ' to exit');
+      Waited := WaitForSingleObject(Process, WaitPidMilliseconds);
+      CloseHandle(Process);
+      if Waited = WAIT_TIMEOUT then
+        Log('Process ' + IntToStr(Pid) + ' is still running after 60 s');
+    end else
+      Log('Process ' + IntToStr(Pid) + ' is not running');
+  end;
 end;
 
 function SameRoot(const Left, Right: String): Boolean;

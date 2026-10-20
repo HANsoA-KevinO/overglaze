@@ -132,6 +132,34 @@ class RootProxyClosure(unittest.TestCase):
         self.assertLessEqual(len(imports), 4, f"the root proxy's import list grew: {sorted(imports)}")
 
 
+class NoNetworkInGame(unittest.TestCase):
+    """The files that run in a game never connect anywhere; only the desktop
+    program's self-update does (lab_self_update, viewer and overglaze_games)."""
+
+    NETWORK = {"winhttp.dll", "wininet.dll", "ws2_32.dll", "wsock32.dll", "urlmon.dll", "websocket.dll",
+               "httpapi.dll", "dnsapi.dll", "winhttpcom.dll", "webio.dll"}
+
+    def test_in_game_files_import_no_network_library(self):
+        for name in ("overglaze_controller.dll", "dxgi.dll", "overglaze_nvngx.dll"):
+            dll = BUILD / name
+            with self.subTest(file=name):
+                if not dll.is_file():
+                    self.skipTest(f"{dll} not built")
+                imports = imported_modules(dll)
+                self.assertEqual(sorted(self.NETWORK & imports), [], f"{name} imports a network library (all: {sorted(imports)})")
+
+    def test_the_host_links_no_self_update_object(self):
+        found = sorted(f"{lib}:{obj}" for lib, obj in members(HOST_MAP) if lib == "lab_self_update" or obj.startswith("self_update"))
+        self.assertEqual(found, [], "the self-update code reached the in-game host")
+
+    def test_the_desktop_program_is_where_the_network_is(self):
+        # Keeps the check above meaningful: the import reader does see WinHTTP.
+        viewer = BUILD.parent / "overglaze_viewer.exe"
+        if not viewer.is_file():
+            self.skipTest(f"{viewer} not built")
+        self.assertIn("winhttp.dll", imported_modules(viewer))
+
+
 def imported_modules(path):
     """Module names in a PE64 import directory, read straight from the file."""
     import struct

@@ -8,6 +8,7 @@
 #include "lab_windows_path.hpp"
 #include "lab_brand.hpp"
 #include "lab_root_locator.hpp"
+#include "lab_self_update.hpp"
 #include <iostream>
 #include <algorithm>
 #include <map>
@@ -60,7 +61,11 @@ const wchar_t* kVerbs=L" <verb> ...\n"
     L"  watch [--seconds N] [--once]      wait for late-loading games to appear and attach, once each\n"
     L"  forget <id|exe>\n"
     L"  import-known                      register every package whose game directory holds a Lab install\n"
-    L"  storage                           what the manager keeps per game: staging and recovery copies (read-only)\n";
+    L"  storage                           what the manager keeps per game: staging and recovery copies (read-only)\n"
+    L"  self-update check                 is a newer release on GitHub? Reads public GitHub release data only; for a\n"
+    L"                                    signed release the manifest's signature is verified (read-only)\n"
+    L"  self-update download              the same check, then download the Setup into data\\updates\\<version>\\ and\n"
+    L"                                    verify its size and SHA-256 against the signed manifest; never starts it\n";
 std::wstring usage(){return std::wstring(L"Usage: ")+lab::brand::kGamesCliName+kVerbs;}
 }
 int wmain(int argc,wchar_t** argv){
@@ -75,6 +80,20 @@ int wmain(int argc,wchar_t** argv){
             const auto result=lab::games::app_maintenance_check(value(L"--root"),lab::utf8(a[1]));
             if(has(L"--installer-text"))std::cout<<result.message<<'\n';else std::cout<<lab::games::app_maintenance_json(result).dump(2)<<'\n';
             return result.allowed?0:2;
+        }
+        // The desktop program's update path, without the window: the same
+        // check and download functions, never the Setup itself.
+        if(verb=="self-update"){
+            if(a.size()<2||(a[1]!=L"check"&&a[1]!=L"download"))throw std::runtime_error("self-update needs check or download");
+            const auto at=lab::update::detect_self();const auto running=lab::update::running_version();
+            const auto endpoint=lab::update::official(running);
+            const auto offer=lab::update::check(endpoint,*lab::update::parse_version(running));
+            auto out=lab::update::offer_json(offer,running,at);
+            if(a[1]==L"download"){
+                if(offer.state!=lab::update::Offer::State::available)out["downloaded"]=nullptr;
+                else{const auto file=lab::update::download_setup(endpoint,offer,at.data);out["downloaded"]=lab::utf8(file.wstring());out["verified"]=true;}
+            }
+            std::cout<<out.dump(2)<<'\n';return 0;
         }
         if(verb=="preflight"){if(a.size()<2)throw std::runtime_error("preflight needs a path");
             std::filesystem::path p=a[1];if(std::filesystem::is_directory(p)){const auto d=lab::games::discover(p);if(d.executables.size()!=1)throw std::runtime_error("Directory holds "+std::to_string(d.executables.size())+" executables; pass the game EXE");p=d.executables.front();}
