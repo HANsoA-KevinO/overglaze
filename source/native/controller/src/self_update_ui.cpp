@@ -44,6 +44,11 @@ UpdatePanel::UpdatePanel(bool enabled):enabled_(enabled){
             for(const auto& entry:manager.list()){const auto status=manager.inspect(entry);if(status.installed&&status.update_available)++count;}
             return count;});
     }
+    // The offer an earlier check found, verified again without the network,
+    // before and independent of the automatic check.
+    {std::string why;
+     offers_.start(update::cached_offer(install_.data,update::official(running_text_),*running_,&why));
+     if(!why.empty())log_line(why);}
     if(update::automatic_check_due(settings,std::time(nullptr)))start_check(Mode::automatic);
 }
 UpdatePanel::~UpdatePanel(){check_cancel_->store(true);if(job_)job_->cancel=true;}
@@ -52,13 +57,19 @@ void UpdatePanel::start_check(Mode mode){
     if(!enabled_||!running_||checking_.valid()||installing_.valid())return;
     check_mode_=mode;check_message_.clear();
     store_->update([](update::Settings& s){s.last_check=std::time(nullptr);});
-    const auto endpoint=update::official(running_text_);const auto running=*running_;const auto cancel=check_cancel_;
-    checking_=std::async(std::launch::async,[endpoint,running,cancel]{return update::check(endpoint,running,cancel.get());});
+    const auto endpoint=update::official(running_text_);const auto running=*running_;const auto cancel=check_cancel_;const auto data=install_.data;
+    checking_=std::async(std::launch::async,[endpoint,running,cancel,data]{
+        auto offer=update::check(endpoint,running,cancel.get());
+        // A completed check decides the cache: a signed offer replaces it, anything else removes it.
+        try{update::record_offer(data,offer);}catch(const std::exception& e){log_line(std::string("更新提示未保存：")+e.what());}
+        return offer;});
 }
 void UpdatePanel::start_install(){
-    if(!offer_||offer_->state!=update::Offer::State::available||!install_.by_setup||installing_.valid()||checking_.valid())return;
-    install_message_.clear();job_=std::make_shared<Job>();
-    const auto job=job_;const auto store=store_;const auto offer=*offer_;const auto at=install_;
+    const auto* shown=offers_.shown();
+    if(!shown||shown->state!=update::Offer::State::available||!install_.by_setup||installing_.valid()||checking_.valid())return;
+    install_message_.clear();job_=std::make_shared<Job>();install_from_cache_=shown->from_cache;
+    // A cached offer takes exactly this path too: download, size and SHA-256 against the signed manifest, the same checks.
+    const auto job=job_;const auto store=store_;const auto offer=*shown;const auto at=install_;
     const auto endpoint=update::official(running_text_);const auto from=running_text_;
     installing_=std::async(std::launch::async,[job,store,offer,at,endpoint,from]()->std::string{
         job->stage=1;
@@ -81,22 +92,29 @@ void UpdatePanel::poll(){
     if(ready(checking_)){
         std::string result;
         try{auto offer=checking_.get();
-            if(offer.state==update::Offer::State::up_to_date){result="已是最新版本";offer_.reset();}
-            else{result=std::string(offer.state==update::Offer::State::available?"发现新版本 ":"发现新版本（需手动下载） ")+offer.version;
-                offer_=std::move(offer);dismissed_=false;}
+            if(offer.state==update::Offer::State::up_to_date)result="已是最新版本";
+            else result=std::string(offer.state==update::Offer::State::available?"发现新版本 ":"发现新版本（需手动下载） ")+offer.version;
+            offers_.checked(std::move(offer),check_mode_==Mode::manual);
             if(check_mode_==Mode::manual)check_message_=result;}
         catch(const update::Cancelled&){}
         catch(const std::exception& e){
             // Automatic checks fail silently: the reason is logged and kept for 设置 / 更新.
             result=std::string("检查失败：")+e.what();log_line(result);if(check_mode_==Mode::manual)check_message_=result;}
         if(!result.empty())store_->update([&](update::Settings& s){s.last_result=result;});
+        if(refetching_){refetching_=false;if(!result.empty())install_message_=refetch_reason_+"重新检查："+result;}
     }
     if(ready(installing_)){
+        bool refetch=false;
         try{const auto refusal=installing_.get();if(refusal.empty())exit_=true;else install_message_=refusal;}
         catch(const update::Cancelled&){install_message_="已取消下载。";}
+        catch(const update::FetchFailed& e){
+            // The address kept from an earlier check may be gone: ask GitHub again and show what it says.
+            if(install_from_cache_){refetch=true;install_message_=std::string("按上次检查到的地址下载失败：")+e.what()+"。";}
+            else install_message_=e.what();}
         catch(const std::exception& e){install_message_=e.what();}
         if(!install_message_.empty())log_line(install_message_);
         job_.reset();
+        if(refetch){refetch_reason_=install_message_;install_message_+="正在重新检查更新…";start_check(Mode::manual);refetching_=checking_.valid();}
     }
     if(ready(plugin_updates_job_)){try{plugin_updates_=plugin_updates_job_.get();}catch(...){plugin_updates_=-1;}}
 }
@@ -124,8 +142,8 @@ void UpdatePanel::banner(HWND window,float dpi){
         if(ImGui::Button("知道了",{110*dpi,38*dpi}))notice_=false;
         ImGui::EndChild();ImGui::PopStyleColor();ImGui::Dummy({0,6*dpi});
     }
-    if(!offer_||offer_->state==update::Offer::State::up_to_date||dismissed_)return;
-    const auto& offer=*offer_;const bool installable=offer.state==update::Offer::State::available&&install_.by_setup;
+    const auto* shown=offers_.shown();if(!shown)return;
+    const auto& offer=*shown;const bool installable=offer.state==update::Offer::State::available&&install_.by_setup;
     ImGui::PushStyleColor(ImGuiCol_ChildBg,product::raised);
     ImGui::BeginChild("##update-offer",{0,0},ImGuiChildFlags_Borders|ImGuiChildFlags_AutoResizeY);
     ImGui::PushFont(nullptr,20);ImGui::Text("发现新版本 %s",offer.version.c_str());ImGui::PopFont();
@@ -149,11 +167,13 @@ void UpdatePanel::banner(HWND window,float dpi){
         if(ImGui::Button("取消",{110*dpi,38*dpi}))job_->cancel=true;
         ImGui::EndDisabled();
     }else{
-        if(installable){if(product::action("更新",{120*dpi,40*dpi},true))start_install();ImGui::SameLine();}
+        // A cached offer is shown before a check that runs at start has finished; 更新 waits for it.
+        if(installable){ImGui::BeginDisabled(checking_.valid());if(product::action("更新",{120*dpi,40*dpi},true))start_install();ImGui::EndDisabled();ImGui::SameLine();}
         else{if(product::action("打开下载页",{150*dpi,40*dpi},true))open_page(window,offer.page);ImGui::SameLine();}
-        if(ImGui::Button("稍后",{100*dpi,40*dpi}))dismissed_=true;
+        if(ImGui::Button("稍后",{100*dpi,40*dpi}))offers_.later();
         if(installable){ImGui::SameLine();if(ImGui::Button("打开下载页",{150*dpi,40*dpi}))open_page(window,offer.page);}
         ImGui::PushStyleColor(ImGuiCol_Text,product::muted);
+        if(checking_.valid())ImGui::TextWrapped("正在检查更新…");
         if(installable)ImGui::TextWrapped("发布签名已校验。更新会关闭釉光，安装完成后自动重新打开；游戏插件不会自动更新。");
         else if(offer.state==update::Offer::State::manual_only)ImGui::TextWrapped("这个版本没有附带签名更新清单，只能从下载页手动更新。");
         else ImGui::TextWrapped("便携版不会自动安装，请从下载页获取新版本。");
@@ -177,7 +197,7 @@ void UpdatePanel::settings(HWND window,float dpi){
     if(settings.last_check>0)ImGui::TextDisabled("上次检查 %s%s%s",local_time(settings.last_check).c_str(),settings.last_result.empty()?"":" · ",settings.last_result.c_str());
     if(!install_.by_setup)ImGui::TextDisabled("便携版只提示新版本，不会自动安装（%s）。",install_.why.c_str());
     ImGui::PushStyleColor(ImGuiCol_Text,product::muted);
-    ImGui::TextWrapped("检查更新只读取 GitHub 上的公开发布信息，不发送任何关于你、游戏或文件的内容；启动时每 24 小时最多自动检查一次。更新必须带有项目发布密钥的签名，校验不通过不会安装。游戏内组件从不联网。");
+    ImGui::TextWrapped("检查更新只读取 GitHub 上的公开发布信息，不发送任何关于你、游戏或文件的内容；启动时每 24 小时最多自动检查一次。检查到的新版本会记在本机，之后每次启动都会直接提示（不联网，签名重新校验），直到安装了它或检查到没有更新。更新必须带有项目发布密钥的签名，校验不通过不会安装。游戏内组件从不联网。");
     ImGui::PopStyleColor();
     if(const auto error=store_->error();!error.empty()){ImGui::PushStyleColor(ImGuiCol_Text,product::amber);ImGui::TextWrapped("更新设置未保存：%s",error.c_str());ImGui::PopStyleColor();}
 }

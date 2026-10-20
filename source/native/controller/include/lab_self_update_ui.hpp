@@ -29,13 +29,16 @@ public:
 private:
     enum class Mode {automatic,manual};
     struct Job {update::Cancel cancel{false};update::Progress progress;std::atomic<int> stage{0};};
-    bool enabled_=false,exit_=false,open_games_=false,dismissed_=false;
+    bool enabled_=false,exit_=false,open_games_=false;
     update::Installation install_;std::optional<update::Version> running_;std::string running_text_,version_error_;
     std::shared_ptr<update::SettingsStore> store_;
     std::shared_ptr<update::Cancel> check_cancel_=std::make_shared<update::Cancel>(false);
     std::future<update::Offer> checking_;Mode check_mode_=Mode::automatic;std::string check_message_;
-    std::optional<update::Offer> offer_;
+    // The cached offer from the start, then each check's.
+    update::OfferNotice offers_;
     std::shared_ptr<Job> job_;std::future<std::string> installing_;std::string install_message_;
+    // A download from a cached offer whose address failed: a fresh manual check follows.
+    bool install_from_cache_=false,refetching_=false;std::string refetch_reason_;
     // After a relaunch by the Setup.
     update::AfterUpdate after_=update::AfterUpdate::none;std::string after_from_,after_to_;bool notice_=false;
     std::future<int> plugin_updates_job_;int plugin_updates_=-1;

@@ -91,6 +91,8 @@ int wmain(int argc,wchar_t** argv){
             const auto endpoint=lab::update::official(running);
             const auto offer=lab::update::check(endpoint,*lab::update::parse_version(running));
             auto out=lab::update::offer_json(offer,running,at);
+            // Like the desktop program's check: its notice at the next start follows this result.
+            try{lab::update::record_offer(at.data,offer);}catch(const std::exception& e){out["offer_cache_error"]=e.what();}
             if(a[1]==L"download"){
                 if(offer.state!=lab::update::Offer::State::available)out["downloaded"]=nullptr;
                 else{const auto file=lab::update::download_setup(endpoint,offer,at.data);out["downloaded"]=lab::utf8(file.wstring());out["verified"]=true;}

@@ -46,6 +46,19 @@ in Settings checks at once. Only public GitHub release data is read (see
 notice at the top of the window shows its version and release notes, with
 *更新*, *稍后* and *打开下载页*.
 
+A signed update that a check found is remembered in
+`data\settings\update-offer-v1.json`: the exact signed manifest and its
+signature, the release tag and page, and the Setup's download address. Every
+later start shows the notice again at once, without connecting: the signature is
+verified again with the built-in key, and the notice appears only while that
+version is newer than the running one. *稍后* hides it until the next start. A
+check that finds a newer release replaces the file; a check that finds nothing
+newer, or only a release without a signed manifest, removes it, and so does
+anything that fails verification or a version that is already installed.
+*更新* on a remembered offer downloads and verifies the Setup exactly as after a
+fresh check; if the remembered address no longer works, the program checks
+again and shows why.
+
 *更新* is offered only to a copy installed by this Setup. The program counts as
 installed when all of these hold: it runs from `<folder>\app\`,
 `data\settings\application-install.json` (written by the Setup) names this

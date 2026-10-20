@@ -8,6 +8,7 @@
 #include <bcrypt.h>
 #include <algorithm>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 
 namespace lab::update {
@@ -316,6 +317,25 @@ Selection select_release(const json& list,const Version& running,const Endpoint&
 }
 
 // ---- check
+namespace {
+// What a fresh check and a cached offer must both pass: the signature over the
+// exact bytes first (nothing in the manifest is read before it verifies), then
+// the manifest, its version against the tag and the running version, and the
+// release's Setup asset against the manifest.
+Offer signed_offer(const Endpoint& e,const Version& running,const Release& release,std::string manifest,std::string signature){
+    std::string why;if(!verify(manifest,signature,e.release_key,&why))fail("更新清单签名校验失败（"+why+"），已拒绝这个更新");
+    Offer o;o.version=release.version.text();o.page=release.page;o.tag=release.tag;
+    o.manifest=parse_manifest(manifest);
+    const auto version=*parse_version(o.manifest.version);
+    need(compare(version,release.version)==0,"签名清单的版本 "+o.manifest.version+" 与发布标签 "+release.tag+" 不一致，已拒绝");
+    need(compare(version,running)>0,"签名清单的版本 "+o.manifest.version+" 不比当前版本新，已拒绝");
+    const auto* setup=release.asset(o.manifest.setup.name);
+    need(setup!=nullptr,"发布中没有签名清单所列的安装程序 "+o.manifest.setup.name);
+    need(setup->size==o.manifest.setup.size,"发布中安装程序的大小与签名清单不符");
+    o.setup=*setup;o.manifest_bytes=std::move(manifest);o.signature=std::move(signature);
+    o.state=Offer::State::available;return o;
+}
+}
 Offer check(const Endpoint& e,const Version& running,const Cancel* cancel){
     const auto body=get_text(e,e.releases_api,L"application/vnd.github+json",kReleasesLimit,cancel);
     const auto list=json::parse(body,nullptr,false);need(!list.is_discarded()&&list.is_array(),"GitHub 返回的发布列表无法解析");
@@ -325,19 +345,80 @@ Offer check(const Endpoint& e,const Version& running,const Cancel* cancel){
     if(selection.kind==Selection::Kind::manual_only){o.state=Offer::State::manual_only;return o;}
     const auto* manifest_asset=release.asset(kManifestAsset);const auto* signature_asset=release.asset(kSignatureAsset);
     need(manifest_asset->size<=kManifestLimit&&signature_asset->size<=kSignatureLimit,"发布中的更新清单大小无效");
-    const auto manifest=get_text(e,manifest_asset->url,L"application/octet-stream",kManifestLimit,cancel);
-    const auto signature=get_text(e,signature_asset->url,L"application/octet-stream",kSignatureLimit,cancel);
-    // Nothing in the manifest is read before its signature verifies.
-    std::string why;if(!verify(manifest,signature,e.release_key,&why))fail("更新清单签名校验失败（"+why+"），已拒绝这个更新");
-    o.manifest=parse_manifest(manifest);
-    const auto version=*parse_version(o.manifest.version);
-    need(compare(version,release.version)==0,"签名清单的版本 "+o.manifest.version+" 与发布标签 "+release.tag+" 不一致，已拒绝");
-    need(compare(version,running)>0,"签名清单的版本 "+o.manifest.version+" 不比当前版本新，已拒绝");
-    const auto* setup=release.asset(o.manifest.setup.name);
-    need(setup!=nullptr,"发布中没有签名清单所列的安装程序 "+o.manifest.setup.name);
-    need(setup->size==o.manifest.setup.size,"发布中安装程序的大小与签名清单不符");
-    o.setup=*setup;o.state=Offer::State::available;return o;
+    auto manifest=get_text(e,manifest_asset->url,L"application/octet-stream",kManifestLimit,cancel);
+    auto signature=get_text(e,signature_asset->url,L"application/octet-stream",kSignatureLimit,cancel);
+    return signed_offer(e,running,release,std::move(manifest),std::move(signature));
 }
+
+// ---- offer cache
+namespace {
+constexpr const char* kOfferKind="overglaze-update-offer";
+// A file of ours under data\settings, written atomically; no reparse point on the way.
+void save_setting(const fs::path& file,const std::string& bytes){
+    std::error_code ec;const auto folder=file.parent_path();
+    if(!fs::exists(folder,ec))need(CreateDirectoryW(folder.c_str(),nullptr)!=FALSE||GetLastError()==ERROR_ALREADY_EXISTS,"无法创建设置目录");
+    winpath::require_no_reparse(folder);if(fs::exists(file,ec))need(!reparse(file),"设置文件路径无效");
+    write_atomic(file,bytes);}
+std::string cached_text(const json& j,const char* key){
+    const auto it=j.find(key);need(it!=j.end()&&it->is_string(),std::string("缺少字段 ")+key);return it->get<std::string>();}
+}
+fs::path offer_cache_file(const fs::path& data_root){return data_root/L"settings"/L"update-offer-v1.json";}
+bool clear_offer(const fs::path& data_root){
+    if(data_root.empty())return false;
+    const auto file=offer_cache_file(data_root);
+    const auto a=GetFileAttributesW(file.c_str());
+    if(a==INVALID_FILE_ATTRIBUTES||(a&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY)))return false;
+    need(DeleteFileW(file.c_str())!=FALSE||GetLastError()==ERROR_FILE_NOT_FOUND,"无法删除更新提示缓存");
+    return true;
+}
+void record_offer(const fs::path& data_root,const Offer& o){
+    if(data_root.empty())return;
+    if(o.state!=Offer::State::available||o.manifest_bytes.empty()||o.signature.empty()){clear_offer(data_root);return;}
+    std::string bytes;
+    try{bytes=json{{"kind",kOfferKind},{"version",1},{"saved_utc",std::int64_t(std::time(nullptr))},{"tag",o.tag},{"page",o.page},
+        {"setup",{{"name",o.setup.name},{"url",o.setup.url},{"size",o.setup.size}}},
+        {"manifest",o.manifest_bytes},{"signature",o.signature}}.dump(2)+"\n";}
+    catch(const std::exception&){bytes.clear();}
+    // A stale offer must not outlive a newer check: what cannot be saved is removed.
+    try{need(!bytes.empty()&&bytes.size()<=kOfferCacheLimit,"更新提示缓存无效或超出上限，未保存");
+        save_setting(offer_cache_file(data_root),bytes);}
+    catch(...){try{clear_offer(data_root);}catch(...){}throw;}
+}
+std::optional<Offer> cached_offer(const fs::path& data_root,const Endpoint& e,const Version& running,std::string* why){
+    if(why)why->clear();
+    if(data_root.empty())return std::nullopt;
+    const auto file=offer_cache_file(data_root);
+    if(GetFileAttributesW(file.c_str())==INVALID_FILE_ATTRIBUTES)return std::nullopt;
+    auto drop=[&](const std::string& reason)->std::optional<Offer>{
+        std::string removal;try{clear_offer(data_root);}catch(const std::exception& x){removal=std::string("；")+x.what();}
+        if(why)*why="已丢弃缓存的更新提示："+reason+removal;return std::nullopt;};
+    const auto bytes=read_small(file,kOfferCacheLimit);
+    if(!bytes)return drop("缓存文件无效或超出上限");
+    try{
+        const auto j=json::parse(*bytes,nullptr,false);
+        need(!j.is_discarded()&&j.is_object()&&j.contains("kind")&&j["kind"]==kOfferKind&&j.contains("version")&&j["version"]==1,"缓存格式未知");
+        Release release;release.tag=cached_text(j,"tag");
+        const auto tag=parse_tag(release.tag);need(tag.has_value(),"发布标签无效");release.version=*tag;
+        need(compare(release.version,running)>0,"版本 "+release.version.text()+" 不比当前版本 "+running.text()+" 新");
+        release.page=cached_text(j,"page");
+        need(release.page==e.releases_page||(starts_with(release.page,e.page_prefix)&&release.page.size()<1024),"发布页地址无效");
+        const auto setup=j.find("setup");need(setup!=j.end()&&setup->is_object(),"缺少字段 setup");
+        Asset asset;asset.name=cached_text(*setup,"name");asset.url=cached_text(*setup,"url");
+        const auto size=setup->find("size");need(size!=setup->end()&&size->is_number_unsigned(),"安装程序大小无效");asset.size=size->get<std::uint64_t>();
+        need(starts_with(asset.url,e.asset_prefix)&&asset.url.size()<2048,"下载地址无效");
+        release.assets.push_back(std::move(asset));
+        auto o=signed_offer(e,running,release,cached_text(j,"manifest"),cached_text(j,"signature"));
+        o.from_cache=true;return o;
+    }catch(const std::exception& x){return drop(x.what());}
+}
+void OfferNotice::start(std::optional<Offer> cached){offer_=std::move(cached);hidden_=false;}
+void OfferNotice::checked(Offer o,bool manual){
+    if(o.state==Offer::State::up_to_date){offer_.reset();hidden_=false;return;}
+    if(manual||!offer_||offer_->version!=o.version)hidden_=false;
+    offer_=std::move(o);
+}
+const Offer* OfferNotice::shown()const{
+    return offer_&&offer_->state!=Offer::State::up_to_date&&!hidden_?&*offer_:nullptr;}
 
 // ---- download
 fs::path updates_dir(const fs::path& data_root){return data_root/L"updates";}
@@ -397,13 +478,17 @@ fs::path download_setup(const Endpoint& e,const Offer& o,const fs::path& data_ro
     Handle out(CreateFileW(partial.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));
     need(out.valid(),"无法写入下载文件");
     try{
-        Sha256 hash;std::uint64_t written=0;
-        get(e,o.setup.url,L"application/octet-stream",file.size,cancel,[&](const char* p,std::size_t n){
-            DWORD count=0;need(WriteFile(out.value,p,DWORD(n),&count,nullptr)&&count==n,"写入下载文件失败");
-            hash.add(p,n);written+=n;if(progress)progress->received=written;});
-        need(written==file.size,"下载不完整（"+std::to_string(written)+" / "+std::to_string(file.size)+" 字节）");
+        Sha256 hash;std::uint64_t written=0;bool local=false;
+        // What the address delivered (or failed to) is FetchFailed; writing it here is not.
+        try{get(e,o.setup.url,L"application/octet-stream",file.size,cancel,[&](const char* p,std::size_t n){
+                try{DWORD count=0;need(WriteFile(out.value,p,DWORD(n),&count,nullptr)&&count==n,"写入下载文件失败");
+                    hash.add(p,n);written+=n;if(progress)progress->received=written;}
+                catch(...){local=true;throw;}});}
+        catch(const Cancelled&){throw;}
+        catch(const Error& x){if(local)throw;throw FetchFailed(x.what());}
+        if(written!=file.size)throw FetchFailed("下载不完整（"+std::to_string(written)+" / "+std::to_string(file.size)+" 字节）");
         need(FlushFileBuffers(out.value)!=FALSE,"写入下载文件失败");
-        need(hash.finish()==file.sha256,"下载的安装程序 SHA-256 与签名清单不符，已删除");
+        if(hash.finish()!=file.sha256)throw FetchFailed("下载的安装程序 SHA-256 与签名清单不符，已删除");
         CloseHandle(out.value);out.value=INVALID_HANDLE_VALUE;
         need(MoveFileExW(partial.c_str(),target.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=FALSE,"无法保存下载的安装程序");
     }catch(...){if(out.valid()){CloseHandle(out.value);out.value=INVALID_HANDLE_VALUE;}DeleteFileW(partial.c_str());throw;}
@@ -523,10 +608,7 @@ std::string SettingsStore::error()const{std::lock_guard g(lock_);return error_;}
 void SettingsStore::update(const std::function<void(Settings&)>& change){std::lock_guard g(lock_);change(settings_);save_locked();}
 void SettingsStore::save_locked(){
     if(file_.empty())return;
-    try{std::error_code ec;const auto folder=file_.parent_path();
-        if(!fs::exists(folder,ec))need(CreateDirectoryW(folder.c_str(),nullptr)!=FALSE||GetLastError()==ERROR_ALREADY_EXISTS,"无法创建设置目录");
-        winpath::require_no_reparse(folder);if(fs::exists(file_,ec))need(!reparse(file_),"设置文件路径无效");
-        write_atomic(file_,settings_.document().dump(2)+"\n");error_.clear();}
+    try{save_setting(file_,settings_.document().dump(2)+"\n");error_.clear();}
     catch(const std::exception& e){error_=e.what();}
 }
 }

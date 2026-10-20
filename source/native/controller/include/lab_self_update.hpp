@@ -64,6 +64,9 @@ inline constexpr std::uint64_t kSetupLimit=1ULL<<30;
 // Every refusal and failure, in words the desktop program shows as they are.
 struct Error : std::runtime_error {using std::runtime_error::runtime_error;};
 struct Cancelled : Error {Cancelled():Error("已取消"){}};
+// download_setup: the Setup's address did not deliver the signed file (network,
+// HTTP status, wrong size or SHA-256). Local failures (disk, folders) are Error.
+struct FetchFailed : Error {using Error::Error;};
 
 // ---- versions: SemVer 2.0 precedence, core[-prerelease], no build metadata.
 struct Version {
@@ -124,9 +127,45 @@ struct Offer {
     std::string version,page; // the newer version; its release page, else the releases page
     Manifest manifest;        // available only: verified, version == tag > running
     Asset setup;              // available only: the release asset the manifest names
+    // available only: what the offer cache keeps (the release tag, the exact
+    // signed manifest bytes and the signature file as fetched).
+    std::string tag,manifest_bytes,signature;
+    bool from_cache=false;    // read back by cached_offer(), not fetched by this check
 };
 // Throws Error with the reason (network, GitHub, signature, manifest).
 Offer check(const Endpoint&,const Version& running,const Cancel* cancel=nullptr);
+
+// ---- the offer cache: data\settings\update-offer-v1.json
+// A signed offer a check found is kept, so every later start shows it again,
+// without the network, until it is installed or a check says otherwise. Nothing
+// in the file is trusted: it passes the same signature and consistency checks
+// as a fresh offer, and the Setup is verified against the signed manifest as always.
+inline constexpr std::uint64_t kOfferCacheLimit=512ULL<<10;
+std::filesystem::path offer_cache_file(const std::filesystem::path& data_root);
+// After a completed check: an available offer replaces the cache; up to date
+// and manual only (nothing signed to keep) remove it. No data root: nothing.
+// Throws Error when the file cannot be written.
+void record_offer(const std::filesystem::path& data_root,const Offer&);
+// Removes the cache file (a plain file only); true when one was removed.
+bool clear_offer(const std::filesystem::path& data_root);
+// At start, no network: the cached offer, once its manifest verifies with the
+// endpoint's key, matches its tag, names a version newer than `running` and a
+// Setup the cached asset matches, with addresses under the endpoint's prefixes.
+// Anything else removes the file and `why` says what; no file: nullopt, empty why.
+std::optional<Offer> cached_offer(const std::filesystem::path& data_root,const Endpoint&,const Version& running,std::string* why=nullptr);
+// What the update notice shows, apart from drawing it. 稍后 hides it for this
+// session only (nothing about it is saved, so the next start shows the cached
+// offer again); an automatic check that finds the same version keeps it hidden,
+// a manual check or another version shows it again.
+class OfferNotice {
+public:
+    void start(std::optional<Offer> cached);
+    void checked(Offer,bool manual);
+    void later(){hidden_=true;}
+    const Offer* shown()const; // null: nothing to show
+private:
+    std::optional<Offer> offer_;bool hidden_=false;
+};
 
 // ---- download into <data root>\updates\<version>\ (marked as ours)
 struct Progress {std::atomic<std::uint64_t> received{0},total{0};};
@@ -134,7 +173,8 @@ std::filesystem::path updates_dir(const std::filesystem::path& data_root);
 // Free space required on the program's disk before downloading and installing.
 std::uint64_t space_needed(std::uint64_t setup_size);
 // Verified against the signed manifest (size and SHA-256) before it returns.
-// Removes the other update folders this program created first.
+// Removes the other update folders this program created first. FetchFailed when
+// the Setup's address does not deliver the signed file.
 std::filesystem::path download_setup(const Endpoint&,const Offer&,const std::filesystem::path& data_root,const Cancel* cancel=nullptr,Progress* progress=nullptr);
 // Removes the update folders this program created (marker file inside),
 // except `keep_version`; only the files it wrote, never anything else, and a

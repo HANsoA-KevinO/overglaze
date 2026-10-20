@@ -3,8 +3,8 @@
 // Self-update (lab_self_update.hpp) without the network: version order, the
 // signature with ephemeral CNG keys (never the release key), release selection
 // from canned GitHub JSON, manifest validation, the install/portable decision,
-// download folders, and check + download + verify end to end against a
-// loopback HTTP server through the loopback test endpoint.
+// download folders, check + download + verify end to end against a loopback
+// HTTP server through the loopback test endpoint, and the offer cache.
 //
 //   lab_self_update_tests [--viewer <overglaze_viewer.exe>]
 //   lab_self_update_tests --verify <manifest> <signature> <public blob>   (for test_sign_release.py)
@@ -384,6 +384,124 @@ void end_to_end(const fs::path& base){
      refuses([&]{u::check(official,running);},"只允许 HTTPS","the official endpoint never speaks plain HTTP");}
 }
 
+// The offer cache: written by a check, shown at start without the network,
+// re-verified each time, and installed through the same download and checks.
+void offer_cache(const fs::path& base){
+    Server server;const Key key,other;
+    std::string setup(256*1024+3,'\0');for(std::size_t i=0;i<setup.size();++i)setup[i]=char((i*37+11)&0xFF);
+    std::map<std::string,std::pair<std::string,std::string>> published; // version -> manifest, signature
+    // One signed release on the loopback server; returns its release-list entry.
+    auto publish=[&](const std::string& version){
+        const auto tag="v"+version;const auto prefix="/download/"+tag+"/";const auto setup_name="Overglaze-Setup-"+version+"-win64.exe";
+        const auto manifest=manifest_json(version,setup).dump(2);const auto signature=key.sign(manifest);published[version]={manifest,signature};
+        server.route(prefix+"overglaze-update.json",{200,manifest});server.route(prefix+"overglaze-update.json.sig",{200,signature});server.route(prefix+setup_name,{200,setup});
+        auto asset=[&](const std::string& name,std::size_t size){return json{{"name",name},{"size",size},{"browser_download_url",server.url(prefix+name)}};};
+        return json{{"tag_name",tag},{"draft",false},{"html_url",server.url("/releases/tag/"+tag)},
+            {"assets",json::array({asset(setup_name,setup.size()),asset("overglaze-update.json",manifest.size()),asset("overglaze-update.json.sig",signature.size())})}};};
+    const std::string version="0.2.0-preview.9";const auto setup_path="/download/v"+version+"/Overglaze-Setup-"+version+"-win64.exe";
+    server.route("/api/releases?per_page=20",{200,json::array({publish(version)}).dump()});
+    u::Endpoint e;e.releases_api=server.url("/api/releases?per_page=20");e.asset_prefix=server.url("/download/");e.page_prefix=server.url("/releases/");
+    e.releases_page=server.url("/releases");e.user_agent="Overglaze/0.2.0-preview.8";e.release_key=key.pub;e.loopback_test=true;
+    const auto running=v("0.2.0-preview.8");
+    const auto data=base/L"cache-data";fs::create_directories(data);const auto file=u::offer_cache_file(data);
+    need(file==data/L"settings"/L"update-offer-v1.json","the cache sits with the update settings");
+    {std::string why="x";need(!u::cached_offer(data,e,running,&why)&&why.empty(),"no cache: nothing shown, nothing logged");}
+
+    // A check keeps what the cache needs, and the cache holds it byte for byte.
+    const auto fresh=u::check(e,running);
+    need(fresh.state==u::Offer::State::available&&!fresh.from_cache&&fresh.tag=="v"+version&&
+        fresh.manifest_bytes==published[version].first&&fresh.signature==published[version].second,"a check carries the signed bytes and the tag");
+    u::record_offer(data,fresh);
+    need(fs::is_regular_file(file)&&fs::file_size(file)<=u::kOfferCacheLimit,"a signed offer is saved, bounded");
+    {const auto j=json::parse(read(file));
+     need(j["kind"]=="overglaze-update-offer"&&j["version"]==1&&j["tag"]=="v"+version&&j["page"]==fresh.page&&
+         j["manifest"]==published[version].first&&j["signature"]==published[version].second&&
+         j["setup"]["name"]==fresh.setup.name&&j["setup"]["url"]==server.url(setup_path)&&j["setup"]["size"]==setup.size(),"the exact manifest and signature, tag, page and Setup address");}
+    {bool temp=false;for(const auto& f:fs::directory_iterator(file.parent_path()))if(f.path().filename().wstring().find(L".tmp-")!=std::wstring::npos)temp=true;
+     need(!temp,"written atomically, no temporary file left");}
+
+    // At start, without the network: the same offer, from the cache.
+    const auto requests=server.requests().size();
+    std::string why;const auto cached=u::cached_offer(data,e,running,&why);
+    need(cached.has_value()&&why.empty()&&server.requests().size()==requests,"the cached offer is shown at start without a request");
+    need(cached->state==u::Offer::State::available&&cached->from_cache&&cached->version==version&&cached->page==fresh.page&&cached->tag==fresh.tag&&
+        cached->setup.url==fresh.setup.url&&cached->setup.size==fresh.setup.size&&cached->setup.name==fresh.setup.name&&
+        cached->manifest.setup.sha256==fresh.manifest.setup.sha256&&cached->manifest.setup.size==fresh.manifest.setup.size&&cached->manifest.notes_zh==fresh.manifest.notes_zh,
+        "the cached offer equals the checked one");
+    need(fs::is_regular_file(file),"a valid cache stays");
+
+    // 稍后 hides it for this session only; the next start shows it again.
+    {u::OfferNotice n;need(!n.shown(),"an empty notice shows nothing");
+     n.start(u::cached_offer(data,e,running));need(n.shown()&&n.shown()->from_cache&&n.shown()->version==version,"shown at start");
+     n.later();need(!n.shown(),"稍后 hides it");
+     n.checked(fresh,false);need(!n.shown(),"an automatic check finding the same version keeps it hidden");
+     n.checked(fresh,true);need(n.shown()&&!n.shown()->from_cache,"a manual check shows it again, the fresh offer");}
+    need(fs::is_regular_file(file),"稍后 never touches the cache");
+    {u::OfferNotice n;n.start(u::cached_offer(data,e,running));need(n.shown()!=nullptr,"稍后, then a restart: shown again");
+     n.later();auto newer=fresh;newer.version="0.2.0-preview.10";n.checked(newer,false);
+     need(n.shown()&&n.shown()->version=="0.2.0-preview.10","an automatic check finding another version shows it");
+     n.checked(u::Offer{},true);need(!n.shown(),"nothing newer: no notice");
+     n.start(std::nullopt);need(!n.shown(),"no cache: no notice");}
+
+    // 更新 from the cache: the same download and the same verification as a fresh offer.
+    {const auto target=u::download_setup(e,*cached,data);
+     need(read(target)==setup&&target==u::updates_dir(data)/lab::wide(version)/lab::wide(fresh.setup.name),"the cached offer downloads the Setup into updates\\<version>");
+     u::verify_file(target,cached->manifest.setup);++checks;fs::remove(target);
+     auto fetch_failed=[&](const char* contains,const char* what){bool typed=false;std::string text;
+         try{u::download_setup(e,*cached,data);}catch(const u::FetchFailed& x){typed=true;text=x.what();}catch(const std::exception& x){text=x.what();}
+         need(typed&&text.find(contains)!=std::string::npos,std::string(what)+": "+text);
+         need(!fs::exists(target)&&!fs::exists(fs::path(target.wstring()+L".partial")),std::string(what)+": nothing kept");};
+     auto tampered=setup;tampered[tampered.size()/3]^=0x20;server.route(setup_path,{200,tampered});
+     fetch_failed("SHA-256","a tampered Setup is refused for a cached offer, as for a fresh one");
+     server.route(setup_path,{200,setup.substr(7)});fetch_failed("不完整","a short Setup is refused for a cached offer");
+     server.route(setup_path,{404,"gone"});fetch_failed("HTTP 404","a cached address that is gone asks for a fresh check");
+     server.route(setup_path,{200,setup});
+     {bool typed=false,local=false;try{u::download_setup(e,*cached,base/L"no-such-data");}catch(const u::FetchFailed&){typed=true;}catch(const u::Error&){local=true;}
+      need(local&&!typed,"a local failure is not a failed address");}
+     need(read(u::download_setup(e,*cached,data))==setup,"downloads once the address serves the signed Setup again");}
+
+    // A tampered or broken cache is refused and removed.
+    auto rejected=[&](const std::function<void(json&)>& change,const std::string& contains,const std::string& what,const u::Endpoint& endpoint){
+        u::record_offer(data,fresh);auto j=json::parse(read(file));change(j);write(file,j.dump(2));
+        std::string reason;need(!u::cached_offer(data,endpoint,running,&reason),what+": refused");
+        need(reason.find(contains)!=std::string::npos,what+": "+reason);need(!fs::exists(file),what+": removed");};
+    auto tamper=[&](const std::function<void(json&)>& change,const std::string& contains,const std::string& what){rejected(change,contains,what,e);};
+    tamper([](json& j){auto m=j["manifest"].get<std::string>();const auto at=m.find("\"preview\"");m.replace(at,9,"\"stable\"");j["manifest"]=m;},"签名与发布密钥不匹配","a changed manifest byte");
+    tamper([&](json& j){j["signature"]=other.sign(j["manifest"].get<std::string>());},"签名与发布密钥不匹配","a signature by another key");
+    tamper([](json& j){j["signature"]="not base64";},"签名文件格式无效","a malformed signature");
+    tamper([&](json& j){j["setup"]["url"]="https://example.com/Overglaze-Setup.exe";},"下载地址无效","a Setup address outside the releases");
+    tamper([&](json& j){j["page"]="https://example.com/phish";},"发布页地址无效","a page outside the releases");
+    tamper([](json& j){j["tag"]="v0.2.0-preview.10";},"不一致","a tag that is not the signed version");
+    tamper([](json& j){j["setup"]["size"]=1;},"大小","a Setup size that is not the signed one");
+    tamper([](json& j){j["setup"]["name"]="Overglaze-Setup-other.exe";},"没有签名清单所列的安装程序","a Setup name that is not the signed one");
+    tamper([](json& j){j.erase("manifest");},"缺少字段 manifest","a missing manifest");
+    tamper([](json& j){j["kind"]="something-else";},"缓存格式未知","another kind of file");
+    {auto wrong=e;wrong.release_key=other.pub;rejected([](json&){},"签名与发布密钥不匹配","verified with the endpoint's key, not trusted as saved",wrong);}
+    for(const auto& bytes:{std::string("{broken"),std::string("[]"),std::string(std::size_t(u::kOfferCacheLimit)+1,' ')}){
+        write(file,bytes);std::string reason;need(!u::cached_offer(data,e,running,&reason)&&!reason.empty()&&!fs::exists(file),"a broken cache file is removed");}
+
+    // A cache for the running version or an older one is removed.
+    for(const char* now:{"0.2.0-preview.9","0.2.0-preview.10","0.2.0"}){
+        u::record_offer(data,fresh);std::string reason;
+        need(!u::cached_offer(data,e,v(now),&reason)&&reason.find("不比当前版本")!=std::string::npos&&!fs::exists(file),std::string("running ")+now+": cache removed: "+reason);}
+
+    // A newer check result replaces the cache; nothing newer, or nothing signed, clears it.
+    u::record_offer(data,fresh);
+    server.route("/api/releases?per_page=20",{200,json::array({publish(version),publish("0.2.0-preview.10")}).dump()});
+    u::record_offer(data,u::check(e,running));
+    {const auto j=json::parse(read(file));need(j["tag"]=="v0.2.0-preview.10"&&j["manifest"]==published["0.2.0-preview.10"].first,"a newer check result replaces the cache");
+     const auto again=u::cached_offer(data,e,running);need(again&&again->version=="0.2.0-preview.10","the replacement verifies at start");}
+    {const auto up_to_date=u::check(e,v("0.2.0-preview.10"));need(up_to_date.state==u::Offer::State::up_to_date,"nothing newer");
+     u::record_offer(data,up_to_date);need(!fs::exists(file),"a check finding nothing newer clears the cache");}
+    {u::record_offer(data,fresh);auto unsigned_release=publish("0.2.0-preview.11");
+     unsigned_release["assets"]=json::array({unsigned_release["assets"][0]});
+     server.route("/api/releases?per_page=20",{200,json::array({publish(version),unsigned_release}).dump()});
+     const auto manual=u::check(e,running);need(manual.state==u::Offer::State::manual_only,"newest is manual only");
+     u::record_offer(data,manual);need(!fs::exists(file),"a manual-only result (nothing signed to keep) clears the cache");}
+    u::record_offer({},fresh);need(!u::cached_offer({},e,running).has_value()&&!u::clear_offer({}),"without a data root: nothing kept, nothing read");
+    need(!u::clear_offer(data),"nothing to clear");
+}
+
 int verify_mode(wchar_t** argv){
     const auto manifest=read(argv[2]),signature=read(argv[3]),blob=read(argv[4]);std::string why;
     const bool ok=u::verify(manifest,signature,std::vector<unsigned char>(blob.begin(),blob.end()),&why);
@@ -397,7 +515,7 @@ int wmain(int argc,wchar_t** argv){
     try{
         fs::path viewer;for(int i=1;i<argc;++i){const std::wstring a=argv[i];if(a==L"--viewer"&&i+1<argc)viewer=argv[++i];else throw std::runtime_error("unknown argument");}
         fs::create_directories(temp_base());base=temp_base()/lab::wide("overglaze-self-update-test-"+lab::uuid());need(fs::create_directory(base),"unique fixture directory");
-        versions();signatures();manifests();files(base);selection();settings(base);installation(base);cleanup(base);end_to_end(base);
+        versions();signatures();manifests();files(base);selection();settings(base);installation(base);cleanup(base);end_to_end(base);offer_cache(base);
         if(!viewer.empty()){const auto version=u::product_version(viewer);need(version&&u::parse_version(*version),"the built viewer carries a SemVer ProductVersion");}
         need(base.filename().native().rfind(L"overglaze-self-update-test-",0)==0,"cleanup stays in the owned fixture");
         fs::remove_all(base);
