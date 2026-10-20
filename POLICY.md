@@ -62,7 +62,11 @@ Overglaze does not change driver settings, driver profiles, Windows security set
 
 ## Network and privacy
 
-Overglaze makes no network connections. It has no telemetry, no update check and no crash upload. Logs and diagnostic files stay on your disk. You decide whether to attach any of them to a bug report; remove personal paths first.
+The in-game components (the plugin files in a game folder and the in-game panel) never connect to the network.
+
+The desktop program connects only to check for updates. It reads the public release list of the project's GitHub repository and, when you update, that release's signed manifest and Setup, over HTTPS. It sends the standard HTTPS headers and `User-Agent: Overglaze/<version>`; nothing about you, your games or your files, and no cookies or credentials. The automatic check runs when the program starts, at most once every 24 hours; turn off *启动时检查更新* in Settings and nothing connects unless you press *检查更新*. An update is installed only from a manifest signed with the project's release key, and only into a copy installed by the Setup; portable copies only show that a new version exists. See [docs/INSTALLER.md](docs/INSTALLER.md#updating-from-the-app).
+
+Overglaze has no telemetry and no crash upload. Logs and diagnostic files stay on your disk. You decide whether to attach any of them to a bug report; remove personal paths first.
 
 ## Reversible installs
 

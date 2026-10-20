@@ -112,7 +112,7 @@ More games are listed as experimental. Notes, store versions and the meaning of 
 - Best suited to offline single-player games. When the check finds anti-cheat files or Denuvo Anti-Tamper, it says so; it does not refuse. Online games and games with anti-cheat may refuse to start, kick you, or penalise or ban your account. Every install asks you to acknowledge that risk, whatever the check found: not finding a protection doesn't prove it isn't there.
 - It never hides from, patches, spoofs, debugs or dumps anti-cheat, DRM or anti-tamper software. For Denuvo games it only switches off its own behaviours that could trigger the protection ("passive coexistence") and loads late. You use it at your own risk.
 - It never modifies NVIDIA files, and refuses model files it doesn't recognise.
-- It changes no driver, system or security settings. No network access, no telemetry.
+- It changes no driver, system or security settings. No telemetry. The in-game parts never connect to the network. Only the desktop program does, to check for updates: it reads public GitHub release data and sends nothing about you, your games or your files. Updates install only when signed with the project's release key, and only into a copy installed by the Setup. Turn off *启动时检查更新* in Settings to stop the automatic check (see [docs/INSTALLER.md](docs/INSTALLER.md#updating-from-the-app)).
 - Installs are reversible. Overglaze writes only its own files and removes them by their recorded hashes.
 - Modifying a game may break its EULA or terms of service. That risk is yours.
 

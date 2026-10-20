@@ -6,8 +6,8 @@ This page describes how Overglaze gets into a game, how it finds the frame to wo
 
 | Piece | Runs where | Job |
 |---|---|---|
-| `overglaze_viewer.exe` | Desktop | Desktop program. The Games page adds, checks, installs, updates and uninstalls games. |
-| `overglaze_games.exe` | Desktop | Command-line front end to the same game manager. |
+| `overglaze_viewer.exe` | Desktop | Desktop program. The Games page adds, checks, installs, updates and uninstalls games. It also checks GitHub for signed updates of itself and hands over to the Setup ([INSTALLER.md](INSTALLER.md#updating-from-the-app)); this is the only network access. |
+| `overglaze_games.exe` | Desktop | Command-line front end to the same game manager, and `self-update check\|download`. |
 | `overglaze_launch.exe` | Desktop | Steam launch-option launcher for late-load games. |
 | `overglazectl.exe` | Desktop | Client for the local control pipe ([CONTROL-PROTOCOL.md](CONTROL-PROTOCOL.md)). |
 | Install checker | Desktop | Runs the in-game component's own installation check against freshly installed files; if the check fails, the install is rolled back. |
@@ -29,7 +29,7 @@ The source is split into tracks, and dependencies are only allowed in one direct
 | runtime | NR session, evaluate pipeline, colour/depth/motion codecs, exposure, completion timeline, submission and binding preservation, live bridge | core, runtime |
 | provider | Streamline boundary and resource leases, RR/SR option structures, adapter, Streamline-to-NR frame translation | core, runtime, provider |
 | viewer | Image library, preview and export, viewing settings | core, viewer |
-| controller | In-game panel, game manager, command-line tools, desktop program, host, proxy, NGX observer, late-load support | all of the above |
+| controller | In-game panel, game manager, command-line tools, desktop program and its self-update, host, proxy, NGX observer, late-load support | all of the above |
 
 Image capture, replay and diagnostic probes are not part of this release.
 

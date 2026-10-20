@@ -2,6 +2,18 @@
 
 All notable changes to Overglaze are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- One-click update of the desktop program. With *启动时检查更新* on (Settings, the default) the program checks the project's GitHub releases when it starts, at most once every 24 hours; *检查更新* checks at once. A newer release shows a notice with its version and release notes and *更新* / *稍后* / *打开下载页*. *更新* downloads the Setup into `data\updates\<version>\` with progress and *取消*, checks it, starts it silently in the same folder and closes the program; the Setup waits for it (`/WAITPID`, up to 60 s) and reopens it afterwards (`/RELAUNCH`), which then shows *已更新到 <version>* once and how many installed games need a plugin update. Plugins are never updated automatically. The update is refused, with the reason, while a registered game or another Overglaze program runs, while a game plugin operation is unfinished, or when disk space is short. Only copies installed by the Setup are updated; portable copies show the new version and *打开下载页*. `overglaze_games self-update check|download` does the same check, and the download and verification without starting the Setup.
+- Signed updates. Each release that can be installed this way carries `overglaze-update.json` (versions, release notes, sizes and SHA-256 of the Setup and the ZIP) signed with the project's release key (ECDSA P-256), and `overglaze-update.json.sig`. The program has the public key built in, verifies the signature over the exact bytes before reading the manifest, requires the manifest's version to match the release tag, and installs a Setup only when its size and SHA-256 match. A release without these files is offered as a manual download. New `Sign-Release.ps1` writes and verifies them; the public key is `assets/release-key/overglaze-release-p256.public.blob`.
+
+### Changed
+
+- Network: the desktop program now connects to GitHub to check for updates. It reads public release data only and sends nothing about you, your games or your files; turn off *启动时检查更新* to stop the automatic check. The in-game components still never connect. POLICY.md, the READMEs and docs/INSTALLER.md say so instead of "no network access".
+- The installer accepts `/WAITPID=<pid>` and `/RELAUNCH`. Its existing refusals are unchanged; a process running from the program's own `data\updates\` folder is accepted only when it is the Setup that runs the check.
+
 ## [0.2.0-preview.6] - 2026-10-20
 
 ### Fixed

@@ -107,6 +107,8 @@ Don't reject a whole call because one unrelated part of it was unexpected. Keep 
 - No network access, no telemetry.
 - Nothing may write outside Overglaze's own files in a game folder.
 
+**Network.** The desktop program's self-update (`lab_self_update`, linked only by the viewer and `overglaze_games`) is the only code that connects anywhere: HTTPS to the project's GitHub releases. Nothing that runs in a game may link it or any other network library; `test_controller_link_closure.py` checks the in-game files' imports. Tests never use the network (the self-update test serves a loopback HTTP server) and never use the release key.
+
 **No local information.** No absolute paths, user names or machine-specific values in code, tests, comments or logs.
 
 ## Commits and pull requests
@@ -114,6 +116,12 @@ Don't reject a whole call because one unrelated part of it was unexpected. Keep 
 - Sign off every commit under the [Developer Certificate of Origin](https://developercertificate.org/) with `git commit -s`. This adds a `Signed-off-by:` line. There is no CLA.
 - Keep pull requests focused, and say what you tested and on which hardware and driver.
 - Never commit binaries, NVIDIA files, game files, captures or large data.
+
+## Releases (maintainers)
+
+1. Build the portable ZIP (`Package-Overglaze.ps1`) and the Setup (`Build-Installer.ps1`) from a clean checkout.
+2. Sign the self-update manifest with `source\powershell\Sign-Release.ps1` (see [docs/INSTALLER.md](docs/INSTALLER.md#publishing-a-release)). The release private key stays outside every git work tree; it is passed with `-KeyPath` or `OVERGLAZE_RELEASE_KEY` and never committed, copied or used in tests.
+3. Create the GitHub release with tag `v<version>` and attach the Setup, the ZIP, `overglaze-update.json` and `overglaze-update.json.sig`. Without the last two, installed copies offer the release only as a manual download.
 
 ## Game adaptation pull requests
 

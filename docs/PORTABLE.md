@@ -56,7 +56,9 @@ For the Windows installer, additionally pass `-RuntimeDirectory` pointing to
 the x64 `Microsoft.VC143.CRT` redistributable directory. This adds only the ten
 named Microsoft-signed runtime DLLs to `app/`; it does not include any model.
 The executable installer and its update/uninstall behaviour are documented in
-[INSTALLER.md](INSTALLER.md).
+[INSTALLER.md](INSTALLER.md). A portable copy checks for updates like the
+installed program but never installs one: it shows the new version and a link
+to the download page.
 
 `app/release-manifest.json` records the requested preview version, the checkout's
 Git commit and dirty state observed at packaging time, and the SHA-256 and size
