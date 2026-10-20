@@ -109,7 +109,7 @@ bool admitting_verdict(const std::string& v){return v=="sl-rr-ready"||v=="sl-sr-
 std::string anticheat_product(const std::string& marker){
     const auto file=fs::path(wide(marker)).filename();const auto name=lower_ascii(text(file));
     auto has=[&](const char* part){return name.find(part)!=std::string::npos;};
-    if(has("easyanticheat"))return "Easy Anti-Cheat";
+    if(has("easyanticheat")||has("start_protected_game"))return "Easy Anti-Cheat"; // the second is EAC's launcher
     if(has("battleye")||has("beservice")||has("beclient"))return "BattlEye";
     if(has("equ8"))return "EQU8";
     if(has("vgk.sys")||has("vanguard"))return "Vanguard";
@@ -299,15 +299,41 @@ std::string store_of(const fs::path& dir){
         if(has(d,L".egstore"))return "epic";if(has(d,L"MicrosoftGame.config"))return "gdk";if(has(d,L"steam_api64.dll")||has(d,L"steam_api.dll"))return "steam";}
     return lower_ascii(text(dir)).find("\\steamapps\\")!=std::string::npos?"steam":"unknown";}
 // The marker scan's bounds, named so the "cannot check" report can state them.
+// Each scanned folder (the EXE's, then the game root's) gets these bounds.
 constexpr unsigned kMarkerScanEntries=4096;constexpr unsigned kMarkerScanSeconds=5;
-void scan_markers(const fs::path& dir,std::vector<std::string>& out,bool& complete,unsigned& scanned){
-    static constexpr const char* markers[]{"easyanticheat","battleye","beservice","beclient","equ8","anticheat","vgk.sys","vanguard"};
+// Walks `dir` down to `max_depth` levels below it. A marker is reported relative
+// to the folder it was found under; `seen` keeps a file that two scans reach
+// from being reported twice.
+void scan_markers(const fs::path& dir,int max_depth,std::vector<std::string>& out,std::set<std::wstring>& seen,bool& complete,unsigned& scanned){
+    // start_protected_game.exe is Easy Anti-Cheat's launcher (the EXE an EAC
+    // title's store entry starts), shipped beside the game, not inside it.
+    static constexpr const char* markers[]{"easyanticheat","start_protected_game","battleye","beservice","beclient","equ8","anticheat","vgk.sys","vanguard"};
     const auto start=GetTickCount64();unsigned count=0;std::error_code ec;
     for(fs::recursive_directory_iterator it(dir,fs::directory_options::skip_permission_denied,ec),end;it!=end;it.increment(ec)){if(ec){complete=false;break;}
-        if(++count>kMarkerScanEntries||GetTickCount64()-start>kMarkerScanSeconds*1000ULL){complete=false;break;}if(it.depth()>=3)it.disable_recursion_pending();
-        const auto name=lower_ascii(text(it->path().filename()));for(auto m:markers)if(name.find(m)!=std::string::npos){out.push_back(text(fs::relative(it->path(),dir,ec)));break;}}
+        if(++count>kMarkerScanEntries||GetTickCount64()-start>kMarkerScanSeconds*1000ULL){complete=false;break;}if(it.depth()>=max_depth)it.disable_recursion_pending();
+        const auto name=lower_ascii(text(it->path().filename()));for(auto m:markers)if(name.find(m)!=std::string::npos){
+            if(seen.insert(it->path().lexically_normal().native()).second)out.push_back(text(it->path().lexically_relative(dir)));break;}}
     if(ec)complete=false;
-    scanned=std::min(count,kMarkerScanEntries);}
+    scanned+=std::min(count,kMarkerScanEntries);}
+bool is_platform_folder(const fs::path& dir){const auto n=lower_ascii(text(dir.filename()));return n=="win64"||n=="wingdk";}
+// The project folder of a game EXE's folder shaped <Project>\Binaries\Win64 (or
+// WinGDK), read from the scanned game's own path; empty for any other shape.
+fs::path unreal_project(const fs::path& exe_dir){
+    if(!is_platform_folder(exe_dir))return {};const auto binaries=exe_dir.parent_path();
+    if(lower_ascii(text(binaries.filename()))!="binaries")return {};const auto project=binaries.parent_path();
+    return project.empty()||project==project.root_path()?fs::path():project;}
+// Where a game's install starts when its EXE sits deeper: the nearest folder
+// holding the package manifest, over the same four folders the package identity
+// walks (installed_package_covering: the EXE's folder and three above it); else,
+// for the Unreal layout <Root>\<Project>\Binaries\<Platform>\x.exe, <Root> when
+// it holds an Engine folder. Empty when neither applies; never a drive root.
+fs::path game_root(const fs::path& exe_dir){std::error_code ec;fs::path d=exe_dir;
+    for(unsigned up=0;up<4&&!d.empty();++up,d=d.parent_path()){
+        if(d==d.root_path())break;
+        for(const auto* file:{L"MicrosoftGame.config",L"AppxManifest.xml"})if(fs::is_regular_file(d/file,ec))return d;}
+    if(const auto project=unreal_project(exe_dir);!project.empty()){const auto root=project.parent_path();
+        if(root!=root.root_path()&&fs::is_directory(root/L"Engine",ec))return root;}
+    return {};}
 std::string derive_package_name(const fs::path& exe){std::string s=lower_ascii(text(exe.stem())),out;for(char c:s){if((c>='a'&&c<='z')||(c>='0'&&c<='9'))out+=c;else if(!out.empty()&&out.back()!='-')out+='-';}
     while(!out.empty()&&out.back()=='-')out.pop_back();if(out.empty())out="game";if(out.size()>48)out.resize(48);if(!((out[0]>='a'&&out[0]<='z')||(out[0]>='0'&&out[0]<='9')))out="g"+out;return out;}
 std::string package_from_settings(std::string_view settings){std::string s(settings);const std::string pre="overlay-",post=".json";
@@ -328,25 +354,52 @@ bool holds_dlss(const fs::path& dir){std::error_code ec;
     for(const auto* name:{L"sl.interposer.dll",L"nvngx_dlssd.dll",L"nvngx_dlss.dll"})if(fs::is_regular_file(dir/name,ec))return true;
     return false;}
 bool ends_with(const std::string& s,std::string_view tail){return s.size()>=tail.size()&&s.compare(s.size()-tail.size(),tail.size(),tail)==0;}
+bool shipping_name(const fs::path& exe){return ends_with(lower_ascii(text(exe.filename())),"-shipping.exe");}
+// EXEs a game ships that are not the game: crash reporters, launch helpers and
+// anti-cheat launchers, installers and uninstallers (names lower-cased).
+bool helper_name(const std::string& name){
+    for(const auto* helper:{"crashreport","crashpad","crashhandler","cefsubprocess","redist","dxsetup","unins","uninstall","setup",
+                            "launchhelper","start_protected_game","easyanticheat","eac_","battleye","beservice"})if(name.find(helper)!=std::string::npos)return true;
+    return false;}
+// An EXE in <Project>\Binaries\Win64 (or WinGDK) that is not inside the engine's
+// or a plugin's tree: no folder between the scanned root (the drive when there
+// is none) and it, the project's own included, is named Engine or Plugins. That
+// keeps the engine's tools and plugin helpers (Sentry's crashpad_handler under
+// Engine\Plugins\Sentry\Binaries\Win64) out.
+bool project_binary(const fs::path& exe,const fs::path& root){
+    const auto project=unreal_project(exe.parent_path());if(project.empty())return false;
+    auto inside=project.lexically_relative(root);if(root.empty()||inside.empty()||*inside.begin()==L"..")inside=project.relative_path();
+    auto engine_tree=[](const fs::path& part){const auto n=lower_ascii(text(part));return n=="engine"||n=="plugins";};
+    if(engine_tree(project.filename()))return false;
+    for(const auto& part:inside)if(engine_tree(part))return false;
+    return true;}
 // Unreal Engine games carry a small bootstrap EXE at their root that starts
 // <Project>\Binaries\Win64 (or WinGDK)\<Project>-Win64-Shipping.exe. The
-// bootstrap has no DLSS beside it; the shipping EXE is the game. Only the
-// root's direct subfolders are looked at, and only when an Engine folder marks
-// the layout.
-std::vector<fs::path> unreal_games(const fs::path& root){std::vector<fs::path> out;std::error_code ec;
+// bootstrap has no DLSS beside it; the EXE under the project's Binaries is the
+// game. An Xbox app (GDK) build may name it without -Shipping
+// (Content\<Project>\Binaries\WinGDK\<Name>.exe beside gamelaunchhelper.exe),
+// so other EXEs there count too, after the shipping ones, helpers excluded.
+// Only the root's direct subfolders are looked at (Engine skipped), and only
+// when an Engine folder marks the layout.
+std::vector<fs::path> unreal_games(const fs::path& root){std::vector<fs::path> out,others;std::error_code ec;
     if(!fs::is_directory(root/L"Engine",ec))return out;unsigned seen=0;
     for(fs::directory_iterator it(root,fs::directory_options::skip_permission_denied,ec),end;it!=end&&!ec&&++seen<=64;it.increment(ec)){
-        if(!it->is_directory(ec))continue;
+        if(!it->is_directory(ec)||lower_ascii(text(it->path().filename()))=="engine")continue;
         for(const auto* platform:{L"Win64",L"WinGDK"}){const auto bin=it->path()/L"Binaries"/platform;std::error_code bec;if(!fs::is_directory(bin,bec))continue;
-            unsigned files=0;for(fs::directory_iterator f(bin,fs::directory_options::skip_permission_denied,bec),fe;f!=fe&&!bec&&++files<=256;f.increment(bec))
-                if(f->is_regular_file(bec)&&ends_with(lower_ascii(text(f->path().filename())),"-shipping.exe"))out.push_back(f->path());}}
+            unsigned files=0;for(fs::directory_iterator f(bin,fs::directory_options::skip_permission_denied,bec),fe;f!=fe&&!bec&&++files<=256;f.increment(bec)){
+                if(!f->is_regular_file(bec))continue;const auto name=lower_ascii(text(f->path().filename()));if(!ends_with(name,".exe"))continue;
+                if(ends_with(name,"-shipping.exe"))out.push_back(f->path());else if(!helper_name(name))others.push_back(f->path());}}}
+    out.insert(out.end(),others.begin(),others.end());
     std::stable_sort(out.begin(),out.end(),[](const fs::path& a,const fs::path& b){return holds_dlss(a.parent_path())>holds_dlss(b.parent_path());});
     return out;}
 // Most likely game EXE first: one beside DLSS modules, then an Unreal shipping
-// build, then anything else, then installers, crash reporters and helpers.
-int candidate_rank(const fs::path& exe){
-    if(holds_dlss(exe.parent_path()))return 0;const auto name=lower_ascii(text(exe.filename()));if(ends_with(name,"-shipping.exe"))return 1;
-    for(const auto* helper:{"crashreport","cefsubprocess","redist","dxsetup","unins","setup"})if(name.find(helper)!=std::string::npos)return 3;
+// build or an EXE in a project's Binaries\<Platform>, then anything else, then
+// installers, crash reporters, launchers and anti-cheat helpers. `root` is the
+// folder the scan started from.
+int candidate_rank(const fs::path& exe,const fs::path& root){
+    if(holds_dlss(exe.parent_path()))return 0;if(shipping_name(exe))return 1;
+    if(helper_name(lower_ascii(text(exe.filename()))))return 3;
+    if(project_binary(exe,root))return 1;
     return 2;}
 // Folders of game data, never of the game's EXE. Skipping them keeps a large
 // game (thousands of packed asset files) inside the scan bound.
@@ -370,7 +423,12 @@ Discovery discover(const fs::path& input){Discovery out;const auto path=local(in
         if(++count>8192||GetTickCount64()-start>15000||out.executables.size()>=128){out.complete=false;break;}const auto attr=GetFileAttributesW(it->path().c_str());if(attr==INVALID_FILE_ATTRIBUTES){out.complete=false;continue;}
         if(attr&FILE_ATTRIBUTE_REPARSE_POINT){it.disable_recursion_pending();out.complete=false;continue;}if((attr&FILE_ATTRIBUTE_DIRECTORY)&&data_folder(it->path())){it.disable_recursion_pending();continue;}if(it.depth()>=7&&it->is_directory()){it.disable_recursion_pending();out.complete=false;}
         if(it->is_regular_file()&&winpath::same_spelling(it->path().extension(),L".exe"))out.executables.push_back(it->path());}if(ec)out.complete=false;
-    std::sort(out.executables.begin(),out.executables.end(),[](const fs::path& a,const fs::path& b){const int ra=candidate_rank(a),rb=candidate_rank(b);return ra!=rb?ra<rb:a<b;});
+    // Ranked once per EXE (the rank reads the disk; a comparator must not), then
+    // within a rank shipping builds first, then path order.
+    {struct Ranked{int rank;bool shipping;fs::path exe;};std::vector<Ranked> ranked;ranked.reserve(out.executables.size());
+     for(auto& exe:out.executables){const int rank=candidate_rank(exe,path);const bool shipping=shipping_name(exe);ranked.push_back({rank,shipping,std::move(exe)});}
+     std::sort(ranked.begin(),ranked.end(),[](const Ranked& a,const Ranked& b){if(a.rank!=b.rank)return a.rank<b.rank;if(a.shipping!=b.shipping)return a.shipping;return a.exe<b.exe;});
+     out.executables.clear();for(auto& r:ranked)out.executables.push_back(std::move(r.exe));}
     if(out.complete&&out.executables.empty())out.notice="目录里没有找到 EXE。请确认路径，或直接选择游戏 EXE。";
     if(!out.complete)out.notice=out.executables.empty()?"目录检查未完整完成，没有找到 EXE。请直接选择游戏 EXE 再检查。":"目录较大，只检查了一部分；旁边有 DLSS 模块的 EXE 排在最前。";
     return out;}
@@ -478,8 +536,15 @@ Preflight preflight(const fs::path& input){
             if(name=="sl.interposer.dll")interposer=true;if(name=="sl.dlss.dll")dlss=true;if(name=="sl.dlss_d.dll")dlss_d=true;
             if(name.rfind("nvngx_dlss",0)==0)ngx=true;if(name=="nvngx_dlssd.dll")ngx_d=true;
         }catch(const std::exception& e){r.notes.push_back(std::string(n)+": "+e.what());r.scan_complete=false;unreadable.push_back(n);}}
-    bool markers_complete=true;unsigned scanned=0;
-    scan_markers(dir,r.anticheat_markers,markers_complete,scanned);if(!markers_complete)r.scan_complete=false;r.loader_conflicts=conflicts(dir);
+    // Anti-cheat ships at the game's root (an Xbox app package keeps EasyAntiCheat
+    // and start_protected_game.exe beside its manifest, three folders above the
+    // game EXE), so the root is scanned too, two levels deep. Whatever is found
+    // is a risk the user is shown, never a refusal.
+    bool markers_complete=true;unsigned scanned=0;std::set<std::wstring> seen_markers;
+    scan_markers(dir,3,r.anticheat_markers,seen_markers,markers_complete,scanned);
+    if(const auto top=game_root(dir);!top.empty()&&top!=dir){scan_markers(top,2,r.anticheat_markers,seen_markers,markers_complete,scanned);
+        r.notes.push_back("反作弊标记也在游戏根目录检查（两层）："+text(top)+"；根目录下找到的标记按相对根目录的路径列出");}
+    if(!markers_complete)r.scan_complete=false;r.loader_conflicts=conflicts(dir);
     r.anticheat=anticheat_products(r.anticheat_markers);
     if(!r.anticheat.empty())r.notes.push_back("发现反作弊相关文件（按文件名判断）：作为风险提示，安装时由用户确认；Overglaze 不隐藏自己，不绕过反作弊");
     // A game may ship Streamline for frame generation and still call DLSS and Ray

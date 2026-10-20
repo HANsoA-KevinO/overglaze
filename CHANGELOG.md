@@ -2,6 +2,13 @@
 
 All notable changes to Overglaze are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Adding a game by folder now lists an Unreal game EXE that is not named `*-Shipping.exe` (an Xbox app build may call it `<Name>.exe` under `<Project>\Binaries\WinGDK`) first, like a shipping build; EXEs in the engine's or a plugin's tree do not count. Crash reporters (`crashpad_handler`, ...), launch helpers (`gamelaunchhelper`), anti-cheat launchers and setups (`start_protected_game`, Easy Anti-Cheat, BattlEye) and uninstallers are listed last, so the preselected entry is no longer a crash reporter. Choosing such a launch helper at the game's root offers the game EXE first, as for an Unreal bootstrap.
+- The check now also looks for anti-cheat files at the game's root (the folder with the package manifest within the four folders the package identity looks at, or an Unreal game's root folder), two levels deep, not only around the EXE. An Xbox app package keeps Easy Anti-Cheat and `start_protected_game.exe` (now recognised as Easy Anti-Cheat's launcher) beside its manifest, several folders above the game EXE, so the install confirmation showed no anti-cheat risk for such games. Files found there are listed relative to that root and each file once.
+
 ## [0.2.0-preview.5] - 2026-10-19
 
 ### Added

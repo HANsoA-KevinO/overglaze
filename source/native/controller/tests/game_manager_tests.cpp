@@ -338,6 +338,35 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
         need(found.complete&&found.executables.size()==2&&found.executables.front()==fs::canonical(ship),"GDK package: root Content walked, project Content skipped");
         fs::create_directories(root/L"empty-game");const auto none=lab::games::discover(root/L"empty-game");
         need(none.complete&&none.executables.empty()&&!none.notice.empty(),"an empty result says so");}
+    // An Xbox app (GDK) package whose game EXE is not a *-Shipping build, with a
+    // crash reporter in an engine plugin's Binaries\Win64, a launch helper and the
+    // Easy Anti-Cheat launcher beside the manifest, and the anti-cheat folder at
+    // the package root -- three levels above the EXE's own folder.
+    {const auto eac_pkg=root/L"gdk-eac";const auto content=eac_pkg/L"Content";
+        for(const auto* sub:{L"Proj/Binaries/WinGDK",L"Engine/Binaries/Win64",L"Engine/Plugins/Sentry/Binaries/Win64",L"Engine/Plugins/DLSS/Binaries/ThirdParty/Win64",L"EasyAntiCheat"})fs::create_directories(content/sub);
+        put(content/L"MicrosoftGame.config","<Game/>");
+        const auto game=content/L"Proj/Binaries/WinGDK/ProjGame.exe";put(game,pe64(standard,"gdk game"));
+        const auto crashpad=content/L"Engine/Plugins/Sentry/Binaries/Win64/crashpad_handler.exe";put(crashpad,pe64(standard,"crashpad"));
+        const auto helper=content/L"gamelaunchhelper.exe";put(helper,pe64(standard,"launch helper"));
+        const auto eac=content/L"start_protected_game.exe";put(eac,pe64(standard,"eac launcher"));
+        const auto setup=content/L"EasyAntiCheat/EasyAntiCheat_EOS_Setup.exe";put(setup,pe64(standard,"eac setup"));
+        const auto other=content/L"Other.exe";put(other,pe64(standard,"other"));
+        const auto tool=content/L"Engine/Binaries/Win64/EngineTool.exe";put(tool,pe64(standard,"engine tool"));
+        for(const auto* n:{L"nvngx_dlss.dll",L"nvngx_dlssd.dll"})put(content/L"Engine/Plugins/DLSS/Binaries/ThirdParty/Win64"/n,"x");
+        const auto found=lab::games::discover(eac_pkg);const auto& x=found.executables;
+        auto at=[&](const fs::path& p){return std::size_t(std::find(x.begin(),x.end(),fs::canonical(p))-x.begin());};
+        need(found.complete&&x.size()==7&&x.front()==fs::canonical(game),"GDK package: the non-shipping game EXE in <Project>\\Binaries\\WinGDK comes first");
+        for(const auto& h:{crashpad,helper,eac,setup})for(const auto& plain_exe:{other,tool})need(at(h)<x.size()&&at(h)>at(plain_exe),"crash reporters, launchers and anti-cheat helpers come last");
+        const auto boot=lab::games::discover(helper);
+        need(boot.executables.size()==2&&boot.executables.front()==fs::canonical(game)&&boot.executables.back()==fs::canonical(helper)&&!boot.notice.empty(),"choosing the launch helper offers the game EXE first; the engine's tools are not offered");
+        const auto pre=lab::games::preflight(game);
+        need(pre.verdict=="ngx-rr-ready"&&pre.anticheat==std::vector<std::string>{"Easy Anti-Cheat"}&&pre.risks()==std::vector<std::string>{"anticheat"},"anti-cheat at the package root is found and named, as a risk");
+        need(check_named(pre.checks,"anticheat")->outcome==lab::games::Outcome::fail&&std::find(pre.anticheat_markers.begin(),pre.anticheat_markers.end(),"start_protected_game.exe")!=pre.anticheat_markers.end()&&
+             std::find(pre.anticheat_markers.begin(),pre.anticheat_markers.end(),"EasyAntiCheat")!=pre.anticheat_markers.end(),"markers are reported relative to the root they were found under");
+        // A manifest one level above the EXE: both scans see the same file, reported once.
+        const auto close_pkg=root/L"gdk-close";fs::create_directories(close_pkg/L"Bin");put(close_pkg/L"MicrosoftGame.config","<Game/>");
+        put(close_pkg/L"Bin/Close.exe",pe64(standard,"close"));put(close_pkg/L"Bin/EasyAntiCheat_EOS.dll","eac");
+        need(lab::games::preflight(close_pkg/L"Bin/Close.exe").anticheat_markers.size()==1,"a marker seen from both roots is reported once");}
     // An Unreal layout: bootstrap at the root, the game under <Project>\Binaries\Win64
     // beside its DLSS module, and asset folders the scan does not need to walk.
     {const auto ue=root/L"ue";for(const auto* d:{L"Engine/Binaries/Win64",L"Proj/Binaries/Win64",L"Proj/Content/Paks"})fs::create_directories(ue/d);
