@@ -2,6 +2,18 @@
 
 All notable changes to Overglaze are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Other injectors beside the game EXE (`dxgi.dll`, `d3d12.dll`, `d3d11.dll`, `version.dll`, `winmm.dll`, `dinput8.dll`, `ReShade.ini`) no longer block packaging or installing. They are a named risk notice, like anti-cheat and anti-tamper: the game card's *其他注入工具* tag, a line on the game's page and in the install / update / re-adaptation confirmation (*检测到其他注入工具：version.dll。可能和釉光冲突；如果游戏崩溃或 NR 不工作，先移除它再试。*), a failed `other-loaders` check, and `other_loaders` in the status and preflight JSON. Installing is the acknowledgement; the transaction and the install receipt record `other-loaders` in `risks` with the file names in `other_loaders`. Overglaze never changes or removes the other tool's files. Two cases still refuse, because installing would do real harm, and the refusal names the file and why: another DLSS 5 / NR add-on (`renodx-dlss5.addon64`, `overglaze*.addon64`, `dlsslab*.addon64`; two NR passes would stack), and a `dxgi.dll` that is not Overglaze's beside the EXE for a package that loads through the root proxy (Overglaze would have to put its own file there and never overwrites one). With late loading, which writes nothing at the root, a `dxgi.dll` there is only a notice. An installed game with another NR add-on beside it is no longer offered *Update plugin*, and `update` refuses before uninstalling anything. The install refusal message now carries the status's reason instead of a generic text. The state label is now *插件冲突*.
+- The model status (`overglaze_games model`, Settings → 模型) adds `file_version`, `nvidia_signed`, `signer`, `classification` (`known`, `nvidia-newer`, `nvidia-unverified`, `not-nvidia`, `unknown`) and `explanation` / `explanation_text`, and lists each known version's `file_version`. What is accepted is unchanged: the SHA-256 table, *允许使用未识别的模型* and each install's pin.
+
+### Fixed
+
+- Importing a model that is not a known version said only "模型版本未识别" and nothing about why. Before refusing, Overglaze now reads the file's version resource and checks its Authenticode signature (as data, never loading the file; no network: revocation off, cached URL retrieval only; leaf signer must be NVIDIA Corporation; at most 15 seconds, anything unfinished is unknown) and says which case it is: a newer NVIDIA original than this Overglaze knows (update it in *设置 → 检查更新*, or opt in to use it now), an NVIDIA-signed file Overglaze has not verified (opt in at your own risk), or a file without a valid NVIDIA signature, which may have been modified, for example for other GPUs (opt in at your own risk). Each message includes the file version (or 未知) and the first 12 hex digits of the SHA-256. Settings → 模型 and the Games page show the same explanation for the model in `app\models`.
+- A foreign `dxgi.dll` beside the EXE of a root-proxy game was found only in the install's staging step, after Overglaze's subfolder had been created in the game folder, and reported as "目标文件已存在". The check now refuses it, naming the file, before anything is written.
+
 ## [0.2.0-preview.7] - 2026-10-20
 
 ### Added

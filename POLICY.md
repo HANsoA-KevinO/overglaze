@@ -14,7 +14,11 @@ Before installing, Overglaze runs a read-only check of the game:
 
 - **Anti-cheat:** it scans the game folder for file names of known anti-cheat systems and names what the file names point to (for example Easy Anti-Cheat, BattlEye, EQU8, Vanguard, Anti-Cheat Expert). A finding is shown as a risk, not a refusal.
 - **Denuvo Anti-Tamper:** it reads the game EXE's section table and looks for section names that Denuvo-protected executables are known to carry. A finding is shown as a risk, not a refusal, and the desktop program then loads Overglaze late (see below).
-- **Other injectors:** it looks for other proxy DLLs and injection tools in the game folder (for example ReShade or another `dxgi.dll`, `d3d12.dll`, `version.dll`, `winmm.dll` or `dinput8.dll`). It does not install alongside them. This one is a refusal, because two loaders in one folder do not work together.
+- **Other injectors:** it looks for other proxy DLLs and injection tools beside the game EXE (for example ReShade, `dxgi.dll`, `d3d12.dll`, `d3d11.dll`, `version.dll`, `winmm.dll` or `dinput8.dll`). A finding is shown as a risk, not a refusal: Overglaze writes only its own files (its own `dxgi.dll` with the proxy DLL, nothing in the root with late loading) and never changes or removes another tool's. The two may still conflict; if the game crashes or NR doesn't work, remove the other tool and try again. Two cases are still refused, because installing would do real harm:
+  - another DLSS 5 / NR add-on in the folder (RenoDX's `renodx-dlss5.addon64`, or an earlier Overglaze / DLSS Lab add-on), because two NR passes would stack on every frame;
+  - a file that isn't Overglaze's where Overglaze would write its own: a `dxgi.dll` beside the EXE when the game would load Overglaze through the proxy DLL. Overglaze never overwrites or deletes it.
+
+  The refusal names the file and the reason.
 
 **Not detected does not mean not present.**
 
@@ -27,7 +31,7 @@ So the checks can name a risk; they can never certify a game as safe. **Your exp
 - In the desktop program, the confirmation dialog lists what the check found and the risks; choosing *Install* or *Update* there is your acknowledgement.
 - On the command line, pass `--accept-risk --consent "<text>"`. The older `--offline --no-anticheat` and `--denuvo-passive-coexistence` are still accepted as aliases.
 
-The acknowledgement and what the check found are recorded with the install. The installed configuration records the facts the check found (anti-tamper, anti-cheat names) and your acknowledgement; it never states that a game has no anti-cheat. If you are not sure, don't install.
+The acknowledgement and what the check found are recorded with the install, including the other injectors found at that moment. The installed configuration records the facts the check found (anti-tamper, anti-cheat names) and your acknowledgement; it never states that a game has no anti-cheat. If you are not sure, don't install.
 
 ## DRM
 
@@ -53,7 +57,7 @@ The desktop program handles a game with Denuvo like any other game: it shows the
 
 - Overglaze never modifies NVIDIA modules: not the game's Streamline or DLSS DLLs, not the driver, not the model.
 - The game's NVIDIA modules are checked for a valid Authenticode signature. The in-game component refuses to hook Streamline modules that aren't validly signed.
-- Overglaze verifies only the original model: by default it is accepted only if its SHA-256 matches a known NVIDIA release (listed in [docs/MODEL.md](docs/MODEL.md)). Any other file is an unrecognized model. It is used only when you explicitly allow unrecognized models, at your own risk; Overglaze neither tests nor endorses it, and each installation pins that exact file's SHA-256.
+- Overglaze verifies only the original model: by default it is accepted only if its SHA-256 matches a known NVIDIA release (listed in [docs/MODEL.md](docs/MODEL.md)). Any other file is an unrecognized model. It is used only when you explicitly allow unrecognized models, at your own risk; Overglaze neither tests nor endorses it, and each installation pins that exact file's SHA-256. To say why a file is not accepted, Overglaze reads its file version and checks its Authenticode signature (as data, without loading the file and without network access): a newer NVIDIA original, an NVIDIA-signed file it hasn't verified, or a file without a valid NVIDIA signature. This only explains the refusal; a signature never makes a file acceptable.
 - Overglaze does not get around driver or GPU-architecture restrictions.
 
 ## System

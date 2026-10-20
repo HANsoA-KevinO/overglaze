@@ -56,7 +56,9 @@ set_tests_properties(native_root_locator PROPERTIES TIMEOUT 30)
 # table and game_presentation.cpp the backend-state -> three-axes mapping;
 # neither is linked into anything that runs in a game.
 add_library(lab_game_manager STATIC src/game_manager.cpp src/attach.cpp src/game_reasons.cpp src/game_presentation.cpp)
-target_link_libraries(lab_game_manager PUBLIC lab_controller_includes lab_core lab_root_locator)
+# wintrust / crypt32 / version: a model file's signature and version resource,
+# read as data for the model status (never loading the file).
+target_link_libraries(lab_game_manager PUBLIC lab_controller_includes lab_core lab_root_locator wintrust crypt32 version)
 # The state mapping and the code table, pure: every backend state, every code.
 add_executable(lab_game_status_tests tests/game_status_tests.cpp)
 target_link_libraries(lab_game_status_tests PRIVATE lab_game_manager)
@@ -77,10 +79,18 @@ target_link_libraries(overglaze_launch PRIVATE lab_game_manager)
 add_executable(lab_launch_command_tests tests/launch_command_tests.cpp)
 target_link_libraries(lab_launch_command_tests PRIVATE lab_controller_includes shell32)
 add_test(NAME native_launch_command COMMAND lab_launch_command_tests)
-add_executable(lab_game_manager_tests tests/game_manager_tests.cpp)
+# The version resource makes a copy of the test program the unsigned synthetic
+# DLL the model classification reads.
+add_executable(lab_game_manager_tests tests/game_manager_tests.cpp tests/model_fixture_version.rc)
 target_link_libraries(lab_game_manager_tests PRIVATE lab_game_manager)
 add_test(NAME native_game_manager COMMAND lab_game_manager_tests)
 set_tests_properties(native_game_manager PROPERTIES TIMEOUT 45)
+# Optional and local only: the owner's backup copies of the reviewed models
+# (data\model-backup, never in Git) classify as NVIDIA-signed with their file
+# versions, and a one-byte-flipped copy does not. Read as data, never loaded.
+# Skipped (77) when the backups are not on this machine.
+add_test(NAME native_model_identity_local COMMAND lab_game_manager_tests --model-backup)
+set_tests_properties(native_model_identity_local PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
 add_executable(lab_app_maintenance_tests tests/app_maintenance_tests.cpp)
 target_link_libraries(lab_app_maintenance_tests PRIVATE lab_game_manager)
 add_test(NAME native_app_maintenance COMMAND lab_app_maintenance_tests)

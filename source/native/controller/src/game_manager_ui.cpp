@@ -76,7 +76,8 @@ bool has_risk(const games::Status& s,const char* risk){return std::find(s.risks.
 // What the checks found, one line each: information, never an error state.
 void risk_lines(const games::Status& s){
     if(has_risk(s,"anti-tamper"))muted_text(games::render("risk-anti-tamper").c_str());
-    if(has_risk(s,"anticheat"))muted_text(games::render("risk-anticheat",json{{"names",s.anticheat}}).c_str());}
+    if(has_risk(s,"anticheat"))muted_text(games::render("risk-anticheat",json{{"names",s.anticheat}}).c_str());
+    if(has_risk(s,"other-loaders"))muted_text(games::render("risk-other-loaders",json{{"names",s.other_loaders}}).c_str());}
 std::vector<games::Status> rows(games::Manager& manager){std::vector<games::Status> all;for(auto& e:manager.list())all.push_back(manager.inspect(e));return all;}
 std::string pick(HWND w){const auto result=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;std::string path;
     if(SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog)))){dialog->SetOptions(FOS_PICKFOLDERS|FOS_FORCEFILESYSTEM|FOS_PATHMUSTEXIST|FOS_NOCHANGEDIR);dialog->SetTitle(L"选择游戏安装目录");if(SUCCEEDED(dialog->Show(w))){Microsoft::WRL::ComPtr<IShellItem> item;PWSTR value=nullptr;if(SUCCEEDED(dialog->GetResult(&item))&&SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH,&value))){path=utf8(value);CoTaskMemFree(value);}}}
@@ -343,6 +344,9 @@ void GameManagerPage::draw(HWND window,float dpi){
             if(s.state=="needs-package"){
                 muted_text(games::render("load-plan",json{{"load_mode",has_risk(s,"anti-tamper")?"late_d3d12":"root_proxy_d3d12"}}).c_str());mark("games.load-plan");
                 if(has_risk(s,"anti-tamper"))muted_text(games::render("load-late-anti-tamper").c_str());
+                // The root proxy goes where another tool's dxgi.dll already is:
+                // say now that the install will refuse, not after the package.
+                else if(std::find(s.other_loaders.begin(),s.other_loaders.end(),"dxgi.dll")!=s.other_loaders.end())muted_text(games::render("load-root-dxgi-taken").c_str());
                 gap(4*dpi);}
             // An installed late-loading game: the text to paste stays here, to copy again.
             if(s.installed&&!s.launch_command.empty())launch_card(s.launch_via,s.launch_command,"games.copy-launch");
@@ -431,7 +435,10 @@ void GameManagerPage::draw(HWND window,float dpi){
         // acknowledgement for this operation (a reminder, not a gate); the
         // backend gates still apply. A marker scan proves no game free of them.
         if(writes){
-            if(pending_status_.risks.empty())muted_text(games::render("risk-unproven").c_str());else risk_lines(pending_status_);
+            // "Not detected" is about protections; another injector found is
+            // no evidence either way, so the line stays beside its notice.
+            if(!has_risk(pending_status_,"anti-tamper")&&!has_risk(pending_status_,"anticheat"))muted_text(games::render("risk-unproven").c_str());
+            risk_lines(pending_status_);
             gap(6*dpi);
             ImGui::PushStyleColor(ImGuiCol_Text,ink(games::Tone::warning));ImGui::TextWrapped("%s",games::render("risk-notice").c_str());
             // An unrecognized model the user allowed -- the package's, or the

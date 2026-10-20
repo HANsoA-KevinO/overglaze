@@ -24,11 +24,12 @@ You also need the model in place (see [MODEL.md](MODEL.md)).
    | EXE | Readable? Valid 64-bit PE? Xbox app EXEs usually can't be read; that is reported as unknown, not as passed. |
    | Denuvo | Section names in the EXE that Denuvo-protected executables carry |
    | Anti-cheat | File names of known anti-cheat systems in the game folder. The scan is bounded; if it stops early, the result is unknown. |
-   | Other injectors | Other proxy DLLs or ReShade files in the game folder |
+   | Other DLSS 5 / NR add-ons | `renodx-dlss5.addon64`, or an earlier Overglaze / DLSS Lab add-on (`overglaze*.addon64`, `dlsslab*.addon64`) beside the EXE |
+   | Other injectors | Other proxy DLLs or ReShade beside the EXE: `dxgi.dll`, `d3d12.dll`, `d3d11.dll`, `version.dll`, `winmm.dll`, `dinput8.dll`, `ReShade.ini` |
    | NVIDIA modules | Streamline and DLSS modules: version, SHA-256, Authenticode signature |
    | Route | `sl-rr`, `sl-sr` or NGX direct; Ray Reconstruction is preferred over Super Resolution |
 
-   A failed injector check blocks the install. Denuvo and anti-cheat findings don't: they are shown as risks, with what was found, on the game's page and again in the install confirmation. Unknown results don't block either, but they mean Overglaze couldn't check that item, so you have to know the answer yourself.
+   Another DLSS 5 / NR add-on blocks the install, because two NR passes would stack. So does a `dxgi.dll` that isn't Overglaze's beside the EXE when the package loads Overglaze through the proxy DLL, because Overglaze would have to put its own file there and never overwrites one. Other injectors, Denuvo and anti-cheat findings don't block: they are shown as risks, with what was found, on the game's page and again in the install confirmation, and the transaction records them. Another injector may still conflict with Overglaze; if the game crashes or NR doesn't work, remove it and try again. Unknown results don't block either, but they mean Overglaze couldn't check that item, so you have to know the answer yourself.
 3. **Generate the adapter package.** The package pins the game version (the EXE hash, or the package identity for Xbox app games) and the hashes of its NVIDIA modules, and bundles the current in-game files. The loading method is shown before you generate it: the proxy DLL, or late loading for a game whose EXE carries Denuvo.
 4. **Install.** Close the game first. The confirmation lists what the check found and the risks of online and protected games; choosing *Install* there is your acknowledgement. Overglaze then:
    - stages and checks the files;

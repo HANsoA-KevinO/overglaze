@@ -77,10 +77,15 @@ struct Preflight {
     // anticheat_markers: the files found (relative paths); anticheat: what their
     // names point to ("Easy Anti-Cheat", "BattlEye", ...), or the file name
     // itself when the name points to no known product.
-    std::vector<std::string> sections, anticheat_markers, anticheat, loader_conflicts, notes;
-    // Anti-tamper (Denuvo sections) and anti-cheat (marker files) are risks the
-    // user is told about and accepts at install, not verdicts: "anti-tamper",
-    // "anticheat", in that order; empty when the checks found neither.
+    // loader_conflicts: another DLSS 5 / NR add-on beside the EXE (two NR passes
+    // would stack), the one kind of other tool that refuses -- verdict
+    // loader-conflict. other_loaders: every other injector or proxy DLL found
+    // there (dxgi.dll, d3d12.dll, version.dll, ..., ReShade.ini): a notice.
+    std::vector<std::string> sections, anticheat_markers, anticheat, loader_conflicts, other_loaders, notes;
+    // Anti-tamper (Denuvo sections), anti-cheat (marker files) and other
+    // injectors are risks the user is told about and accepts at install, not
+    // verdicts: "anti-tamper", "anticheat", "other-loaders", in that order;
+    // empty when the checks found none of them.
     std::vector<std::string> risks() const;
     json modules=json::object(); // name -> {sha256, version, signature}
     // Set when an installed OS package covers the EXE; executable_sha256 is
@@ -142,7 +147,12 @@ struct Status {
     // (anti-cheat files in the game folder), with the anti-cheat names. Every
     // install, update and re-adaptation needs the user's risk acknowledgement,
     // whatever the checks found: not finding them proves nothing.
-    std::vector<std::string> risks,anticheat;
+    // "other-loaders": other injectors or proxy DLLs beside the EXE, named in
+    // other_loaders, found when the status was made (they come and go with the
+    // user's other tools, so they are never taken from a package). dxgi.dll is
+    // named only where Overglaze puts no file of that name; where it does, a
+    // foreign one refuses instead (loader-conflict / foreign-loader).
+    std::vector<std::string> risks,anticheat,other_loaders;
     // The package's model is not a reviewed version: the user allowed an
     // unrecognized model and this package pins it. Shown with the warning,
     // never a pass for anything else.
@@ -194,9 +204,52 @@ struct ModelStatus {
     // unrecognized models: usable, at the user's risk (known stays false).
     bool unrecognized_allowed=false;
     std::string sha256,label,error;
+    // What the file says about itself (ModelFileFacts below), so that a refused
+    // or unrecognized model explains itself. For a reviewed version these come
+    // from the review (the table), not from reading the file again.
+    // classification: known | nvidia-newer | nvidia-unverified | not-nvidia |
+    // unknown; empty when no file is present. Diagnosis only: nothing here
+    // changes what is accepted.
+    std::string file_version,signer,classification;
+    std::optional<bool> nvidia_signed;
     bool usable()const noexcept{return present&&error.empty()&&(known||unrecognized_allowed);}
 };
 json model_json(const ModelStatus&);
+// What an NR model file says about itself, read WITHOUT loading or executing
+// it: the file version from its version resource (GetFileVersionInfoExW maps
+// the file as data) and its Authenticode signature (WinVerifyTrust with
+// revocation checks off and cached URL retrieval only, so no network), with
+// the leaf signer's common name required to be "NVIDIA Corporation". Both run
+// on a worker bounded by limit_ms; whatever did not finish in time, or failed
+// to run, is unknown (empty version, nvidia_signed unset) -- never a crash.
+// Diagnosis only: what is accepted is decided by the SHA-256 table
+// (lab_model_versions.hpp), the user's opt-in and the per-install pin alone.
+struct ModelFileFacts {
+    std::string file_version;          // "310.9.16.0"; empty: no version resource, unreadable or timed out
+    std::optional<bool> nvidia_signed; // unset: the signature check did not finish
+    std::string signer;                // the verified leaf signer's common name
+    long signature_status=0;           // WinVerifyTrust's result, for diagnosis (0: valid)
+    bool complete=false;               // both reads finished within the bound
+};
+inline constexpr unsigned kModelFactsTimeLimitMs=15000;
+ModelFileFacts read_model_facts(const std::filesystem::path&,unsigned limit_ms=kModelFactsTimeLimitMs);
+// a <=> b as dotted numeric file versions (missing parts are 0); unset when
+// either does not parse.
+std::optional<int> compare_file_versions(std::string_view a,std::string_view b);
+// The file version of a reviewed model (by SHA-256), or nullptr.
+const char* reviewed_file_version(std::string_view sha256) noexcept;
+// Newer than every reviewed version's file version.
+bool newer_than_reviewed(std::string_view file_version);
+// known (the hash is reviewed) | nvidia-newer (NVIDIA-signed, newer than every
+// reviewed version) | nvidia-unverified (NVIDIA-signed, not newer, or no
+// readable version) | not-nvidia (unsigned, broken signature, another signer)
+// | unknown (the signature check did not finish).
+std::string classify_model(bool known,const ModelFileFacts&);
+// Why a present model that is not a reviewed version is what it is, through the
+// code table: model-refused.<classification> while it is not allowed (what to
+// do, with the file version and the first 12 hex of its SHA-256), model-facts
+// once the user allowed it. Empty code for a reviewed or absent model.
+Reason model_explanation(const ModelStatus&);
 // Installer checks read only the selected application root and existing records.
 // They never construct Manager, create directories or modify a game.
 struct AppMaintenanceStatus {
@@ -315,7 +368,10 @@ public:
     ModelStatus model_status() const;
     // User-selected file, reviewed SHA only -- or any file once unrecognized
     // models are allowed. Existing different content is refused; a matching
-    // model is reused. No DLL is loaded by this operation.
+    // model is reused. No DLL is loaded by this operation. A refused file is
+    // described first (read_model_facts) and the refusal says which case it is
+    // (model_explanation): a newer original, an NVIDIA-signed file not
+    // reviewed, or no valid NVIDIA signature.
     ModelStatus import_model(const std::filesystem::path&);
     // The user's explicit opt-in (desktop setting, --allow-unrecognized-model):
     // import, package and install a model outside lab_model_versions.hpp. A

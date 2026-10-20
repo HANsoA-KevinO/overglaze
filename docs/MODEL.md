@@ -27,6 +27,23 @@ Each of these checks must pass; if any one fails, NR does not start.
 
 Anything that doesn't match is refused. Overglaze does not try to repair or work around a mismatch.
 
+## When a model is refused
+
+A refused import, the model status (*Settings → 模型*, `overglaze_games model`) and the Games page say which case the file is. To tell, Overglaze reads two things from the file as data, without loading or running it:
+
+- its **file version**, from the version resource (`GetFileVersionInfoExW`, which maps the file as data);
+- its **Authenticode signature**, with `WinVerifyTrust` (no network: revocation checks off, cached URL retrieval only). It counts as NVIDIA's only when the signature is valid and the signing certificate's common name is *NVIDIA Corporation*.
+
+Both run with a time limit (15 seconds); anything that doesn't finish, or can't be read, is reported as unknown.
+
+| Case | What it means | What to do |
+|---|---|---|
+| NVIDIA-signed, newer than every known version | Most likely a newer original that this Overglaze doesn't know yet | Update Overglaze (*设置 → 检查更新*). To use it before then, turn on *允许使用未识别的模型*. |
+| NVIDIA-signed, not newer | An NVIDIA-signed file that Overglaze hasn't verified | Turn on *允许使用未识别的模型* if you want to use it, at your own risk. |
+| No valid NVIDIA signature | Unsigned, a broken signature or another signer: the file may have been modified (for example a version changed for other GPUs) | Overglaze uses only the original by default; turn on *允许使用未识别的模型* to use it anyway, at your own risk. |
+
+Every message shows the file version (or 未知, unknown) and the first 12 hex digits of the file's SHA-256, so you can report it. This only explains the refusal: what is accepted is still decided by the SHA-256 table below, your opt-in and each install's pin. A valid NVIDIA signature never makes a file acceptable on its own.
+
 ## Unrecognized models (opt-in, at your own risk)
 
 Overglaze verifies only the original model listed below. A file whose SHA-256 is not in the table is an unrecognized model. It is used only after you explicitly allow it:

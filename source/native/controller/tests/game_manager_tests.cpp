@@ -76,8 +76,44 @@ const lab::games::Check* check_named(const std::vector<lab::games::Check>& v,con
 // Top-level stages an operation reported as started, in order.
 std::vector<std::string> started(const std::vector<lab::games::ProgressEvent>& ev,const std::string& op,const std::string& parent){std::vector<std::string> out;
     for(const auto& e:ev)if(e.operation==op&&e.parent==parent&&e.status=="start")out.push_back(e.stage);return out;}
+// Where fixtures go: OVERGLAZE_TEST_TEMP when set, else the user's temp directory.
+fs::path fixture_base(){std::wstring v(32768,L'\0');auto n=GetEnvironmentVariableW(L"OVERGLAZE_TEST_TEMP",v.data(),DWORD(v.size()));
+    if(!n||n>=v.size()){n=GetTempPathW(DWORD(v.size()),v.data());need(n&&n<v.size(),"temp path");}
+    v.resize(n);const auto p=fs::canonical(fs::path(v));need(fs::is_directory(p),"fixture base is a directory");lab::winpath::require_no_reparse(p);return p;}
+// Optional and local only: the owner's backup copies of the two reviewed models
+// (<root>\data\model-backup\<version>\nvngx_dlssnr.dll, never in Git), read as
+// data -- version resource and signature -- and never loaded. Exit 77
+// (skipped) when neither is there. A copy with one byte flipped, in the
+// fixture directory and removed afterwards, must lose its NVIDIA signature.
+int model_backup_check(){
+    namespace mg=lab::games;
+    const auto backups=lab::root::resolve_self().root/L"data"/L"model-backup";
+    const std::pair<const wchar_t*,const char*> rows[]{{L"310.8.0.0","310.8.0.0"},{L"310.9.16.0","310.9.16.0"}};
+    json out=json::array();fs::path flip_source;
+    for(const auto& [dir,version]:rows){const auto file=backups/dir/L"nvngx_dlssnr.dll";if(!fs::is_regular_file(file))continue;
+        const auto sha=lab::sha256(file);const auto f=mg::read_model_facts(file);
+        need(lab::model::known(sha)!=nullptr,std::string("the backup is a reviewed version: ")+version);
+        need(f.complete&&f.nvidia_signed==true&&f.signer=="NVIDIA Corporation"&&f.signature_status==0&&f.file_version==version,std::string("the backup reads as NVIDIA-signed, version ")+version);
+        need(mg::reviewed_file_version(sha)==std::string(version),"its version is the one the review recorded");
+        need(mg::classify_model(true,f)=="known"&&mg::classify_model(false,f)=="nvidia-unverified","known by its hash; were the hash unknown, case c (signed, not newer)");
+        out.push_back({{"version",f.file_version},{"nvidia_signed",true},{"signer",f.signer},{"sha256",sha.substr(0,12)}});if(flip_source.empty())flip_source=file;}
+    if(flip_source.empty()){std::cout<<json{{"skipped",true},{"why","no model backup under "+lab::utf8(backups.wstring())}}.dump()<<'\n';return 77;}
+    const auto base=fixture_base();
+    const auto copy=base/lab::wide("overglaze-model-flip-"+lab::uuid()+".dll"),other_root=base/lab::wide("overglaze-model-import-"+lab::uuid());
+    struct Cleanup {fs::path a,b;~Cleanup(){std::error_code ec;fs::remove(a,ec);fs::remove_all(b,ec);}} cleanup{copy,other_root};
+    need(CopyFileW(flip_source.c_str(),copy.c_str(),TRUE)!=FALSE,"copy for the flipped byte");
+    {const auto at=std::streamoff(fs::file_size(copy)/2);std::fstream f(copy,std::ios::in|std::ios::out|std::ios::binary);char c=0;
+     f.seekg(at);f.read(&c,1);c=char(c^0x01);f.seekp(at);f.write(&c,1);f.flush();need(bool(f),"one byte flipped");}
+    const auto flipped=mg::read_model_facts(copy);
+    need(flipped.complete&&flipped.nvidia_signed==false&&flipped.signature_status!=0&&mg::classify_model(false,flipped)=="not-nvidia","one byte flipped: no valid NVIDIA signature, case d");
+    need(fs::create_directory(other_root),"throwaway root");
+    std::string message;try{mg::Manager(other_root,std::vector<mg::Policy>{},{},false).import_model(copy);}catch(const std::exception& x){message=x.what();}
+    need(message.find("没有有效的 NVIDIA 签名")!=std::string::npos&&message.find(lab::sha256(copy).substr(0,12))!=std::string::npos,"its import is refused as case d");
+    std::cout<<json{{"passed",true},{"checks",checks},{"backups",out},{"flipped",{{"version",flipped.file_version},{"signature_status",flipped.signature_status},{"classification","not-nvidia"}}},{"loaded",false}}.dump(2)<<'\n';
+    return 0;}
 }
 int wmain(int argc,wchar_t** argv){fs::path root;try{
+    if(argc==2&&std::wstring(argv[1])==L"--model-backup")return model_backup_check();
     // Read-only inspection against the real Lab, whose root comes from where this
     // test program sits (a track build directory), never from a literal.
     if(argc==3&&std::wstring(argv[1])==L"--inspect"){lab::games::Manager manager(lab::root::resolve_self().root);lab::games::Entry e{lab::uuid(),"Read-only inspection",argv[2]};std::cout<<lab::games::status_json(manager.inspect(e)).dump(2);return 0;}
@@ -138,8 +174,20 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     need(m.policies().size()==1&&st(m,e).state=="available"&&st(m,e).package=="testgame"&&st(m,e).can_install,"generated package makes the game available");
     // ---- consent, conflicts, foreign loaders, single writer
     reject([&]{m.install(e.id,false,"c");},"the risk acknowledgement is mandatory");reject([&]{m.install(e.id,true,"");},"consent text mandatory");need(!fs::exists(root/L"game/dxgi.dll"),"no side effects without confirmation");
-    put(root/L"game/ReShade.ini","existing user mod");need(!st(m,e).can_install&&st(m,e).state=="blocked","loader conflict rejected");
-    {auto s=st(m,e);need(s.reasons.front().code=="loader-conflict"&&s.install_state=="not-installed"&&s.reasons.front().params["files"].size()==1&&lab::games::present(s).label=="label.loader-conflict","a blocked state names its refusal");}fs::remove(root/L"game/ReShade.ini");
+    // Other tools beside the EXE: a named, counted notice -- except another
+    // DLSS 5 / NR add-on (two NR passes would stack), which still refuses.
+    put(root/L"game/ReShade.ini","existing user mod");
+    {auto s=st(m,e);need(s.state=="available"&&s.can_install&&lab::games::present(s).label=="label.available","ReShade.ini alone is a notice: the game stays installable");
+     need(s.other_loaders==std::vector<std::string>{"ReShade.ini"}&&s.risks==std::vector<std::string>{"other-loaders"}&&has_reason(s,"risk-other-loaders"),"named and counted as the other-loaders risk");
+     need(lab::games::render("risk-other-loaders",json{{"names",s.other_loaders}}).find("ReShade.ini")!=std::string::npos&&lab::games::status_json(s)["other_loaders"]==json::array({"ReShade.ini"}),"the notice names the file");}
+    fs::remove(root/L"game/ReShade.ini");
+    put(root/L"game/renodx-dlss5.addon64","another NR add-on");
+    {auto s=st(m,e);need(!s.can_install&&s.state=="blocked"&&s.install_state=="not-installed"&&s.reasons.front().code=="loader-conflict"&&lab::games::present(s).label=="label.loader-conflict","another NR add-on still refuses");
+     need(s.reasons.front().params["files"]==json::array({"renodx-dlss5.addon64"})&&s.reasons.front().params["cause"]=="nr-addon"&&check_named(s.checks,"loader-conflicts")->outcome==lab::games::Outcome::fail,"named, with why");
+     const auto t=lab::games::render(s.reasons.front());need(t.find("renodx-dlss5.addon64")!=std::string::npos&&t.find("叠加")!=std::string::npos,"the refusal says which file and why");}
+    {std::string said;try{m.install(e.id,true,"c");}catch(const std::exception& x){said=x.what();}need(said.find("renodx-dlss5.addon64")!=std::string::npos,"install refused, saying which file");}
+    fs::remove(root/L"game/renodx-dlss5.addon64");
+    put(root/L"game/overglaze_preview.addon64","an earlier add-on build");need(st(m,e).state=="blocked"&&st(m,e).reasons.front().params["files"]==json::array({"overglaze_preview.addon64"}),"an earlier add-on build of this project too");fs::remove(root/L"game/overglaze_preview.addon64");
     put(root/L"game/dxgi.dll","another loader");need(!st(m,e).can_install&&!st(m,e).can_uninstall,"foreign host no overwrite/delete");need(st(m,e).reasons.front().code=="foreign-loader","a foreign loader is named");reject([&]{m.install(e.id,true,"c");},"foreign install refused");need(fs::file_size(root/L"game/dxgi.dll")==14,"foreign bytes preserved");fs::remove(root/L"game/dxgi.dll");
     put(pkg/L"dxgi.dll","tampered package");need(!st(m,e).can_install,"package payload hash bound");need(st(m,e).reasons.front().code=="package-payload-mismatch","a tampered package is named");fs::remove(pkg/L"dxgi.dll");fs::copy_file(root/L"app/research/host/dxgi.dll",pkg/L"dxgi.dll");
     const auto store=root/L"data/settings/plugin-manager",tx=store/lab::wide(e.id)/L"transaction.json";
@@ -283,6 +331,13 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      need(cfg["version"]==4&&cfg.size()==12&&!cfg.contains("no_anticheat")&&cfg["risk"]["acknowledged"]==true&&cfg["risk"]["anti_tamper"]==true&&cfg["risk"]["anticheat"].empty(),"config V4 records Denuvo, claims nothing about anti-cheat");
      const auto man=read(root/L"app/adapters/denuvo-ngx/package.json");bool noted=false;
      for(const auto& n:man["notes"])if(n.get<std::string>().find("Denuvo")!=std::string::npos)noted=true;need(noted,"the package notes name the risk");}
+    // Late loading writes nothing at the game's root: a dxgi.dll there is
+    // another tool's, and only a notice.
+    put(root/L"game6/dxgi.dll","another tool's proxy");
+    {auto s=st(m,dn);need(s.state=="available"&&s.can_install&&s.load_mode=="late_d3d12"&&s.other_loaders==std::vector<std::string>{"dxgi.dll"}&&
+          s.risks==std::vector<std::string>{"anti-tamper","other-loaders"},"late loading: a root dxgi.dll is a notice, beside the anti-tamper risk");
+     need(check_named(s.checks,"root-proxy")==nullptr,"and no root-proxy check applies to it");}
+    fs::remove(root/L"game6/dxgi.dll");
     // Leave the registry and the package set exactly as the assertions below expect.
     m.forget(dn.id);fs::remove_all(root/L"app/adapters/denuvo-ngx");
     put(root/L"game3/Cheat.exe",pe64(standard,"cheat"));put(root/L"game3/sl.interposer.dll","sl");put(root/L"game3/sl.dlss_d.dll","dlss_d");put(root/L"game3/EasyAntiCheat_EOS.dll","eac");
@@ -305,6 +360,18 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     fs::remove(root/L"app/plugin/overglaze_controller.dll");
     put(root/L"game4/SrOnly.exe",pe64(standard,"sr"));put(root/L"game4/sl.interposer.dll","sl");put(root/L"game4/sl.dlss.dll","dlss");
     auto sr=m.add(root/L"game4/SrOnly.exe");{auto s=st(m,sr);need(s.state=="needs-package"&&s.route=="sl-sr"&&s.can_make_package,"an SR-only game can be packaged now");}
+    // Before any package: another injector (a frame-generation mod's version.dll,
+    // a dxgi.dll) is a notice in the preflight; another NR add-on is the verdict.
+    put(root/L"game4/version.dll","a frame-generation mod");put(root/L"game4/dxgi.dll","some other proxy");
+    {auto s=st(m,sr);need(s.state=="needs-package"&&s.can_make_package&&s.preflight["verdict"]=="sl-sr-ready"&&s.preflight["loader_conflicts"].empty(),"other injectors do not stop packaging");
+     need(s.other_loaders==std::vector<std::string>{"dxgi.dll","version.dll"}&&s.preflight["other_loaders"]==json::array({"dxgi.dll","version.dll"})&&s.preflight["risks"]==json::array({"other-loaders"}),"named in the status and the preflight, dxgi.dll included before a package exists");
+     need(check_named(s.checks,"other-loaders")->outcome==lab::games::Outcome::fail&&check_named(s.checks,"loader-conflicts")->outcome==lab::games::Outcome::pass&&has_reason(s,"risk-other-loaders"),"a failed, named check and a risk, not a refusal");}
+    fs::remove(root/L"game4/dxgi.dll");
+    put(root/L"game4/renodx-dlss5.addon64","another NR add-on");
+    {auto s=st(m,sr);need(s.state=="loader-conflict"&&!s.can_make_package&&s.preflight["verdict"]=="loader-conflict"&&s.reasons.front().code=="loader-conflict"&&s.reasons.front().params["cause"]=="nr-addon","another NR add-on is the verdict, named");
+     need(lab::games::present(s).label=="label.loader-conflict","shown as a conflict");}
+    {lab::games::PackageOptions o;o.allow_unsigned_modules=true;o.name="sr-conflict";reject([&]{m.make_package(sr.id,o);},"no package beside another NR add-on");need(!fs::exists(root/L"app/adapters/sr-conflict"),"nothing written");}
+    fs::remove(root/L"game4/renodx-dlss5.addon64");fs::remove(root/L"game4/version.dll");
     put(root/L"game4/sl.common.dll","common");
     {lab::games::PackageOptions o;o.allow_unsigned_modules=true;o.name="sr-only";
      const auto pkg=m.make_package(sr.id,o);
@@ -414,9 +481,29 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      need(plan["space"]["game_disk"]["writes"]==bytes&&plan["space"]["data_disk"]["writes"]==staged&&staged<bytes&&plan["space"]["game_disk"]["ok"].is_boolean()&&plan["space"]["data_disk"]["required_free"]==lab::games::kDataDiskReserveBytes,"space checks with what would be written");
      need(plan["directories_created"].size()==1&&plan["launch"]["code"]=="launch-root-proxy","plan names the new subdirectory and how to start the game");
      need(!fs::exists(box)&&!fs::exists(root/L"game7/overglaze")&&!fs::exists(root/L"game7/dxgi.dll"),"the plan wrote nothing");}
+    // ---- a foreign dxgi.dll where the root proxy goes: still refused, saying
+    // which file and why; its bytes are never touched.
+    put(root/L"game7/dxgi.dll","another tool's dxgi.dll");
+    {auto s=st(m,g);need(s.state=="blocked"&&!s.can_install&&s.install_state=="not-installed"&&s.reasons.front().code=="loader-conflict"&&lab::games::present(s).label=="label.loader-conflict","a foreign root dxgi.dll refuses the root proxy");
+     need(s.reasons.front().params["files"]==json::array({"dxgi.dll"})&&s.reasons.front().params["cause"]=="overwrite"&&check_named(s.checks,"root-proxy")->outcome==lab::games::Outcome::fail,"named: the file and why");
+     const auto t=lab::games::render(s.reasons.front());need(t.find("dxgi.dll")!=std::string::npos&&t.find("不覆盖")!=std::string::npos,"the words say which file and that it is not overwritten");
+     need(s.other_loaders.empty(),"and it is a refusal, not a notice");}
+    {std::string said;try{m.install(g.id,true,"c");}catch(const std::exception& x){said=x.what();}need(said.find("dxgi.dll")!=std::string::npos,"install refused, naming the file");}
+    need(fs::file_size(root/L"game7/dxgi.dll")==23&&!fs::exists(root/L"game7/overglaze"),"the foreign file is untouched, nothing written");
+    fs::remove(root/L"game7/dxgi.dll");
+    // ---- another injector beside the EXE (a frame-generation mod's version.dll):
+    // installable; the notice is in the status, the dialog and the transaction.
+    put(root/L"game7/version.dll","a frame-generation mod");
+    {auto s=st(m,g);need(s.state=="available"&&s.can_install&&s.other_loaders==std::vector<std::string>{"version.dll"}&&s.risks==std::vector<std::string>{"other-loaders"},"version.dll: installable, with the notice");}
     // ---- install, with progress
     std::vector<lab::games::ProgressEvent> ev;const lab::games::Progress cb=[&](const lab::games::ProgressEvent& x){ev.push_back(x);};
     m.install(g.id,true,"fixture consent: controller game",cb);
+    {const auto txj=read(store/lab::wide(g.id)/L"transaction.json");const auto docs=read(store/lab::wide(g.id)/L"install-receipt.json");
+     need(txj["risk_acknowledged"]==true&&txj["risks"]==json::array({"other-loaders"})&&txj["other_loaders"]==json::array({"version.dll"}),"the transaction records the acknowledged notice and the file");
+     need(docs["risks"]==json::array({"other-loaders"})&&docs["other_loaders"]==json::array({"version.dll"}),"and so does the second receipt");
+     need(fs::file_size(root/L"game7/version.dll")==22,"the other tool's file is untouched");
+     auto s=st(m,g);need(s.state=="installed"&&s.other_loaders==std::vector<std::string>{"version.dll"}&&has_reason(s,"risk-other-loaders"),"an installed game still names it");}
+    fs::remove(root/L"game7/version.dll");
     {auto expected=lab::games::operation_stages("install");expected.erase(std::find(expected.begin(),expected.end(),"verify"));
      need(started(ev,"install","")==expected,"install reports its stages in order");
      unsigned done=0,skipped=0;for(const auto& x:ev){need(x.status!="failed","no failure");if(x.status=="done")++done;if(x.status=="skipped"){++skipped;need(x.stage=="verify","only the checker is skipped");}
@@ -430,6 +517,14 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     put(root/L"app/plugin/dxgi.dll","synthetic CONTROLLER proxy v2");
     m=lab::games::Manager(root,std::nullopt,model_hash,false);
     {auto s=st(m,g);need(s.install_state=="update-available"&&s.update.package_behind_published&&s.health=="ok"&&s.reasons.front().params["parts"].size()==1&&s.reasons.front().params["parts"][0]=="proxy","a newer proxy is an update, named as such");}
+    // Another NR add-on placed beside an installed game: the update is refused
+    // BEFORE its uninstall, and the working install stays exactly as it was.
+    put(root/L"game7/renodx-dlss5.addon64","another NR add-on");
+    {auto s=st(m,g);need(s.state=="installed"&&s.update_available&&!s.can_update&&s.refusals.at("update").code=="loader-conflict"&&s.refusals.at("update").params["cause"]=="nr-addon","the update says why it is not offered");
+     const auto before=lab::sha256(root/L"game7/overglaze/overglaze_controller.dll");
+     reject([&]{m.update(g.id,true,"fixture consent: controller game");},"update refused beside another NR add-on");
+     need(lab::sha256(root/L"game7/overglaze/overglaze_controller.dll")==before&&fs::exists(root/L"game7/dxgi.dll")&&st(m,g).state=="installed","nothing was uninstalled");}
+    fs::remove(root/L"game7/renodx-dlss5.addon64");
     ev.clear();m.update(g.id,true,"fixture consent: controller game",cb);
     {auto s=st(m,g);need(s.install_state=="installed"&&lab::sha256(root/L"game7/dxgi.dll")==lab::sha256(root/L"app/plugin/dxgi.dll"),"the update carried the new proxy");
      need(started(ev,"update","")==lab::games::operation_stages("update"),"update stages");}
@@ -571,6 +666,64 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
       const auto text=lab::games::render(s.refusals.at("make-package"));need(text.find("不包含、也不分发")!=std::string::npos&&text.find("\xe6\xb3\x84")==std::string::npos,"the words say we do not include it, and nothing else");}
      fs::rename(root/L"app/models/nvngx_dlssnr.dll.away",root/L"app/models/nvngx_dlssnr.dll");
      table.forget(g12.id);}
+    // ---- what a model file says about itself: its version resource and its
+    // Authenticode signature, read as data and never loaded. Diagnosis only:
+    // every acceptance rule above and below is unchanged by it.
+    {namespace mg=lab::games;constexpr auto npos=std::string::npos;
+     need(mg::compare_file_versions("310.10.0.0","310.9.16.0")==1&&mg::compare_file_versions("310.9.16","310.9.16.0")==0&&mg::compare_file_versions("310.8.0.0","310.9.16.0")==-1&&
+          !mg::compare_file_versions("abc","1")&&!mg::compare_file_versions("1..2","1")&&!mg::compare_file_versions("","1"),"file versions compare as numbers");
+     need(mg::reviewed_file_version(lab::model::kKnownVersions[0].sha256)==std::string("310.8.0.0")&&mg::reviewed_file_version(lab::model::kKnownVersions[1].sha256)==std::string("310.9.16.0")&&
+          !mg::reviewed_file_version(model_hash),"each reviewed version carries its file version");
+     need(mg::newer_than_reviewed("310.10.0.0")&&mg::newer_than_reviewed("311.0.0.0")&&!mg::newer_than_reviewed("310.9.16.0")&&!mg::newer_than_reviewed("310.9.0.0")&&!mg::newer_than_reviewed(""),
+          "newer means newer than every reviewed version");
+     auto facts=[](std::string v,std::optional<bool> s){mg::ModelFileFacts f;f.file_version=std::move(v);f.nvidia_signed=s;f.complete=s.has_value();return f;};
+     need(mg::classify_model(true,facts("",false))=="known","a reviewed hash is known, whatever else");
+     need(mg::classify_model(false,facts("310.10.0.0",true))=="nvidia-newer","b: NVIDIA-signed and newer than every reviewed version");
+     need(mg::classify_model(false,facts("310.9.16.0",true))=="nvidia-unverified"&&mg::classify_model(false,facts("310.8.5.0",true))=="nvidia-unverified"&&mg::classify_model(false,facts("",true))=="nvidia-unverified",
+          "c: NVIDIA-signed, not newer (same, older, or no readable version)");
+     need(mg::classify_model(false,facts("310.10.0.0",false))=="not-nvidia","d: not validly signed by NVIDIA, whatever its version says");
+     need(mg::classify_model(false,facts("310.10.0.0",std::nullopt))=="unknown","the signature check did not finish: unknown, never a guess");
+     // The words for each case: what it is, what to do, the version and 12 hex.
+     const auto short_hash=model_hash.substr(0,12);
+     auto said=[&](const char* c,const char* version,bool allowed){mg::ModelStatus s;s.present=true;s.sha256=model_hash;s.classification=c;s.file_version=version;s.unrecognized_allowed=allowed;return mg::model_explanation(s);};
+     auto reportable=[&](const std::string& t,const char* version){return t.find(version)!=npos&&t.find(short_hash)!=npos&&t.find(model_hash.substr(0,13))==npos&&t.find("下载")==npos&&t.find("http")==npos;};
+     {const auto r=said("nvidia-newer","310.10.0.0",false);const auto t=mg::render(r);
+      need(r.code=="model-refused.nvidia-newer"&&t.find("NVIDIA 原版模型 310.10.0.0")!=npos&&t.find("检查更新")!=npos&&t.find("允许使用未识别的模型")!=npos&&reportable(t,"310.10.0.0"),"b: a newer original; update Overglaze or opt in");}
+     {const auto r=said("nvidia-unverified","310.9.16.0",false);const auto t=mg::render(r);
+      need(r.code=="model-refused.nvidia-unverified"&&t.find("NVIDIA 签名的模型 310.9.16.0")!=npos&&t.find("没有经过釉光验证")!=npos&&t.find("风险自负")!=npos&&reportable(t,"310.9.16.0"),"c: NVIDIA-signed, not verified; opt in at own risk");}
+     {const auto r=said("not-nvidia","",false);const auto t=mg::render(r);
+      need(r.code=="model-refused.not-nvidia"&&t.find("没有有效的 NVIDIA 签名")!=npos&&t.find("可能被修改过")!=npos&&reportable(t,"文件版本 未知"),"d: no valid NVIDIA signature; the version is said as unknown");}
+     {const auto t=mg::render(said("unknown","310.9.16.0",false));need(t.find("无法确认")!=npos&&reportable(t,"310.9.16.0"),"unknown: said as unknown");}
+     {const auto r=said("nvidia-newer","310.10.0.0",true);need(r.code=="model-facts"&&mg::render(r).find("比当前釉光认识的版本新")!=npos,"allowed: the status still says what it is");}
+     {mg::ModelStatus s;s.present=true;s.known=true;s.sha256=model_hash;need(mg::model_explanation(s).code.empty(),"a reviewed model needs no explanation");}
+     // The synthetic model in app\models (plain text): no version, no NVIDIA
+     // signature. Its status says so, and still refuses it exactly as before.
+     {mg::Manager textual(root,std::nullopt,{},false);const auto ms=textual.model_status();const auto mj=mg::model_json(ms);
+      need(!ms.usable()&&ms.classification=="not-nvidia"&&ms.file_version.empty()&&ms.nvidia_signed==false,"a text file: case d");
+      need(mj["reason"]["code"]=="model-unknown-version"&&mj["reason"]["params"]["classification"]=="not-nvidia"&&mj["classification"]=="not-nvidia"&&mj["nvidia_signed"]==false&&mj["file_version"].is_null()&&
+           mj["explanation"]["code"]=="model-refused.not-nvidia"&&mj["explanation_text"].get<std::string>().find(short_hash)!=npos,"the model status explains it");
+      need(mj["known_versions"][0]["file_version"]=="310.8.0.0"&&mj["known_versions"][1]["file_version"]=="310.9.16.0","the status lists each reviewed file version");
+      need(mg::render(mg::Reason{"model-unknown-version",mj["reason"]["params"]}).find("可能被修改过")!=npos,"the game page's refusal carries the classification too");}
+     // An unsigned synthetic DLL: this test program, which carries a version
+     // resource (tests/model_fixture_version.rc, 310.99.1.0) and no signature.
+     {std::wstring self(32768,L'\0');const auto n=GetModuleFileNameW(nullptr,self.data(),DWORD(self.size()));need(n&&n<self.size(),"module path");self.resize(n);
+      const auto fake=root/L"unsigned-model.dll";need(CopyFileW(self.c_str(),fake.c_str(),TRUE)!=FALSE,"unsigned DLL fixture");
+      const auto f=mg::read_model_facts(fake);
+      need(f.complete&&f.file_version=="310.99.1.0"&&f.nvidia_signed==false&&f.signature_status!=0&&f.signer.empty(),"an unsigned DLL: its version read, no NVIDIA signature");
+      need(mg::classify_model(false,f)=="not-nvidia","case d, although its version is newer than every reviewed one");
+      const auto fake_hash=lab::sha256(fake),before=lab::sha256(root/L"app/models/nvngx_dlssnr.dll");
+      std::string message;try{mg::Manager(root,std::nullopt,{},false).import_model(fake);}catch(const std::exception& x){message=x.what();}
+      need(message.find("没有有效的 NVIDIA 签名")!=npos&&message.find("310.99.1.0")!=npos&&message.find(fake_hash.substr(0,12))!=npos&&message.find("允许使用未识别的模型")!=npos,"the import is refused, saying which case and what to report");
+      need(lab::sha256(root/L"app/models/nvngx_dlssnr.dll")==before,"the refused import touched nothing");
+      // A known hash (the tests' synthetic-hash hook) is accepted as before, into a throwaway root.
+      const auto other_root=root/L"model-import-root";need(fs::create_directory(other_root),"throwaway root");
+      {mg::Manager known(other_root,std::vector<mg::Policy>{},fake_hash,false);const auto im=known.import_model(fake);
+       need(im.present&&im.known&&im.usable()&&im.classification=="known"&&lab::sha256(known.model_file())==fake_hash,"a known hash is imported as before");
+       need(mg::model_json(known.model_status())["explanation"].is_null(),"and needs no explanation");}
+      // Allowed: imported as before, and its status says what it is.
+      {mg::Manager allowed(other_root,std::vector<mg::Policy>{},{},false);allowed.allow_unrecognized_model(true);
+       const auto ms=allowed.model_status();need(ms.usable()&&!ms.known&&ms.classification=="not-nvidia"&&ms.file_version=="310.99.1.0"&&mg::model_explanation(ms).code=="model-facts","allowed: usable, and still explained");}
+      fs::remove(fake);}}
     // ---- an unrecognized model: the user's explicit opt-in, and only then.
     // Off is exactly the refusal above; on, the file is imported, packaged with
     // its SHA-256 pinned in the config, installed, and the in-game host's

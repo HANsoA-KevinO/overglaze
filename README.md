@@ -45,7 +45,7 @@ NR is expensive. On an RTX 5090 at about 5K output, it added roughly 9–12 ms o
 
 This project does not include or redistribute `nvngx_dlssnr.dll`. The file belongs to NVIDIA. You supply it yourself.
 
-Overglaze verifies only the original model: it checks the file's SHA-256 against the versions it knows and refuses anything else, unless you turn on *Allow unrecognized models* (Settings, or `--allow-unrecognized-model`). An unrecognized model may not run, may look different from the original or may carry security risks; you use it at your own risk, and each install pins that exact file. See [docs/MODEL.md](docs/MODEL.md).
+Overglaze verifies only the original model: it checks the file's SHA-256 against the versions it knows and refuses anything else, unless you turn on *Allow unrecognized models* (Settings, or `--allow-unrecognized-model`). An unrecognized model may not run, may look different from the original or may carry security risks; you use it at your own risk, and each install pins that exact file. A refused file is told apart by its file version and its NVIDIA signature (read without loading it): a newer original (update Overglaze), an NVIDIA-signed file Overglaze hasn't verified, or a file without a valid NVIDIA signature. See [docs/MODEL.md](docs/MODEL.md).
 
 ## Quick start
 
@@ -53,8 +53,8 @@ Overglaze verifies only the original model: it checks the file's SHA-256 against
 
 1. **Get the program.** Run the Setup and choose a local installation folder, or extract the whole portable ZIP. Open Overglaze from its shortcut or portable launcher.
 2. **Import your model.** Select your own model DLL in the initial configuration screen or Settings. It is verified and copied into the application's models folder. Manual placement also works.
-3. **Add a game.** On the Game Library page, choose *Add game* and paste the game's install folder or its EXE. A read-only check runs: store, NVIDIA modules and their signatures, anti-cheat and Denuvo markers, other injectors in the folder, and which DLSS path the game uses.
-4. **Install.** Close the game. Select it in the library, choose *Prepare installation* to generate the adapter package, then choose *Install*. The confirmation names any anti-cheat or anti-tamper the check found and the risks of online and protected games; choosing *Install* there is your acknowledgement. Overglaze writes only its own files and records exactly what it wrote, so it can remove exactly those files later.
+3. **Add a game.** On the Game Library page, choose *Add game* and paste the game's install folder or its EXE. A read-only check runs: store, NVIDIA modules and their signatures, anti-cheat and Denuvo markers, other injectors in the folder, and which DLSS path the game uses. Other injectors (ReShade, a frame-generation mod's `version.dll`, ...) are a risk notice, not a refusal; only another DLSS 5 / NR add-on, or a `dxgi.dll` that isn't Overglaze's where Overglaze would put its own, blocks the install.
+4. **Install.** Close the game. Select it in the library, choose *Prepare installation* to generate the adapter package, then choose *Install*. The confirmation names any anti-cheat, anti-tamper or other injector the check found and the risks of online and protected games; choosing *Install* there is your acknowledgement. Overglaze writes only its own files and records exactly what it wrote, so it can remove exactly those files later.
 5. **Play.** Start the game the usual way and turn on DLSS: Ray Reconstruction if the game offers it, otherwise Super Resolution or DLAA. Press **Insert** to open the panel and enable NR.
 
 ### Games that need late loading

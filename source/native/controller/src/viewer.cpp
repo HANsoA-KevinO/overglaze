@@ -271,6 +271,10 @@ struct View {
             if(ready){if(!model.label.empty())ImGui::TextWrapped("%s",model.label.c_str());
                 ImGui::TextDisabled("Insert 打开游戏内面板。NR 默认关闭。");}
             else ImGui::TextWrapped("模型需自行提供，也可稍后导入。");
+            // The model in place that is not a reviewed version says what it is
+            // (a refused import already says it in its own message below).
+            if(setup_error.empty()&&!model_job.valid()&&model_checked&&model.present&&!model.known&&model.error.empty())
+                if(const auto why=lab::games::model_explanation(model);!why.code.empty())ImGui::TextWrapped("%s",lab::games::render(why).c_str());
             if(!setup_error.empty()){ImGui::TextColored(lab::product::amber,"导入失败");ImGui::TextWrapped("%s",setup_error.c_str());}
             else if(!model_job.valid()&&!model.error.empty())ImGui::TextWrapped("%s",model.error.c_str());
             if(model_setup&&!model_setup->error.empty())ImGui::TextWrapped("配置未保存：%s",model_setup->error.c_str());
@@ -292,7 +296,10 @@ struct View {
             ImGui::TextWrapped("导入原版模型后可安装游戏插件。");
             if(!model.error.empty())ImGui::TextWrapped("%s",model.error.c_str());
             if(!model.label.empty())ImGui::TextDisabled("%s",model.label.c_str());
-            if(model_checked&&model.present&&!model.known&&model.error.empty())ImGui::TextDisabled("SHA-256 %s",model.sha256.c_str());
+            if(model_checked&&model.known&&!model.file_version.empty())ImGui::TextDisabled("文件版本 %s",model.file_version.c_str());
+            if(model_checked&&model.present&&!model.known&&model.error.empty()){ImGui::TextDisabled("SHA-256 %s",model.sha256.c_str());
+                // What the file says about itself (version, NVIDIA signature) and what to do.
+                if(const auto why=lab::games::model_explanation(model);!why.code.empty())ImGui::TextWrapped("%s",lab::games::render(why).c_str());}
             // The user's explicit opt-in; off by default. Saved at once; the game
             // library is reopened with it, because every check depends on it.
             {bool allow=allow_unrecognized();

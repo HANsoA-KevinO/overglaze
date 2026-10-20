@@ -14,7 +14,13 @@
 #include <chrono>
 #include <algorithm>
 #include <cstdio>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <bcrypt.h>
+#include <wincrypt.h>
+#include <wintrust.h>
+#include <softpub.h>
 
 namespace lab::games {
 namespace fs=std::filesystem;
@@ -118,13 +124,14 @@ std::string anticheat_product(const std::string& marker){
 std::vector<std::string> anticheat_products(const std::vector<std::string>& markers){std::vector<std::string> out;
     for(const auto& m:markers){const auto n=anticheat_product(m);if(std::find(out.begin(),out.end(),n)==out.end()&&out.size()<8)out.push_back(n);}
     return out;}
-std::vector<std::string> risk_list(bool anti_tamper,bool anticheat){std::vector<std::string> out;
-    if(anti_tamper)out.push_back("anti-tamper");if(anticheat)out.push_back("anticheat");return out;}
+std::vector<std::string> risk_list(bool anti_tamper,bool anticheat,bool other_loaders=false){std::vector<std::string> out;
+    if(anti_tamper)out.push_back("anti-tamper");if(anticheat)out.push_back("anticheat");if(other_loaders)out.push_back("other-loaders");return out;}
+std::string joined(const std::vector<std::string>& v){std::string out;for(const auto& x:v){if(!out.empty())out+="、";out+=x;}return out;}
 // What a package records in its notes when the checks found a risk.
 std::string risk_note(const Preflight& pre){std::string found;
     if(pre.denuvo_suspected)found="Denuvo 反篡改";
-    if(!pre.anticheat.empty()){if(!found.empty())found+="、";found+="反作弊相关文件（";
-        for(std::size_t i=0;i<pre.anticheat.size();++i){if(i)found+="、";found+=pre.anticheat[i];}found+="）";}
+    if(!pre.anticheat.empty()){if(!found.empty())found+="、";found+="反作弊相关文件（"+joined(pre.anticheat)+"）";}
+    if(!pre.other_loaders.empty()){if(!found.empty())found+="、";found+="其他注入工具（"+joined(pre.other_loaders)+"）";}
     return "检测到风险："+found+"。安装、更新和重新适配时由用户确认风险；Overglaze 不隐藏自己，"
         "不绕过、修补、欺骗、调试或转储任何保护，也不因此放宽任何身份或状态检查。";}
 // The scope a config states: V1-V3 the user's offline / no-anti-cheat
@@ -132,7 +139,37 @@ std::string risk_note(const Preflight& pre){std::string found;
 bool scope_declared(const json& c){
     if(c.value("version",0)==4)return c.at("risk").is_object()&&c.at("risk").at("acknowledged")==true;
     return c.at("offline_single_player")==true&&c.at("no_anticheat")==true;}
-std::vector<std::string> conflicts(const fs::path& dir){std::vector<std::string> found;for(const auto* n:{"d3d12.dll","d3d11.dll","version.dll","winmm.dll","dinput8.dll","ReShade.ini","renodx-dlss5.addon64","overglaze.addon64","overglaze_preview.addon64","dlsslab.addon64","dlsslab_preview.addon64"})if(fs::exists(dir/wide(n)))found.push_back(n);return found;}
+// Other tools beside the EXE, by the rule "name, count, skip; refuse only
+// what prevents real harm". Overglaze writes only its own dxgi.dll (root proxy)
+// or nothing at the root (late loading), so another loader is a notice; what
+// still refuses is another DLSS 5 / NR add-on (here) and a foreign file where
+// Overglaze writes its own (inspect_impl).
+//
+// Another DLSS 5 / NR add-on: two NR passes would stack on every frame.
+// RenoDX's DLSS 5 add-on and the pre-rename / earlier add-on builds of this
+// project (overglaze*.addon64, dlsslab*.addon64). Matched by an OS-side
+// pattern, so the walk sees only *.addon64 entries, at most 1024 of them.
+std::vector<std::string> nr_addons(const fs::path& dir){std::set<std::string> found;WIN32_FIND_DATAW d{};
+    const HANDLE f=FindFirstFileExW((dir/L"*.addon64").c_str(),FindExInfoBasic,&d,FindExSearchNameMatch,nullptr,0);
+    if(f!=INVALID_HANDLE_VALUE){unsigned seen=0;
+        do{if(d.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)continue;const auto name=utf8(d.cFileName);const auto l=lower_ascii(name);
+            if(l.size()>8&&l.compare(l.size()-8,8,".addon64")==0&&(l.rfind("renodx-dlss5",0)==0||l.rfind("overglaze",0)==0||l.rfind("dlsslab",0)==0))found.insert(name);
+        }while(++seen<1024&&found.size()<16&&FindNextFileW(f,&d));
+        FindClose(f);}
+    return {found.begin(),found.end()};}
+// Every other injector or proxy DLL: named and counted (risk "other-loaders"),
+// never a refusal by itself. dxgi.dll only where Overglaze writes no file of
+// that name (late loading, or no package yet): where it does, a foreign one is
+// refused (root proxy) or judged as a foreign host (research root layout).
+std::vector<std::string> other_loaders(const fs::path& dir,bool with_dxgi){std::vector<std::string> found;std::error_code ec;
+    for(const auto* n:{"dxgi.dll","d3d12.dll","d3d11.dll","version.dll","winmm.dll","dinput8.dll","ReShade.ini"}){
+        if(!with_dxgi&&std::string_view(n)=="dxgi.dll")continue;
+        if(fs::exists(dir/wide(n),ec))found.push_back(n);}
+    return found;}
+// Does this load mode put a file named dxgi.dll in the game directory? The
+// research root layout (its host is dxgi.dll) and both root proxies do; late
+// loading and the REFramework plugin do not.
+bool writes_root_dxgi(const std::string& strategy){if(strategy.empty())return false;Loader l;l.strategy=strategy;return l.root()||l.root_proxy();}
 void copy_handle(HANDLE from,const fs::path& to,const std::string& hash){need(!fs::exists(to),"目标已存在，拒绝覆盖");Pins pin;pin.parents(to.parent_path());need(handle_digest(from)==hash,"源文件身份改变");
     Handle out(CreateFileW(to.c_str(),GENERIC_READ|GENERIC_WRITE|DELETE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));need(out.valid(),"复制失败：目标占用或权限不足");
     try{LARGE_INTEGER zero{};need(SetFilePointerEx(from,zero,nullptr,FILE_BEGIN),"复制源无法读取");std::vector<unsigned char> buffer(1<<20);DWORD n=0,wrote=0;
@@ -490,9 +527,9 @@ json policy_json(const Policy& p){json pins=json::object(),payload=json::object(
 json Preflight::to_json()const{json c=json::array();for(const auto& x:checks)c.push_back(check_json(x));
     return {{"schema","overglaze-game-preflight-v3"},{"executable",executable},{"executable_sha256",executable_sha256},{"executable_readable",executable_readable},{"package_identity",package_identity},
     {"store",store},{"pe_valid",pe_valid},{"pe_x64",pe_x64},{"sections",sections},{"denuvo_suspected",denuvo_suspected},{"modules",modules},{"modules_signed",modules_signed},
-    {"anticheat_markers",anticheat_markers},{"anticheat_names",anticheat},{"risks",risks()},{"loader_conflicts",loader_conflicts},{"route",route},{"verdict",verdict},{"scan_complete",scan_complete},{"checks",c},{"notes",notes},
+    {"anticheat_markers",anticheat_markers},{"anticheat_names",anticheat},{"risks",risks()},{"loader_conflicts",loader_conflicts},{"other_loaders",other_loaders},{"route",route},{"verdict",verdict},{"scan_complete",scan_complete},{"checks",c},{"notes",notes},
     {"scope","read-only: nothing executed, loaded or written; module presence is navigation, not compatibility; absence of markers proves nothing; a check that could not run is ok:null, never ok:true"}};}
-std::vector<std::string> Preflight::risks()const{return risk_list(denuvo_suspected,!anticheat_markers.empty());}
+std::vector<std::string> Preflight::risks()const{return risk_list(denuvo_suspected,!anticheat_markers.empty(),!other_loaders.empty());}
 std::string store_kind(const fs::path& dir,bool has_package_identity){return has_package_identity?std::string("gdk"):store_of(dir);}
 std::string steam_launch_option(const fs::path& root){return "\""+text((root/L"app"/L"overglaze_launch.exe").lexically_normal())+"\" %command%";}
 std::string watch_command(const fs::path& root){return "\""+text((root/L"app"/L"overglaze_games.exe").lexically_normal())+"\" watch";}
@@ -544,7 +581,14 @@ Preflight preflight(const fs::path& input){
     scan_markers(dir,3,r.anticheat_markers,seen_markers,markers_complete,scanned);
     if(const auto top=game_root(dir);!top.empty()&&top!=dir){scan_markers(top,2,r.anticheat_markers,seen_markers,markers_complete,scanned);
         r.notes.push_back("反作弊标记也在游戏根目录检查（两层）："+text(top)+"；根目录下找到的标记按相对根目录的路径列出");}
-    if(!markers_complete)r.scan_complete=false;r.loader_conflicts=conflicts(dir);
+    if(!markers_complete)r.scan_complete=false;
+    // Other tools beside the EXE: another NR add-on refuses (verdict below);
+    // every other injector is a notice. Before a package exists nothing says
+    // whether Overglaze will put a dxgi.dll here, so a dxgi.dll is named too.
+    r.loader_conflicts=nr_addons(dir);r.other_loaders=other_loaders(dir,true);
+    if(!r.loader_conflicts.empty())r.notes.push_back("发现其他 DLSS 5 / NR 插件（"+joined(r.loader_conflicts)+"）：两次 NR 处理会叠加，不安装");
+    if(!r.other_loaders.empty())r.notes.push_back("发现其他注入工具（"+joined(r.other_loaders)+"）：作为风险提示，安装时由用户确认；Overglaze 不修改、不移除它们"+
+        std::string(std::find(r.other_loaders.begin(),r.other_loaders.end(),"dxgi.dll")!=r.other_loaders.end()?"。根目录已有 dxgi.dll 时，随游戏启动加载的安装方式会被拒绝（不覆盖它）":""));
     r.anticheat=anticheat_products(r.anticheat_markers);
     if(!r.anticheat.empty())r.notes.push_back("发现反作弊相关文件（按文件名判断）：作为风险提示，安装时由用户确认；Overglaze 不隐藏自己，不绕过反作弊");
     // A game may ship Streamline for frame generation and still call DLSS and Ray
@@ -556,9 +600,10 @@ Preflight preflight(const fs::path& input){
     if(r.route=="none"){const auto games=unreal_games(dir);if(!games.empty()){std::error_code rec;
         r.notes.push_back("这是虚幻引擎的启动器，游戏本体是 "+text(fs::relative(games.front(),dir,rec))+"。请把它从列表移除，改为添加游戏本体。");}}
     // The verdict ladder holds only what is functional: an identity that cannot
-    // be checked, another loader in the folder, the DLSS route. Anti-tamper and
-    // anti-cheat are risks (risks(), and the checks below name what was found),
-    // shown to the user and accepted at install -- not rungs that refuse.
+    // be checked, another NR add-on in the folder, the DLSS route. Anti-tamper,
+    // anti-cheat and other injectors are risks (risks(), and the checks below
+    // name what was found), shown to the user and accepted at install -- not
+    // rungs that refuse.
     // "Cannot check" stays visible in the checks instead of passing silently;
     // it does not by itself turn a supported game into a refused one -- the
     // Xbox app titles that work today (Hellblade 2, A Plague Tale) are exactly
@@ -590,6 +635,8 @@ Preflight preflight(const fs::path& input){
     else add("anticheat",Outcome::pass,json{{"entries",scanned}});
     if(!r.loader_conflicts.empty())add("loader-conflicts",Outcome::fail,r.loader_conflicts,"conflicts-found");
     else add("loader-conflicts",Outcome::pass);
+    if(!r.other_loaders.empty())add("other-loaders",Outcome::fail,r.other_loaders,"other-loaders-found");
+    else add("other-loaders",Outcome::pass);
     if(!unreadable.empty())add("modules",Outcome::unknown,unreadable,"module-unreadable");
     else add("modules",Outcome::pass,r.modules.size());
     bool sl_unreadable=false;for(const auto& n:unreadable)if(n.get<std::string>().rfind("sl.",0)==0)sl_unreadable=true;
@@ -625,8 +672,15 @@ std::map<std::string,std::string> Manager::published_host(const std::string& tra
     for(const auto* n:{"overglaze_controller.dll"}){const auto p=dir/wide(n);if(fs::is_regular_file(p))out[n]=digest(p);}
     return out;}
 Status Manager::inspect(const Entry& e)const{auto s=inspect_impl(e,true);
+    // Other injectors beside the EXE, as they are now, in every state: a named,
+    // counted notice. dxgi.dll is left out where this game's load mode puts
+    // Overglaze's own file of that name there (a foreign one is then refused or
+    // judged as a foreign host by inspect_impl, never only noticed).
+    s.risks.erase(std::remove(s.risks.begin(),s.risks.end(),"other-loaders"),s.risks.end());
+    try{s.other_loaders=other_loaders(e.exe.parent_path(),!writes_root_dxgi(s.load_mode));}catch(...){s.other_loaders.clear();}
+    if(!s.other_loaders.empty())s.risks.push_back("other-loaders");
     // The risks, named as facts after whatever the state says: never a refusal.
-    for(const auto& r:s.risks)s.reasons.push_back(r=="anti-tamper"?Reason{"risk-anti-tamper"}:Reason{"risk-anticheat",{{"names",s.anticheat}}});
+    for(const auto& r:s.risks)s.reasons.push_back(r=="anti-tamper"?Reason{"risk-anti-tamper"}:r=="other-loaders"?Reason{"risk-other-loaders",{{"names",s.other_loaders}}}:Reason{"risk-anticheat",{{"names",s.anticheat}}});
     // How a late-loading game is started, built from this program's own root.
     if(s.load_mode=="late_d3d12"){s.launch_via=s.store=="steam"?"steam":"watch";s.launch_command=s.launch_via=="steam"?steam_launch_option(root_):watch_command(root_);}
     return s;}
@@ -653,6 +707,12 @@ std::vector<std::string> behind_published(const Policy& p,const std::map<std::st
     return parts;}
 bool conflict_code(const std::string& c){return c=="loader-conflict"||c=="foreign-loader"||c=="model-mismatch"||c=="package-payload-mismatch"||c=="local-model-mismatch"||c=="package-config-mismatch"||c=="published-host-missing"||
     c=="model-missing"||c=="model-unknown-version";}
+// A present model that is not a reviewed version (and not allowed), with what
+// the file says about itself: the code table renders the classification, the
+// file version and the hash.
+Reason unknown_model(const ModelStatus& m){
+    return {"model-unknown-version",{{"hash",m.sha256},{"version",m.file_version.empty()?std::string("unknown"):m.file_version},
+        {"classification",m.classification.empty()?std::string("unknown"):m.classification}}};}
 }
 Reason Manager::refresh_refusal(const Policy& p,const Preflight& pre)const{
     // Anti-tamper and anti-cheat are not part of this: they are risks the
@@ -730,7 +790,7 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
             s.health="needs-update";s.install_state="legacy";s.update_available=true;s.update.package_behind_published=true;
             s.reasons.push_back({"legacy-install"});
             if(full){const auto why=refresh_refusal(*p,games::preflight(exe));if(!why.code.empty())s.refusals["update"]=why;
-                else{const auto m=model_status();if(!m.usable()){s.refusals["update"]=m.present?Reason{"model-unknown-version",{{"hash",m.sha256}}}:Reason{"model-missing",{{"path",text(m.path)}}};}}}
+                else{const auto m=model_status();if(!m.usable()){s.refusals["update"]=m.present?unknown_model(m):Reason{"model-missing",{{"path",text(m.path)}}};}}}
             s.can_update=!s.running&&!s.refusals.contains("update");
             return s;}
         // ---- health: what the in-game host checks at start-up
@@ -773,7 +833,12 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         s.reasons.push_back(launch_reason(strategy,sub,root_,s.store));
         // An update that has to refresh the package re-runs the refresh gates
         // first; say now whether they would pass, rather than after an uninstall.
-        if(full&&s.update.package_behind_published){const auto why=refresh_refusal(*p,games::preflight(exe));if(!why.code.empty())s.refusals["update"]=why;}
+        // Another NR add-on placed beside an installed game, named first: the
+        // update's install step would refuse after its uninstall, so it is
+        // refused now (update() checks it before anything else, too).
+        if(full&&s.update_available)
+            if(const auto addons=nr_addons(dir);!addons.empty())s.refusals["update"]=Reason{"loader-conflict",{{"files",addons},{"cause","nr-addon"}}};
+        if(full&&s.update.package_behind_published&&!s.refusals.contains("update")){const auto why=refresh_refusal(*p,games::preflight(exe));if(!why.code.empty())s.refusals["update"]=why;}
         s.can_update=s.update_available&&!s.running&&!s.refusals.contains("update");
         return s;}}
     if(!p){const auto pre=games::preflight(exe);s.preflight=pre.to_json();s.route=pre.route;s.checks=pre.checks;s.store=pre.store;
@@ -788,10 +853,11 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
             // a reviewed model in place (or an unrecognized one the user allowed);
             // say which, before the button is pressed.
             const auto m=model_status();
-            if(!m.usable()){const Reason why=m.present?Reason{"model-unknown-version",{{"hash",m.sha256}}}:Reason{"model-missing",{{"path",text(m.path)}}};
+            if(!m.usable()){const Reason why=m.present?unknown_model(m):Reason{"model-missing",{{"path",text(m.path)}}};
                 record(s,"local-model",Outcome::fail,m.present?json(m.sha256):json(nullptr),why.code);
                 s.can_make_package=false;s.refusals["make-package"]=why;s.reasons.push_back(why);}}
-        else if(s.state=="loader-conflict")s.reasons.push_back({"loader-conflict",{{"files",pre.loader_conflicts}}});
+        // Only another DLSS 5 / NR add-on gets here (verdict loader-conflict).
+        else if(s.state=="loader-conflict")s.reasons.push_back({"loader-conflict",{{"files",pre.loader_conflicts},{"cause","nr-addon"}}});
         else s.reasons.push_back({s.state}); // unsupported-store | no-dlss
         json unknown=json::array();for(const auto& c:pre.checks)if(c.outcome==Outcome::unknown)unknown.push_back(c.name);
         if(!unknown.empty())s.reasons.push_back({"preflight-incomplete",{{"count",unknown.size()},{"check",unknown}}});
@@ -851,8 +917,19 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         if(!up_to_date||p->track=="research"){s.install_state="research-managed";s.reasons.push_back({"existing-research"});}
         else{s.install_state="external";s.reasons.push_back({"existing-external"});}
         return s;}
-    const auto collision=conflicts(dir);
-    gate(s,"loader-conflicts",collision.empty(),"loader-conflict","检测到其他加载器 / ReShade，需先处理兼容关系；不覆盖",json{{"files",collision}},collision);
+    // Other tools beside the EXE refuse only where installing would do real
+    // harm; every other injector is a notice (risk other-loaders, inspect()).
+    // Another DLSS 5 / NR add-on: two NR passes would stack on every frame.
+    {const auto addons=nr_addons(dir);
+     gate(s,"loader-conflicts",addons.empty(),"loader-conflict","检测到其他 DLSS 5 / NR 插件（"+joined(addons)+"）：两次 NR 处理会叠加在同一帧上，不安装；先移除它再试",
+         json{{"files",addons},{"cause","nr-addon"}},addons);}
+    // A file that is not ours exactly where this package writes its own: the
+    // root proxy's dxgi.dll beside the EXE (no Lab files are here, so it is not
+    // ours). The research root layout's dxgi.dll is its host, judged by the
+    // existing-host check above; late loading writes nothing at the root.
+    if(const auto proxy=p->loader.proxy_basename();!proxy.empty()){std::error_code ec;const bool taken=fs::exists(dir/wide(proxy),ec);
+        gate(s,"root-proxy",!taken,"loader-conflict","游戏目录里已有一个不是釉光安装的 "+proxy+"（"+text(dir/wide(proxy))+"）：釉光要在同一位置放自己的 "+proxy+"，不覆盖、不删除它；先移除它再试",
+            json{{"files",json::array({proxy})},{"cause","overwrite"}},proxy);}
     if(p->legacy){
         // The package itself is still the pre-rename one: a refresh rewrites it
         // under the new names from the published host; nothing is installed yet.
@@ -866,7 +943,7 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         {const auto m=model_status();
          gate(s,"local-model",m.present,"model-missing","找不到 NR 模型 nvngx_dlssnr.dll：本项目不包含、也不分发它，请自行准备并放进 "+text(m.path.parent_path()),json{{"path",text(m.path)}});
          // An unrecognized model passes only with the user's explicit opt-in.
-         gate(s,"local-model",m.known||m.unrecognized_allowed,"model-unknown-version","这份 nvngx_dlssnr.dll 不是已审阅的版本，不使用",json{{"hash",m.sha256}},m.sha256);
+         gate(s,"local-model",m.known||m.unrecognized_allowed,"model-unknown-version","这份 nvngx_dlssnr.dll 不是已审阅的版本，不使用。"+render(model_explanation(m)),unknown_model(m).params,m.sha256);
          gate(s,"local-model",m.sha256==p->payload.at("nvngx_dlssnr.dll"),"local-model-mismatch","本地模型与适配包清单不一致",json::object(),m.sha256);}
         gate(s,"package-config",!p->config_sha256.empty()&&within("file-unreadable",[&]{return digest(p->directory/L"overglaze.install.json");})==p->config_sha256,"package-config-mismatch","适配包配置与清单 config_sha256 不一致");
         const auto published=within("published-host-missing",[&]{return published_host(p->track);});
@@ -895,7 +972,7 @@ json status_json(const Status& s){json reasons=json::array(),checks=json::array(
     {"load_mode",s.load_mode.empty()?json(nullptr):json(s.load_mode)},
     {"update",{{"available",s.update_available},{"host",s.update.host},{"bridge",s.update.bridge},{"config",s.update.config},{"proxy",s.update.proxy},{"package_behind_published",s.update.package_behind_published}}},
     {"health",s.health},{"can_update",s.can_update},{"can_repin",s.can_repin},
-    {"risks",s.risks},{"anticheat",s.anticheat},{"store",s.store},{"model_unrecognized",s.model_unrecognized},
+    {"risks",s.risks},{"anticheat",s.anticheat},{"other_loaders",s.other_loaders},{"store",s.store},{"model_unrecognized",s.model_unrecognized},
     {"launch",s.launch_via.empty()?json(nullptr):json{{"via",s.launch_via},{"command",s.launch_command}}},
     {"reasons",reasons},{"checks",checks},{"refusals",refusals},{"presentation",presentation_json(present(s))}};}
 Policy Manager::write_package(const fs::path& exe,const std::string& name,const profiles::Facts& facts_in,const std::string& title,const Preflight& pre,json notes,bool replace,const std::string& consent,const std::string& track,const Loader& loader){
@@ -912,7 +989,7 @@ Policy Manager::write_package(const fs::path& exe,const std::string& name,const 
     for(const auto& src:{plugin/L"overglaze_nvngx.dll",tools/L"overglaze_install_check.exe"})need(fs::is_regular_file(src),"已发布的宿主/工具缺失: "+text(src));
     {const auto m=model_status();
      if(!m.present)throw Refusal("model-missing","找不到 NR 模型 nvngx_dlssnr.dll：本项目不包含、也不分发它，请自行准备并放进 "+text(models),json{{"path",text(m.path)}});
-     if(!m.known&&!m.unrecognized_allowed)throw Refusal("model-unknown-version","这份 nvngx_dlssnr.dll 不是已审阅的版本，不使用",json{{"hash",m.sha256}});
+     if(!m.known&&!m.unrecognized_allowed)throw Refusal("model-unknown-version","这份 nvngx_dlssnr.dll 不是已审阅的版本，不使用。"+render(model_explanation(m)),unknown_model(m).params);
      // Only the controller's V4 config can pin an unrecognized model.
      if(!m.known&&track!="controller")throw Refusal("model-unknown-version","研究轨适配包只接受已审阅的模型",json{{"hash",m.sha256}});}
     // The loader this package will carry, taken from the published track under
@@ -1108,7 +1185,10 @@ void Manager::install_impl(const std::string& id,bool risk_accepted,const std::s
     // The user's own risk acknowledgement, for every game: the checks can name
     // what they found but never prove a game free of anti-cheat or online play.
     need(risk_accepted,"安装前需确认风险：联网或带反作弊的游戏可能无法启动、被踢出或被处罚；Overglaze 不绕过任何保护");need(!consent.empty()&&consent.size()<=1024,"安装需要记录本次确认文字");
-    Writer writer(store_);const auto e=find(id);const auto s=inspect(e);need(s.can_install,"当前状态不允许安装；请重新检查并退出游戏");const Policy* p=match(local(e.exe));need(p!=nullptr,"无匹配适配包");
+    // A refusal says which file and why: the status's first reason, in the table's words.
+    Writer writer(store_);const auto e=find(id);const auto s=inspect(e);
+    need(s.can_install,"当前状态不允许安装："+(s.running?render("game-running"):s.reasons.empty()?std::string("请重新检查并退出游戏"):render(s.reasons.front())));
+    const Policy* p=match(local(e.exe));need(p!=nullptr,"无匹配适配包");
     steps.enter("pin-game");
     const auto dir=e.exe.parent_path();Pins pins;pins.parents(dir);pins.parents(root_/L"app");
     // A package-pinned title's EXE cannot be opened; its identity is re-read
@@ -1178,7 +1258,9 @@ void Manager::install_impl(const std::string& id,bool risk_accepted,const std::s
     steps.enter("record-transaction");
     json j={{"schema","overglaze-install-transaction-v1"},{"id",id},{"exe",text(e.exe)},{"state","installing"},{"files",files},{"recovery",text(staging)},{"game_started",false},{"package",p->name},{"consent",consent},
         {"loader_subdirectory",text(p->loader.subdir)},{"loader_basename",p->loader.basename},{"strategy",p->loader.strategy},
-        {"risk_acknowledged",true},{"risks",p->risks}};save(tx,j);
+        // The risks the user acknowledged: the package's (anti-tamper,
+        // anti-cheat) and the other injectors beside the EXE found just now.
+        {"risk_acknowledged",true},{"risks",s.risks},{"other_loaders",s.other_loaders}};save(tx,j);
     steps.enter("activate");
     // Activate the loader LAST, after its config/bridge/model are durable.
     // The proxy is activated after the host, because it is what the game
@@ -1233,7 +1315,7 @@ void Manager::install_impl(const std::string& id,bool risk_accepted,const std::s
     steps.enter("commit");
     j["state"]="installed";save(tx,j);
     json after=json::object();for(const auto& n:{p->loader.basename,std::string("overglaze_nvngx.dll"),std::string("overglaze.install.json"),std::string("nvngx_dlssnr.dll")})after[n]=digest(lab_dir/wide(n));json game_pins=json::object();for(auto& [n,h]:p->pins)game_pins[n]=h;
-    save(docs_receipt,{{"version",1},{"state","installed"},{"game_directory",text(dir)},{"profile",p->profile},{"package",p->name},{"adopted",false},{"consent",consent},{"risk_acknowledged",true},{"risks",p->risks},
+    save(docs_receipt,{{"version",1},{"state","installed"},{"game_directory",text(dir)},{"profile",p->profile},{"package",p->name},{"adopted",false},{"consent",consent},{"risk_acknowledged",true},{"risks",s.risks},{"other_loaders",s.other_loaders},
         {"before","all owned targets absent (model reused only if byte-identical)"},{"after",after},{"game_pins",game_pins},{"nr_default","off"},{"heavy_sampling",false},
         {"game_started_by_installer",false},{"runtime_accepted",false},{"installer","overglaze-games native controller"},{"transaction",text(tx)},{"installed_at",now_utc()}});
     steps.enter("cleanup-staging");
@@ -1325,6 +1407,10 @@ void Manager::update(const std::string& id,bool risk_accepted,const std::string&
         need(risk_accepted,"安装前需确认风险：联网或带反作弊的游戏可能无法启动、被踢出或被处罚；Overglaze 不绕过任何保护");need(!consent.empty()&&consent.size()<=1024,"安装需要记录本次确认文字");
         const auto e=find(id);const auto s=inspect(e);
         need(s.state=="installed"&&s.update_available&&!s.running,"没有可用更新，或游戏正在运行／文件身份不符");
+        // Another NR add-on would refuse the install step; refuse before the uninstall.
+        if(const auto addons=nr_addons(e.exe.parent_path());!addons.empty())
+            throw Refusal("loader-conflict","检测到其他 DLSS 5 / NR 插件（"+joined(addons)+"）：两次 NR 处理会叠加在同一帧上，不更新；已装插件保持原样。先移除它再试",
+                json{{"files",addons},{"cause","nr-addon"}});
         std::string package;{const Policy* p=match(local(e.exe));need(p!=nullptr,"无匹配适配包");package=p->name;}
         const bool refresh=s.update.package_behind_published;
         if(refresh){steps.enter("refresh-check");
@@ -1496,6 +1582,125 @@ json storage_json(const StorageUsage& u,const std::vector<Entry>& titles){json g
             std::to_string(kRecoveryCopiesKept)+" ledger recovery copies. Unmanaged copies and failed installs' staging predate the rule or are kept for inspection; they wait for an explicit decision."}};}
 void Manager::import_known_installations(){for(const auto& p:policies_){if(p.game_root.empty())continue;const auto exe=p.game_root/wide(p.executable);std::error_code ec;
     if(fs::is_regular_file(exe,ec)&&(fs::is_regular_file(p.game_root/identity::kInstallationFile,ec)||fs::is_regular_file(p.game_root/identity::legacy::kInstallationFile,ec)))try{add(exe);}catch(...){}}}
+// ---------------------------------------------------------------- model file facts
+// What a model file says about itself, so that a refused or unrecognized model
+// explains itself. Diagnosis only: what is accepted is decided by the SHA-256
+// table, the opt-in and the per-install pin, never by anything below.
+namespace {
+// The file version of each reviewed model, in the order of
+// lab::model::kKnownVersions. Kept here, outside the table the in-game bridge
+// compiles, and held to it at compile time: a row added there without its
+// file version here does not build.
+struct ReviewedFileVersion {const char* sha256;const char* file_version;};
+constexpr ReviewedFileVersion kReviewedFileVersions[]{
+    {"e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e","310.8.0.0"},
+    {"2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f","310.9.16.0"},
+};
+static_assert(std::size(kReviewedFileVersions)==std::size(lab::model::kKnownVersions),"every reviewed model (lab_model_versions.hpp) needs its file version here");
+constexpr bool mirrors_reviewed_table(){
+    for(std::size_t i=0;i<std::size(kReviewedFileVersions);++i)
+        if(std::string_view(kReviewedFileVersions[i].sha256)!=std::string_view(lab::model::kKnownVersions[i].sha256))return false;
+    return true;}
+static_assert(mirrors_reviewed_table(),"the file versions follow lab_model_versions.hpp row by row");
+// Up to four dot-separated decimal parts, each below 2^32; missing parts are 0.
+std::optional<std::array<std::uint32_t,4>> dotted_version(std::string_view v){
+    std::array<std::uint32_t,4> out{};std::size_t part=0,i=0;if(v.empty())return std::nullopt;
+    for(;;){if(part==4)return std::nullopt;std::uint64_t n=0;std::size_t digits=0;
+        while(i<v.size()&&v[i]>='0'&&v[i]<='9'){n=n*10+std::uint64_t(v[i]-'0');if(n>0xFFFFFFFFull)return std::nullopt;++i;++digits;}
+        if(!digits)return std::nullopt;out[part++]=std::uint32_t(n);
+        if(i==v.size())return out;if(v[i]!='.')return std::nullopt;++i;}}
+// The fixed file version (VS_FIXEDFILEINFO). GetFileVersionInfoExW maps the
+// file as a data / resource image: nothing in it runs. Language-neutral, so no
+// MUI file beside it is consulted. Empty when there is none.
+std::string version_resource(const fs::path& file){
+    DWORD ignored=0;const DWORD size=GetFileVersionInfoSizeExW(FILE_VER_GET_NEUTRAL,file.c_str(),&ignored);
+    if(!size||size>(1u<<20))return {};
+    std::vector<unsigned char> data(size);if(!GetFileVersionInfoExW(FILE_VER_GET_NEUTRAL,file.c_str(),0,size,data.data()))return {};
+    VS_FIXEDFILEINFO* fixed=nullptr;UINT length=0;
+    if(!VerQueryValueW(data.data(),L"\\",reinterpret_cast<void**>(&fixed),&length)||!fixed||length<sizeof(VS_FIXEDFILEINFO)||fixed->dwSignature!=0xFEEF04BDu)return {};
+    return std::to_string(HIWORD(fixed->dwFileVersionMS))+"."+std::to_string(LOWORD(fixed->dwFileVersionMS))+"."+
+        std::to_string(HIWORD(fixed->dwFileVersionLS))+"."+std::to_string(LOWORD(fixed->dwFileVersionLS));}
+// The Authenticode signature, offline: revocation checks off and cached URL
+// retrieval only, so WinVerifyTrust fetches nothing. A valid signature counts
+// as NVIDIA's only when its leaf signer's common name is NVIDIA Corporation;
+// unsigned, a broken signature or another signer is "not NVIDIA". A file that
+// cannot be opened leaves nvidia_signed unset (unknown).
+void signature_facts(const fs::path& file,ModelFileFacts& out){
+    Handle h(CreateFileW(file.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_SEQUENTIAL_SCAN,nullptr));
+    if(!h.valid())return;
+    WINTRUST_FILE_INFO info{};info.cbStruct=sizeof(info);info.pcwszFilePath=file.c_str();info.hFile=h.value;
+    WINTRUST_DATA data{};data.cbStruct=sizeof(data);data.dwUIChoice=WTD_UI_NONE;data.fdwRevocationChecks=WTD_REVOKE_NONE;
+    data.dwUnionChoice=WTD_CHOICE_FILE;data.pFile=&info;data.dwStateAction=WTD_STATEACTION_VERIFY;
+    data.dwProvFlags=WTD_CACHE_ONLY_URL_RETRIEVAL|WTD_REVOCATION_CHECK_NONE;
+    GUID action=WINTRUST_ACTION_GENERIC_VERIFY_V2;const HWND no_window=static_cast<HWND>(INVALID_HANDLE_VALUE);
+    const LONG status=WinVerifyTrust(no_window,&action,&data);
+    std::wstring signer;
+    if(status==ERROR_SUCCESS)
+        if(auto* provider=WTHelperProvDataFromStateData(data.hWVTStateData))
+            if(auto* primary=WTHelperGetProvSignerFromChain(provider,0,FALSE,0))
+                if(auto* leaf=WTHelperGetProvCertFromChain(primary,0);leaf&&leaf->pCert){
+                    wchar_t name[256]{};
+                    const DWORD n=CertGetNameStringW(leaf->pCert,CERT_NAME_ATTR_TYPE,0,const_cast<char*>(szOID_COMMON_NAME),name,DWORD(std::size(name)));
+                    if(n>1)signer.assign(name,n-1);}
+    data.dwStateAction=WTD_STATEACTION_CLOSE;WinVerifyTrust(no_window,&action,&data);
+    out.signature_status=status;out.signer=utf8(signer);
+    out.nvidia_signed=status==ERROR_SUCCESS&&signer==L"NVIDIA Corporation";}
+// Complete answers by SHA-256, for the life of the process: model_status() runs
+// for every page refresh, and WinVerifyTrust re-reads the whole file. Content
+// decides both facts, so the hash is the key; an unknown answer is not kept.
+struct FactsCache {std::mutex lock;std::map<std::string,ModelFileFacts> by_sha256;};
+FactsCache& facts_cache(){static FactsCache cache;return cache;}
+ModelFileFacts cached_model_facts(const fs::path& file,const std::string& sha256){
+    auto& cache=facts_cache();
+    {std::lock_guard guard(cache.lock);if(const auto it=cache.by_sha256.find(sha256);it!=cache.by_sha256.end())return it->second;}
+    auto facts=read_model_facts(file);
+    if(facts.complete&&facts.nvidia_signed){std::lock_guard guard(cache.lock);if(cache.by_sha256.size()>=16)cache.by_sha256.clear();cache.by_sha256[sha256]=facts;}
+    return facts;}
+// The facts a status carries: from the review for a reviewed version (the
+// file is not read again), from the file -- bounded, cached -- for any other.
+// The caller holds the file pinned while this runs.
+void describe_model(ModelStatus& m,const fs::path& file){
+    if(m.known){m.classification="known";
+        if(const char* v=reviewed_file_version(m.sha256)){m.file_version=v;m.nvidia_signed=true;m.signer="NVIDIA Corporation";}
+        return;}
+    try{const auto f=cached_model_facts(file,m.sha256);m.file_version=f.file_version;m.nvidia_signed=f.nvidia_signed;m.signer=f.signer;m.classification=classify_model(false,f);}
+    catch(...){m.classification="unknown";}}
+}
+ModelFileFacts read_model_facts(const fs::path& file,unsigned limit_ms){
+    // The worker owns copies of everything it touches; on a timeout it finishes
+    // on its own and its late answer is dropped.
+    struct Shared {std::mutex lock;std::condition_variable finished;ModelFileFacts facts;bool done=false;};
+    auto shared=std::make_shared<Shared>();
+    try{std::thread([shared,file]{
+            ModelFileFacts f;
+            try{f.file_version=version_resource(file);}catch(...){f.file_version.clear();}
+            {std::lock_guard guard(shared->lock);shared->facts.file_version=f.file_version;}
+            try{signature_facts(file,f);}catch(...){f.nvidia_signed.reset();}
+            {std::lock_guard guard(shared->lock);shared->facts.nvidia_signed=f.nvidia_signed;shared->facts.signer=f.signer;
+             shared->facts.signature_status=f.signature_status;shared->facts.complete=true;shared->done=true;}
+            shared->finished.notify_all();}).detach();}
+    catch(...){return {};} // no worker: everything unknown
+    std::unique_lock guard(shared->lock);
+    shared->finished.wait_for(guard,std::chrono::milliseconds(limit_ms),[&]{return shared->done;});
+    return shared->facts;}
+std::optional<int> compare_file_versions(std::string_view a,std::string_view b){
+    const auto x=dotted_version(a),y=dotted_version(b);if(!x||!y)return std::nullopt;return *x<*y?-1:*y<*x?1:0;}
+const char* reviewed_file_version(std::string_view sha256) noexcept{
+    for(const auto& v:kReviewedFileVersions)if(sha256==v.sha256)return v.file_version;return nullptr;}
+bool newer_than_reviewed(std::string_view file_version){
+    for(const auto& v:kReviewedFileVersions){const auto c=compare_file_versions(file_version,v.file_version);if(!c||*c<=0)return false;}
+    return std::size(kReviewedFileVersions)>0;}
+std::string classify_model(bool known,const ModelFileFacts& f){
+    if(known)return "known";
+    if(!f.nvidia_signed)return "unknown";
+    if(!*f.nvidia_signed)return "not-nvidia";
+    return newer_than_reviewed(f.file_version)?"nvidia-newer":"nvidia-unverified";}
+Reason model_explanation(const ModelStatus& m){
+    if(!m.present||m.known||!m.error.empty())return {};
+    const std::string c=m.classification.empty()||m.classification=="known"?std::string("unknown"):m.classification;
+    json params{{"version",m.file_version.empty()?std::string("unknown"):m.file_version},{"sha",m.sha256.substr(0,12)}};
+    if(m.unrecognized_allowed){params["classification"]=c;return {"model-facts",std::move(params)};}
+    return {"model-refused."+c,std::move(params)};}
 fs::path Manager::models_dir()const{return root_/L"app"/L"models";}
 fs::path Manager::model_file()const{return models_dir()/L"nvngx_dlssnr.dll";}
 ModelStatus Manager::import_model(const fs::path& source_path){
@@ -1503,7 +1708,11 @@ ModelStatus Manager::import_model(const fs::path& source_path){
     const auto source_handle=pins.file(source);LARGE_INTEGER size{};
     need(GetFileSizeEx(source_handle,&size)&&size.QuadPart>0&&size.QuadPart<=512LL*1024*1024,"模型大小不在导入范围内");
     const auto hash=handle_digest(source_handle);const auto* reviewed=lab::model::known(hash);
-    need(model_hash_usable(hash),"模型版本未识别：文件未导入，请选择支持的原版模型");
+    // Refused exactly as before; first the file is described (its version
+    // resource and its signature, read as data, never loaded -- the pins above
+    // keep it from changing meanwhile), so the refusal says which case it is.
+    if(!model_hash_usable(hash)){ModelStatus refused;refused.path=source;refused.present=true;refused.sha256=hash;describe_model(refused,source);
+        throw Refusal("model-unknown-version",render(model_explanation(refused)),unknown_model(refused).params);}
     Writer writer(store_);directory(root_/L"app");directory(models_dir());pins.parents(models_dir());
     const auto destination=model_file();
     if(fs::exists(destination)){
@@ -1516,7 +1725,9 @@ ModelStatus Manager::import_model(const fs::path& source_path){
     }
     ModelStatus out;out.path=destination;out.present=true;out.sha256=hash;
     out.known=reviewed_model(hash,model_sha256_);out.unrecognized_allowed=!out.known;
-    out.label=reviewed?reviewed->label:out.known?"test model":"";return out;
+    out.label=reviewed?reviewed->label:out.known?"test model":"";
+    describe_model(out,source); // the source is still pinned and hash-identical to the copy
+    return out;
 }
 bool Manager::model_hash_usable(const std::string& sha256)const{return reviewed_model(sha256,model_sha256_)||allow_unrecognized_model_;}
 
@@ -1609,19 +1820,33 @@ json app_maintenance_json(const AppMaintenanceStatus& s){return {{"schema","over
 // that is exactly the state the page has to show in words.
 ModelStatus Manager::model_status()const{ModelStatus m;m.path=model_file();std::error_code ec;
     if(!fs::is_regular_file(m.path,ec))return m;
-    try{m.sha256=digest(m.path);m.present=true;}catch(const std::exception& e){m.error=e.what();return m;}
+    // Held while the file is hashed and described, so both see the same bytes.
+    Pins pin;
+    try{m.sha256=handle_digest(pin.file(m.path));m.present=true;}catch(const std::exception& e){m.error=e.what();return m;}
     if(!model_sha256_.empty()){m.known=m.sha256==model_sha256_;if(m.known)m.label="test model";}
     else if(const auto* v=lab::model::known(m.sha256)){m.known=true;m.label=v->label;}
     m.unrecognized_allowed=!m.known&&allow_unrecognized_model_;
+    describe_model(m,m.path);
     return m;}
-json model_json(const ModelStatus& m){json known=json::array();for(const auto& v:lab::model::kKnownVersions)known.push_back({{"sha256",v.sha256},{"label",v.label}});
+json model_json(const ModelStatus& m){json known=json::array();
+    for(const auto& v:lab::model::kKnownVersions){const char* fv=reviewed_file_version(v.sha256);known.push_back({{"sha256",v.sha256},{"label",v.label},{"file_version",fv?json(fv):json(nullptr)}});}
     const char* code=!m.present?"model-missing":m.known?"model-ready":m.unrecognized_allowed?"model-unrecognized-allowed":"model-unknown-version";
+    const auto why=model_explanation(m);
     return {{"schema","overglaze-model-status-v1"},{"path",text(m.path)},{"present",m.present},{"sha256",m.sha256.empty()?json(nullptr):json(m.sha256)},
         {"known",m.known},{"unrecognized_allowed",m.unrecognized_allowed},{"usable",m.usable()},
         {"label",m.label.empty()?json(nullptr):json(m.label)},{"error",m.error.empty()?json(nullptr):json(m.error)},
-        {"reason",reason_json({code,!m.present?json{{"path",text(m.path)}}:!m.known?json{{"hash",m.sha256}}:json::object()})},{"known_versions",known},
+        {"reason",reason_json({code,!m.present?json{{"path",text(m.path)}}:m.known?json::object():m.unrecognized_allowed?json{{"hash",m.sha256}}:unknown_model(m).params})},
+        // What the file says about itself (diagnosis only; it changes nothing that is accepted).
+        {"file_version",m.file_version.empty()?json(nullptr):json(m.file_version)},
+        {"nvidia_signed",m.nvidia_signed?json(*m.nvidia_signed):json(nullptr)},
+        {"signer",m.signer.empty()?json(nullptr):json(m.signer)},
+        {"classification",m.classification.empty()?json(nullptr):json(m.classification)},
+        {"explanation",why.code.empty()?json(nullptr):reason_json(why)},{"explanation_text",why.code.empty()?json(nullptr):json(render(why))},
+        {"known_versions",known},
         {"scope","read-only. This project does not include or redistribute nvngx_dlssnr.dll; the user supplies their own copy. Overglaze verifies only the reviewed versions listed; "
-                 "an unrecognized model is used only after the user explicitly allows it (--allow-unrecognized-model or the desktop setting), at the user's own risk, pinned by SHA-256 per install."}};}
+                 "an unrecognized model is used only after the user explicitly allows it (--allow-unrecognized-model or the desktop setting), at the user's own risk, pinned by SHA-256 per install. "
+                 "file_version, nvidia_signed and classification are read from the file as data (version resource; Authenticode without network, leaf signer NVIDIA Corporation), never by loading it, "
+                 "and only explain the file: for a reviewed version they come from the review. They never change what is accepted."}};}
 void Manager::migrate(const std::string& id,bool risk_accepted,const std::string& consent,const Progress& progress){
     {const auto s=inspect(find(id));
      if(s.install_state!="legacy")throw Refusal("migrate-not-legacy","这款游戏没有旧版（DLSS Lab）安装，不需要迁移",json{{"install",s.install_state}});}
