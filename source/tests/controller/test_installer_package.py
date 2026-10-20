@@ -56,7 +56,7 @@ class InstallerPackageTests(unittest.TestCase):
             target.write_text("Public fixture\n", encoding="utf-8")
         self.record = {
             "schema": "overglaze-release-v2", "platform": "windows-x64",
-            "version": "0.2.0-preview.7", "channel": "preview", "source_commit": "a" * 40,
+            "version": "0.2.0-preview.8", "channel": "preview", "source_commit": "a" * 40,
             "source_dirty": False, "model_included": False,
             "files": [],
         }
