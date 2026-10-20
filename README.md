@@ -6,9 +6,9 @@ Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Ren
 
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
-## 0.2.0-preview.7
+## 0.2.0-preview.8
 
-One-click updates. The desktop program now checks the project's GitHub releases when it starts (at most once a day; turn off *启动时检查更新* in Settings to stop it) and can download and install a newer version itself. Every update carries a manifest signed with the project's release key, and nothing is installed unless that signature verifies. Portable copies only show the new version and a link to the download page. The in-game components never connect to the network. This version has to be installed by hand once; later versions arrive through the update notice.
+Clearer model imports and fewer refusals. When a model file is refused, the program now says why: an NVIDIA original newer than this version knows (update Overglaze), an NVIDIA-signed file it has not verified, or a file without a valid NVIDIA signature, with its file version and the start of its SHA-256. Other injection tools in a game folder (`version.dll`, `winmm.dll`, `d3d12.dll`, `dinput8.dll`, ReShade and the like) are now a notice in the install confirmation instead of a refusal; only a foreign `dxgi.dll` where Overglaze puts its own, or another DLSS 5 / NR add-on, still blocks the install. 0.2.0-preview.7 and later offer this version through the update notice.
 
 The in-game plugin files are unchanged from 0.2.0-preview.5: games already updated for it need nothing, and games on an older plugin show *Update plugin* as before. The model is still supplied by you. This preview does not add game certifications or new image-quality, performance or stability results. See [CHANGELOG.md](CHANGELOG.md).
 
