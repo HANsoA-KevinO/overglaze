@@ -265,6 +265,16 @@ std::string classify_model(bool known,const ModelFileFacts&);
 // do, with the file version and the first 12 hex of its SHA-256), model-facts
 // once the user allowed it. Empty code for a reviewed or absent model.
 Reason model_explanation(const ModelStatus&);
+// The status path's in-process digest cache (inspect, model_status, the
+// published host): a library refresh hashes each file -- above all the
+// program's model -- once, and again only when its identity changes (volume
+// serial, file index, size, last-write or change time); an import forgets the
+// model path. Operations that write still hash each file they act on
+// themselves. Counters for diagnosis and tests.
+struct DigestCacheStats {std::uint64_t computed=0,reused=0;};
+DigestCacheStats digest_cache_stats() noexcept;
+std::uint64_t digest_cache_computed(const std::filesystem::path&) noexcept; // times this path was hashed so far
+std::size_t digest_cache_entries(const std::filesystem::path&) noexcept;    // cached answers held for this path now
 // Installer checks read only the selected application root and existing records.
 // They never construct Manager, create directories or modify a game.
 struct AppMaintenanceStatus {

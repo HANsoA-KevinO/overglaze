@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <map>
 #include <set>
@@ -111,9 +112,46 @@ int model_backup_check(){
     need(message.find("没有有效的 NVIDIA 签名")!=std::string::npos&&message.find(lab::sha256(copy).substr(0,12))!=std::string::npos,"its import is refused as case d");
     std::cout<<json{{"passed",true},{"checks",checks},{"backups",out},{"flipped",{{"version",flipped.file_version},{"signature_status",flipped.signature_status},{"classification","not-nvidia"}}},{"loaded",false}}.dump(2)<<'\n';
     return 0;}
+// A synthetic program root with `games` controller root-proxy games, every one
+// installed, and a synthetic model of `model_bytes` bytes (never loaded),
+// accepted through the tests' synthetic-hash hook. No checker runs.
+struct Library {fs::path root;std::string model_hash;};
+void write_model(const fs::path& file,std::uint64_t bytes,std::uint64_t seed){std::ofstream f(file,std::ios::binary|std::ios::trunc);std::string block(1<<20,'\0');std::uint64_t x=seed|1;
+    for(std::uint64_t written=0;written<bytes;){for(auto& c:block){x^=x<<13;x^=x>>7;x^=x<<17;c=char(x);}const auto n=(std::min<std::uint64_t>)(block.size(),bytes-written);f.write(block.data(),std::streamsize(n));written+=n;}
+    f.flush();if(!f)throw std::runtime_error("synthetic model write");}
+Library synthetic_library(const fs::path& base,unsigned games,std::uint64_t model_bytes){
+    Library l;l.root=base/lab::wide("overglaze-refresh-test-"+lab::uuid());need(fs::create_directory(l.root),"library root");
+    for(const auto* p:{L"app",L"app/plugin",L"app/tools",L"app/models",L"app/adapters",L"data"})fs::create_directory(l.root/p);
+    put(l.root/L"app/plugin/dxgi.dll","synthetic CONTROLLER proxy");put(l.root/L"app/plugin/overglaze_controller.dll","synthetic CONTROLLER loader");
+    put(l.root/L"app/plugin/overglaze_nvngx.dll","synthetic CONTROLLER bridge");put(l.root/L"app/tools/overglaze_install_check.exe","synthetic checker, never run");
+    write_model(l.root/L"app/models/nvngx_dlssnr.dll",model_bytes,0x9e3779b97f4a7c15ULL);l.model_hash=lab::sha256(l.root/L"app/models/nvngx_dlssnr.dll");
+    lab::games::Manager m(l.root,std::nullopt,l.model_hash,false);
+    for(unsigned i=0;i<games;++i){const auto n=std::to_string(i);const auto dir=l.root/lab::wide("game"+n);fs::create_directory(dir);const auto exe=dir/lab::wide("Game"+n+".exe");
+        put(exe,pe64(standard,"refresh game "+n));put(dir/L"sl.interposer.dll","sl "+n);put(dir/L"sl.common.dll","common "+n);put(dir/L"sl.dlss_d.dll","dlss_d "+n);
+        const auto g=m.add(exe);auto o=lab::games::PackageOptions::controller_root_proxy();o.allow_unsigned_modules=true;o.name="game"+n;m.make_package(g.id,o);
+        m.install(g.id,true,"fixture consent: synthetic library for the refresh cost");}
+    return l;}
+// One library refresh as the game library page runs it: a new manager, every
+// game inspected, the local model's status and the storage statistic.
+std::vector<lab::games::Status> refresh(const Library& l){lab::games::Manager m(l.root,std::nullopt,l.model_hash,false);std::vector<lab::games::Status> out;
+    for(const auto& e:m.list())out.push_back(m.inspect(e));(void)m.model_status();(void)m.storage_usage();return out;}
+void remove_library(const Library& l){need(l.root.filename().wstring().starts_with(L"overglaze-refresh-test-"),"cleanup confinement");
+    for(const auto& f:fs::recursive_directory_iterator(l.root))lab::winpath::require_no_reparse(f.path());fs::remove_all(l.root);}
+// --refresh-timing [games] [model MiB]: wall time of consecutive library
+// refreshes over a synthetic store (default 11 games, 254 MiB model). A
+// measurement, not a check; the store is removed afterwards.
+int refresh_timing(unsigned games,std::uint64_t model_mib){
+    const auto l=synthetic_library(fixture_base(),games,model_mib<<20);json times=json::array();
+    for(unsigned i=0;i<3;++i){const auto t0=std::chrono::steady_clock::now();const auto rows=refresh(l);
+        const auto ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count();
+        unsigned installed=0;for(const auto& s:rows)if(s.install_state=="installed")++installed;need(installed==games,"every synthetic game reads as installed");times.push_back(std::lround(ms));}
+    remove_library(l);
+    std::cout<<json{{"games",games},{"model_bytes",model_mib<<20},{"refresh_ms",times},{"note","refresh = new Manager, inspect every game, model_status, storage_usage"}}.dump()<<'\n';return 0;}
 }
 int wmain(int argc,wchar_t** argv){fs::path root;try{
     if(argc==2&&std::wstring(argv[1])==L"--model-backup")return model_backup_check();
+    if(argc>=2&&argc<=4&&std::wstring(argv[1])==L"--refresh-timing")
+        return refresh_timing(argc>2?unsigned(std::stoul(argv[2])):11u,argc>3?std::stoull(argv[3]):254ull);
     // Read-only inspection against the real Lab, whose root comes from where this
     // test program sits (a track build directory), never from a literal.
     if(argc==3&&std::wstring(argv[1])==L"--inspect"){lab::games::Manager manager(lab::root::resolve_self().root);lab::games::Entry e{lab::uuid(),"Read-only inspection",argv[2]};std::cout<<lab::games::status_json(manager.inspect(e)).dump(2);return 0;}
@@ -864,6 +902,32 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      {const auto im=mg::Manager(r,std::vector<mg::Policy>{},ha,false).import_model(kept(ha));
       need(im.replaced_sha256==hb&&lab::sha256(target)==ha&&lab::sha256(kept(ha))==ha&&lab::sha256(kept(hb))==hb,"switched back from the kept copy; both copies kept");}
      fs::remove_all(r);fs::remove(a);fs::remove(b);fs::remove(refused);}
+    // ---- a library refresh hashes the program's model once, not once per
+    // game, and hashes a file again only when its identity changes.
+    {namespace mg=lab::games;constexpr unsigned games=3;
+     const auto l=synthetic_library(base,games,3ull<<20);const auto model=l.root/L"app/models/nvngx_dlssnr.dll";
+     std::vector<fs::path> copies;for(unsigned i=0;i<games;++i)copies.push_back(l.root/lab::wide("game"+std::to_string(i))/L"overglaze/nvngx_dlssnr.dll");
+     for(const auto& s:refresh(l))need(s.install_state=="installed"&&s.health=="ok","refresh 1: every synthetic game installed and current");
+     const auto first=mg::digest_cache_stats();
+     for(const auto& s:refresh(l))need(s.install_state=="installed"&&s.health=="ok","refresh 2: the same");
+     const auto second=mg::digest_cache_stats();
+     need(mg::digest_cache_computed(model)==1,"the program's model hashed once for "+std::to_string(games)+" installed games, packaging, installs and two refreshes: "+std::to_string(mg::digest_cache_computed(model)));
+     for(const auto& c:copies)need(mg::digest_cache_computed(c)==1,"each game's own model copy hashed once over two refreshes");
+     need(second.computed==first.computed&&second.reused>first.reused,"the second refresh hashed nothing");
+     // Changed behind our back -- same path, same size, new bytes: hashed again.
+     Sleep(20);write_model(model,3ull<<20,0x2545f4914f6cdd1dULL);const auto changed=lab::sha256(model);need(changed!=l.model_hash,"new bytes");
+     (void)refresh(l);
+     need(mg::digest_cache_computed(model)==2&&mg::Manager(l.root,std::nullopt,l.model_hash,false).model_status().sha256==changed,"a model rewritten in place is hashed again and reported as it is now");
+     Sleep(20);write_model(copies[0],3ull<<20,0x2545f4914f6cdd1dULL);
+     {const auto rows=refresh(l);need(mg::digest_cache_computed(copies[0])==2,"a game's copy rewritten in place is hashed again");
+      need(std::count_if(rows.begin(),rows.end(),[](const mg::Status& s){return s.install_state=="modified";})==1,"and that game reads as modified, not from a stale hash");}
+     // An import replaces the model: the path's cached answers are forgotten.
+     const auto incoming=base/lab::wide("overglaze-refresh-incoming-"+lab::uuid()+".dll");write_model(incoming,3ull<<20,0x41c64e6dULL);const auto incoming_hash=lab::sha256(incoming);
+     need(mg::digest_cache_entries(model)>0,"the model's answer is cached before the import");
+     {mg::Manager with_incoming(l.root,std::nullopt,incoming_hash,false);const auto im=with_incoming.import_model(incoming);
+      need(im.replaced_sha256==changed&&mg::digest_cache_entries(model)==0,"the import forgets what was cached for the model path");
+      need(with_incoming.model_status().sha256==incoming_hash&&mg::digest_cache_computed(model)==3,"the next status hashes the new file");}
+     fs::remove(incoming);remove_library(l);}
     // ================================================================ a check that cannot run is "unknown"
     put(root/L"game8/Locked.exe",pe64(standard,"locked"));put(root/L"game8/sl.interposer.dll","sl");put(root/L"game8/sl.dlss_d.dll","dlss_d");
     {lab::Handle hold(CreateFileW((root/L"game8/Locked.exe").c_str(),GENERIC_READ,0,nullptr,OPEN_EXISTING,0,nullptr));need(hold.valid(),"exclusive fixture handle");

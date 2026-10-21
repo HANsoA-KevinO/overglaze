@@ -17,6 +17,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <tuple>
 #include <bcrypt.h>
 #include <wincrypt.h>
 #include <wintrust.h>
@@ -57,6 +58,41 @@ std::string handle_digest(HANDLE f){LARGE_INTEGER size{},zero{};need(GetFileSize
     std::vector<unsigned char> b(1<<20);DWORD n=0;for(;;){need(ReadFile(f,b.data(),DWORD(b.size()),&n,nullptr),"读取文件失败");if(!n)break;need(BCryptHashData(hash,b.data(),n,0)>=0,"SHA-256 读取失败");}
     std::array<unsigned char,32> result{};need(BCryptFinishHash(hash,result.data(),DWORD(result.size()),0)>=0,"SHA-256 失败");std::string out;for(auto v:result){out+="0123456789abcdef"[v>>4];out+="0123456789abcdef"[v&15];}return out;}
 std::string digest(const fs::path& p){Pins pin;return handle_digest(pin.file(p));}
+// ---------------------------------------------------------------- status digest cache
+// A library refresh inspects every game, and every inspection used to hash the
+// same files again: the program's model (~160-260 MiB) once per game, each
+// game's own model copy, its modules, the published host. The status path
+// (inspect, model_status, published_host) takes those hashes from this
+// in-process cache instead, keyed by the file's identity: volume serial and
+// file index (GetFileInformationByHandle), size, last-write time and change
+// time (FileBasicInfo). A file replaced, rewritten or touched behind our back
+// has another key and is hashed again. The file is held (no writer can open
+// it) while its key is read and it is hashed, so both describe the same bytes.
+// Every operation that writes -- install, uninstall, update, packaging, import
+// -- still hashes each file it acts on by handle itself; a status it reads
+// first only decides whether it starts.
+struct DigestKey {DWORD volume=0;std::uint64_t index=0,size=0;LONGLONG written=0,changed=0;
+    bool operator<(const DigestKey& o)const{return std::tie(volume,index,size,written,changed)<std::tie(o.volume,o.index,o.size,o.written,o.changed);}};
+struct DigestCache {std::mutex lock;std::map<DigestKey,std::pair<std::string,std::wstring>> entries;std::map<std::wstring,std::uint64_t> computed_by_path;DigestCacheStats stats;};
+DigestCache& digest_cache(){static DigestCache cache;return cache;}
+constexpr std::size_t kDigestCacheEntries=4096; // a bound, not a policy: past it the cache starts over
+std::wstring cache_path(const fs::path& p){auto s=p.lexically_normal().native();if(!s.empty())CharLowerBuffW(s.data(),DWORD(s.size()));return s;}
+std::string cached_handle_digest(HANDLE h,const fs::path& p){
+    BY_HANDLE_FILE_INFORMATION i{};FILE_BASIC_INFO b{};
+    if(!GetFileInformationByHandle(h,&i)||!GetFileInformationByHandleEx(h,FileBasicInfo,&b,sizeof(b)))return handle_digest(h); // no identity: no cache
+    const DigestKey key{i.dwVolumeSerialNumber,(std::uint64_t(i.nFileIndexHigh)<<32)|i.nFileIndexLow,(std::uint64_t(i.nFileSizeHigh)<<32)|i.nFileSizeLow,b.LastWriteTime.QuadPart,b.ChangeTime.QuadPart};
+    auto& c=digest_cache();
+    {std::lock_guard guard(c.lock);if(const auto it=c.entries.find(key);it!=c.entries.end()){++c.stats.reused;return it->second.first;}}
+    auto sha=handle_digest(h);const auto where=cache_path(p);
+    {std::lock_guard guard(c.lock);if(c.entries.size()>=kDigestCacheEntries)c.entries.clear();if(c.computed_by_path.size()>=kDigestCacheEntries)c.computed_by_path.clear();
+     c.entries[key]={sha,where};++c.stats.computed;++c.computed_by_path[where];}
+    return sha;}
+std::string cached_digest(const fs::path& p){Pins pin;return cached_handle_digest(pin.file(p),p);}
+// What was cached for this path is forgotten (an import just replaced it).
+// Not needed for correctness -- the replacement has another identity -- but
+// nothing about the old file is kept around for the path.
+void forget_cached(const fs::path& p){const auto where=cache_path(p);auto& c=digest_cache();std::lock_guard guard(c.lock);
+    std::erase_if(c.entries,[&](const auto& e){return e.second.second==where;});}
 json read(const fs::path& p){Pins pin;pin.file(p);need(fs::file_size(p)<=128*1024,"管理记录超过大小限制");std::ifstream in(p,std::ios::binary);return json::parse(in);}
 void save(const fs::path& p,const json& doc){Pins pin;pin.parents(p.parent_path());if(fs::exists(p))winpath::require_no_reparse(p);const auto bytes=doc.dump(2)+"\n";need(bytes.size()<=128*1024,"管理记录超过大小限制");const auto tmp=p.parent_path()/wide(".manager-"+uuid()+".tmp");
     Handle out(CreateFileW(tmp.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));need(out.valid(),"无法保存管理记录");DWORD wrote=0;const bool ok=WriteFile(out.value,bytes.data(),DWORD(bytes.size()),&wrote,nullptr)&&wrote==bytes.size()&&FlushFileBuffers(out.value);CloseHandle(out.value);out.value=INVALID_HANDLE_VALUE;
@@ -670,10 +706,10 @@ std::map<std::string,std::string> Manager::published_host(const std::string& tra
     need(track=="controller"||track=="research","适配包的 track 只能是 controller 或 research");
     const auto dir=track=="controller"?root_/L"app"/L"plugin":root_/L"app"/L"research"/L"host";
     const std::string shown=track=="controller"?"app/plugin/":"app/research/host/";
-    for(const auto* n:{"dxgi.dll","overglaze_nvngx.dll"}){const auto p=dir/wide(n);need(fs::is_regular_file(p),"已发布宿主缺失: "+shown+n);out[n]=digest(p);}
+    for(const auto* n:{"dxgi.dll","overglaze_nvngx.dll"}){const auto p=dir/wide(n);need(fs::is_regular_file(p),"已发布宿主缺失: "+shown+n);out[n]=cached_digest(p);}
     // The late loader is published beside the proxy; a package that uses it
     // compares against this entry instead of dxgi.dll.
-    for(const auto* n:{"overglaze_controller.dll"}){const auto p=dir/wide(n);if(fs::is_regular_file(p))out[n]=digest(p);}
+    for(const auto* n:{"overglaze_controller.dll"}){const auto p=dir/wide(n);if(fs::is_regular_file(p))out[n]=cached_digest(p);}
     return out;}
 Status Manager::inspect(const Entry& e)const{auto s=inspect_impl(e,true);
     // Other injectors beside the EXE, as they are now, in every state: a named,
@@ -773,13 +809,13 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         const auto tx_located=[&](const std::string& n){return !tx_proxy.empty()&&n==tx_proxy?dir/wide(n):tx_dir/wide(n);};
         bool present=false,missing=false;json files_seen=json::object();
         for(auto it=j["files"].begin();it!=j["files"].end();++it){auto f=tx_located(it.key());
-            if(fs::exists(f)){const auto h=within("file-unreadable",[&]{return digest(f);});
+            if(fs::exists(f)){const auto h=within("file-unreadable",[&]{return cached_digest(f);});
                 if(h!=it.value().get<std::string>()){record(s,"files",Outcome::fail,it.key(),"installed-files-modified");throw Refusal("installed-files-modified","已登记插件被外部修改，拒绝卸载或覆盖",json{{"file",it.key()}});}
                 files_seen[it.key()]=h;present=true;}
             else missing=true;}
         record(s,"files",missing?Outcome::fail:Outcome::pass,files_seen.size(),missing?"incomplete":"");
         s.installed=present;s.can_uninstall=!s.running;s.state=state=="installed"&&!missing?"installed":"incomplete";
-        s.host_hash=fs::exists(tx_dir/tx_loader)?within("file-unreadable",[&]{return digest(tx_dir/tx_loader);}):"";
+        s.host_hash=fs::exists(tx_dir/tx_loader)?within("file-unreadable",[&]{return cached_digest(tx_dir/tx_loader);}):"";
         if(!p){record(s,"health.manifest",Outcome::fail,nullptr,"installed-package-missing");changed({"installed-package-missing"});return s;}
         if(within("file-unreadable",[&]{return game_identity_token(exe);})!=p->pins.at(p->executable)){
             record(s,"game-pins",Outcome::fail,p->executable,"game-changed");changed({"game-changed",{{"module",p->executable}}});return s;}
@@ -805,10 +841,10 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
          for(const auto& [name,pin]:p->pins){if(name==p->executable)continue;
             bool matched=false;std::error_code ec;
             for(const auto& candidate:module_dirs){const auto f=candidate/wide(name);if(!fs::is_regular_file(f,ec))continue;
-                matched=within("file-unreadable",[&]{return digest(f);})==pin;break;} // first place it exists is the one that must match
+                matched=within("file-unreadable",[&]{return cached_digest(f);})==pin;break;} // first place it exists is the one that must match
             if(!matched){record(s,"game-pins",Outcome::fail,name,"game-changed");changed({"game-changed",{{"module",name}}});return s;}}
          record(s,"game-pins",Outcome::pass,p->pins.size());}
-        const auto installed_hash=[&](const std::string& n){const auto f=tx_located(n);return fs::exists(f)?within("file-unreadable",[&]{return digest(f);}):std::string();};
+        const auto installed_hash=[&](const std::string& n){const auto f=tx_located(n);return fs::exists(f)?within("file-unreadable",[&]{return cached_digest(f);}):std::string();};
         record(s,"health.manifest",Outcome::pass,p->name);
         s.update.host=p->payload.contains(p->loader.basename)&&s.host_hash!=p->payload.at(p->loader.basename);
         s.update.bridge=p->payload.contains("overglaze_nvngx.dll")&&installed_hash("overglaze_nvngx.dll")!=p->payload.at("overglaze_nvngx.dll");
@@ -903,7 +939,7 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         for(const auto& candidate:module_dirs){
             const auto f=candidate/wide(name);
             if(!fs::is_regular_file(f,ec))continue;
-            if(within("file-unreadable",[&]{return digest(f);})==pin)matched=true;
+            if(within("file-unreadable",[&]{return cached_digest(f);})==pin)matched=true;
             break; // first place it exists is the one that must match
         }
         if(!matched){record(s,"game-pins",Outcome::fail,name,"game-changed");changed({"game-changed",{{"module",name}}});return s;}}
@@ -921,9 +957,9 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
     const auto lab_dir=current.dir;const auto loader_name=current.loader;
     if(legacy_present()||present(current)){
         const auto& f=legacy_present()?old:current;
-        const auto h=within("file-unreadable",[&]{return digest(f.dir/f.loader);});
+        const auto h=within("file-unreadable",[&]{return cached_digest(f.dir/f.loader);});
         gate(s,"existing-host",std::find(p->accepted_hosts.begin(),p->accepted_hosts.end(),h)!=p->accepted_hosts.end(),"foreign-loader","dxgi.dll 已被其他插件占用或 Lab 版本未知，拒绝覆盖",json{{"file",utf8(f.loader)}},h);
-        const auto bridge=within("file-unreadable",[&]{return digest(f.dir/f.bridge);});
+        const auto bridge=within("file-unreadable",[&]{return cached_digest(f.dir/f.bridge);});
         gate(s,"existing-bridge",std::find(p->accepted_bridges.begin(),p->accepted_bridges.end(),bridge)!=p->accepted_bridges.end(),"foreign-bridge","已有 NR 桥接文件身份不同",json::object(),bridge);
         auto c=within("existing-config-unsupported",[&]{return read(f.dir/f.config);});const auto v=c.value("version",0);
         gate(s,"existing-config",(v==2&&c.size()==10)||(v==3&&(c.size()==12||c.size()==13))||
@@ -960,9 +996,9 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         record(s,"published",Outcome::fail,nullptr,"legacy-package");
         s.state="package-stale";s.can_refresh_package=true;s.reasons.push_back({"legacy-package"});
         return s;}
-    if(fs::exists(dir/L"nvngx_dlssnr.dll"))gate(s,"model",within("file-unreadable",[&]{return digest(dir/L"nvngx_dlssnr.dll");})==p->payload.at("nvngx_dlssnr.dll"),"model-mismatch","已有 NR 模型身份不同，不覆盖");
+    if(fs::exists(dir/L"nvngx_dlssnr.dll"))gate(s,"model",within("file-unreadable",[&]{return cached_digest(dir/L"nvngx_dlssnr.dll");})==p->payload.at("nvngx_dlssnr.dll"),"model-mismatch","已有 NR 模型身份不同，不覆盖");
     if(full){
-        bool payload_ok=true;for(const auto& n:{p->loader.basename,std::string("overglaze_nvngx.dll")})if(within("file-unreadable",[&]{return digest(p->directory/wide(n));})!=p->payload.at(n))payload_ok=false;
+        bool payload_ok=true;for(const auto& n:{p->loader.basename,std::string("overglaze_nvngx.dll")})if(within("file-unreadable",[&]{return cached_digest(p->directory/wide(n));})!=p->payload.at(n))payload_ok=false;
         gate(s,"package-payload",payload_ok,"package-payload-mismatch","适配包载荷与清单不一致");
         Reason model_changed;
         {const auto m=model_status();
@@ -975,7 +1011,7 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
          if(m.sha256!=pinned){record(s,"local-model",Outcome::fail,m.sha256,"package-model-changed");
              model_changed={"package-model-changed",{{"package",model_name(pinned)},{"current",model_name(m.sha256,m.file_version)}}};}
          else record(s,"local-model",Outcome::pass,m.sha256);}
-        gate(s,"package-config",!p->config_sha256.empty()&&within("file-unreadable",[&]{return digest(p->directory/L"overglaze.install.json");})==p->config_sha256,"package-config-mismatch","适配包配置与清单 config_sha256 不一致");
+        gate(s,"package-config",!p->config_sha256.empty()&&within("file-unreadable",[&]{return cached_digest(p->directory/L"overglaze.install.json");})==p->config_sha256,"package-config-mismatch","适配包配置与清单 config_sha256 不一致");
         const auto published=within("published-host-missing",[&]{return published_host(p->track);});
         const auto newer=behind_published(*p,published);
         if(!newer.empty()||!model_changed.code.empty()){
@@ -1778,7 +1814,7 @@ ModelStatus Manager::import_model(const fs::path& source_path){
     auto stage=[&]{try{copy_handle(source_handle,staging,hash);}catch(...){DeleteFileW(staging.c_str());throw;}};
     if(!fs::exists(destination)){stage();
         if(!MoveFileExW(staging.c_str(),destination.c_str(),MOVEFILE_WRITE_THROUGH)){DeleteFileW(staging.c_str());throw std::runtime_error("模型导入未完成：目标文件已存在或目录不可写");}
-        return out;}
+        forget_cached(destination);return out;}
     // A model is already there. Held by handle (no one else can write, rename
     // or delete it) until just before the rename that replaces it.
     Pins held;const auto outgoing=held.file(destination);const auto old=handle_digest(outgoing);
@@ -1794,12 +1830,18 @@ ModelStatus Manager::import_model(const fs::path& source_path){
     held.handles.clear();
     if(!MoveFileExW(staging.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){const auto error=GetLastError();DeleteFileW(staging.c_str());
         throw std::runtime_error("模型更换未完成：无法替换 "+text(destination)+"（Windows 错误 "+std::to_string(error)+"，文件可能被占用或只读）；原来的模型仍在原处");}
+    forget_cached(destination);
     out.replaced_sha256=old;out.replaced_kept=shared_model_file(store_,old);
     return out;
 }
 Reason model_replacement(const ModelStatus& m){
     if(m.replaced_sha256.empty())return {};
     return {"model-replaced",{{"from",model_name(m.replaced_sha256,m.replaced_version)},{"to",model_name(m.sha256,m.file_version)}}};}
+DigestCacheStats digest_cache_stats() noexcept{auto& c=digest_cache();std::lock_guard guard(c.lock);return c.stats;}
+std::uint64_t digest_cache_computed(const fs::path& file) noexcept{
+    try{const auto where=cache_path(file);auto& c=digest_cache();std::lock_guard guard(c.lock);const auto it=c.computed_by_path.find(where);return it==c.computed_by_path.end()?0:it->second;}catch(...){return 0;}}
+std::size_t digest_cache_entries(const fs::path& file) noexcept{
+    try{const auto where=cache_path(file);auto& c=digest_cache();std::lock_guard guard(c.lock);return std::size_t(std::count_if(c.entries.begin(),c.entries.end(),[&](const auto& e){return e.second.second==where;}));}catch(...){return 0;}}
 bool Manager::model_hash_usable(const std::string& sha256)const{return reviewed_model(sha256,model_sha256_)||allow_unrecognized_model_;}
 
 AppMaintenanceStatus app_maintenance_check(const fs::path& selected,const std::string& operation){
@@ -1893,7 +1935,7 @@ ModelStatus Manager::model_status()const{ModelStatus m;m.path=model_file();std::
     if(!fs::is_regular_file(m.path,ec))return m;
     // Held while the file is hashed and described, so both see the same bytes.
     Pins pin;
-    try{m.sha256=handle_digest(pin.file(m.path));m.present=true;}catch(const std::exception& e){m.error=e.what();return m;}
+    try{m.sha256=cached_handle_digest(pin.file(m.path),m.path);m.present=true;}catch(const std::exception& e){m.error=e.what();return m;}
     if(!model_sha256_.empty()){m.known=m.sha256==model_sha256_;if(m.known)m.label="test model";}
     else if(const auto* v=lab::model::known(m.sha256)){m.known=true;m.label=v->label;}
     m.unrecognized_allowed=!m.known&&allow_unrecognized_model_;
