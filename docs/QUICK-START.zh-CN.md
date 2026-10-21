@@ -1,11 +1,11 @@
 # Overglaze 使用说明
 
-当前版本：0.2.0-preview.9。
+当前版本：0.2.0-preview.10。
 
 ## 开源与下载
 
 - [开源仓库](https://github.com/HANsoA-KevinO/overglaze)
-- [Preview 9 下载](https://github.com/HANsoA-KevinO/overglaze/releases/tag/v0.2.0-preview.9)
+- [Preview 10 下载](https://github.com/HANsoA-KevinO/overglaze/releases/tag/v0.2.0-preview.10)
 - [所有版本](https://github.com/HANsoA-KevinO/overglaze/releases)
 - [问题反馈](https://github.com/HANsoA-KevinO/overglaze/issues)
 
