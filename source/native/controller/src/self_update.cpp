@@ -197,12 +197,29 @@ void remove_own_files(const fs::path& folder,const std::string& setup){
     for(const auto& name:{wide(setup),wide(setup)+L".partial"}){
         const auto file=folder/name;if(fs::is_regular_file(file,ec)&&!reparse(file))DeleteFileW(file.c_str());}}
 std::uint64_t free_space(const fs::path& where){ULARGE_INTEGER available{};need(GetDiskFreeSpaceExW(where.c_str(),&available,nullptr,nullptr)!=FALSE,"无法读取磁盘剩余空间");return available.QuadPart;}
-std::optional<std::wstring> registry_install_location(){
+UninstallLookup registry_install_location(){
     const std::wstring key=std::wstring(L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\")+kSetupAppId+L"_is1";
-    DWORD bytes=0;if(RegGetValueW(HKEY_CURRENT_USER,key.c_str(),L"InstallLocation",RRF_RT_REG_SZ,nullptr,nullptr,&bytes)!=ERROR_SUCCESS||bytes<sizeof(wchar_t)||bytes>65536)return std::nullopt;
+    DWORD bytes=0;auto status=RegGetValueW(HKEY_CURRENT_USER,key.c_str(),L"InstallLocation",RRF_RT_REG_SZ,nullptr,nullptr,&bytes);
+    if(status==ERROR_FILE_NOT_FOUND){
+        // RegGetValueW answers the same for a missing entry and a missing value.
+        HKEY opened=nullptr;const auto open=RegOpenKeyExW(HKEY_CURRENT_USER,key.c_str(),0,KEY_QUERY_VALUE,&opened);
+        if(open==ERROR_SUCCESS)RegCloseKey(opened);
+        return {std::nullopt,long(status),open==ERROR_FILE_NOT_FOUND};}
+    if(status!=ERROR_SUCCESS)return {std::nullopt,long(status)};
+    if(bytes<sizeof(wchar_t)||bytes>65536)return {std::nullopt,long(ERROR_INVALID_DATA)};
     std::wstring value(bytes/sizeof(wchar_t),L'\0');
-    if(RegGetValueW(HKEY_CURRENT_USER,key.c_str(),L"InstallLocation",RRF_RT_REG_SZ,nullptr,value.data(),&bytes)!=ERROR_SUCCESS)return std::nullopt;
-    value.resize(wcsnlen(value.c_str(),value.size()));return value;}
+    status=RegGetValueW(HKEY_CURRENT_USER,key.c_str(),L"InstallLocation",RRF_RT_REG_SZ,nullptr,value.data(),&bytes);
+    if(status!=ERROR_SUCCESS)return {std::nullopt,long(status)};
+    value.resize(wcsnlen(value.c_str(),value.size()));return UninstallLookup{std::move(value)};}
+// Why the uninstall entry gives no location, with the Win32 error when there is one.
+std::string uninstall_reason(const UninstallLookup& r){
+    const auto code=r.error?"（错误 "+std::to_string(r.error)+"）":std::string();
+    if(r.location)return "Windows 卸载登记里的安装位置为空";
+    if(!r.error||r.key_missing)return "Windows 卸载登记里没有这个程序"+code;
+    if(r.error==ERROR_FILE_NOT_FOUND)return "Windows 卸载登记里没有安装位置"+code;
+    if(r.error==ERROR_UNSUPPORTED_TYPE)return "Windows 卸载登记里的安装位置类型不对"+code;
+    if(r.error==ERROR_INVALID_DATA)return "Windows 卸载登记里的安装位置无效"+code;
+    return "无法读取 Windows 卸载登记"+code;}
 std::string mib(std::uint64_t bytes){return std::to_string((bytes+(1ULL<<20)-1)>>20)+" MiB";}
 }
 
@@ -499,7 +516,7 @@ fs::path download_setup(const Endpoint& e,const Offer& o,const fs::path& data_ro
 // ---- installation
 Installation detect(const root::Location& where,const UninstallLocation& reader){
     Installation out;out.root=where.root;out.data=where.data;
-    auto portable=[&](const char* why){out.why=why;return out;};
+    auto portable=[&](std::string why){out.why=std::move(why);return out;};
     if(where.source!=root::Source::app_layout)return portable("不是安装版的目录布局");
     const auto bytes=read_small(where.data/L"settings"/L"application-install.json",64*1024);
     if(!bytes)return portable("没有安装程序的安装记录");
@@ -507,10 +524,11 @@ Installation detect(const root::Location& where,const UninstallLocation& reader)
     if(j.is_discarded()||!j.is_object()||!j.contains("schema")||j["schema"]!="overglaze-application-install-v1"||!j.contains("product")||j["product"]!="overglaze"||
        !j.contains("root")||!j["root"].is_string()||!winpath::same_spelling(wide(j["root"].get<std::string>()),where.root))return portable("安装记录指向另一个目录");
     std::error_code ec;if(!fs::is_regular_file(where.root/L"app"/L"unins000.exe",ec))return portable("没有卸载程序");
-    auto location=reader?reader():registry_install_location();
-    if(!location||location->empty())return portable("Windows 卸载登记里没有这个程序");
-    while(location->size()>3&&(location->back()==L'\\'||location->back()==L'/'))location->pop_back();
-    if(!winpath::same_spelling(*location,where.root))return portable("Windows 卸载登记指向另一个目录");
+    const auto lookup=reader?reader():registry_install_location();
+    if(!lookup.location||lookup.location->empty())return portable(uninstall_reason(lookup));
+    auto location=*lookup.location;
+    while(location.size()>3&&(location.back()==L'\\'||location.back()==L'/'))location.pop_back();
+    if(!winpath::same_spelling(location,where.root))return portable("Windows 卸载登记指向另一个目录");
     out.by_setup=true;return out;
 }
 Installation detect_self(){

@@ -212,6 +212,13 @@ void installation(const fs::path& base){
     const auto registered=[&]{return std::optional<std::wstring>(root.wstring()+L"\\");};
     need(u::detect(at,registered).by_setup,"marker, uninstaller and uninstall entry: installed by Setup");
     need(!u::detect(at,[]{return std::optional<std::wstring>();}).by_setup,"no uninstall entry: portable");
+    // Why there is no location, with the Win32 error.
+    need(u::detect(at,[]{return u::UninstallLookup{std::nullopt,ERROR_FILE_NOT_FOUND,true};}).why=="Windows 卸载登记里没有这个程序（错误 2）","the entry is missing: error 2");
+    need(u::detect(at,[]{return u::UninstallLookup{std::nullopt,ERROR_FILE_NOT_FOUND,false};}).why=="Windows 卸载登记里没有安装位置（错误 2）","the entry has no InstallLocation: error 2");
+    need(u::detect(at,[]{return u::UninstallLookup{std::nullopt,ERROR_UNSUPPORTED_TYPE};}).why=="Windows 卸载登记里的安装位置类型不对（错误 1630）","InstallLocation is not a string");
+    need(u::detect(at,[]{return u::UninstallLookup{std::nullopt,ERROR_ACCESS_DENIED};}).why=="无法读取 Windows 卸载登记（错误 5）","any other error");
+    need(u::detect(at,[]{return u::UninstallLookup{std::wstring()};}).why=="Windows 卸载登记里的安装位置为空","an empty InstallLocation");
+    need(u::detect(at,[]{return std::optional<std::wstring>();}).why=="Windows 卸载登记里没有这个程序","a reader with nothing to say");
     need(!u::detect(at,[&]{return std::optional<std::wstring>((base/L"elsewhere").wstring());}).by_setup,"uninstall entry for another folder: portable");
     {auto build=at;build.source=lab::root::Source::build_layout;need(!u::detect(build,registered).by_setup,"a build directory: portable");}
     {auto over=at;over.source=lab::root::Source::override_file;need(!u::detect(over,registered).by_setup,"an override file: portable");}

@@ -185,8 +185,14 @@ unsigned cleanup_installed(const std::filesystem::path& data_root,const Version&
 
 // ---- this copy: installed by Setup, or portable
 struct Installation {bool by_setup=false;std::filesystem::path root,data;std::string why;};
-// InstallLocation of the Setup's uninstall entry; tests inject it.
-using UninstallLocation=std::function<std::optional<std::wstring>()>;
+// What the Setup's uninstall entry (HKCU) holds: its InstallLocation, or the
+// Win32 error that left none; key_missing when the entry itself is absent, not
+// only its InstallLocation value. Tests inject it; a plain optional converts.
+struct UninstallLookup {
+    std::optional<std::wstring> location;long error=0;bool key_missing=false;
+    UninstallLookup(std::optional<std::wstring> found={},long code=0,bool missing=false):location(std::move(found)),error(code),key_missing(missing){}
+};
+using UninstallLocation=std::function<UninstallLookup()>;
 // Installed by Setup only when all of these hold, else portable (why says
 // which did not): the published layout (<root>\app\*.exe, no override file),
 // data\settings\application-install.json naming this root, app\unins000.exe,
