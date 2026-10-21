@@ -20,8 +20,9 @@ inline constexpr const char* kViewerHeader="釉光 · Overglaze";
 inline constexpr const wchar_t* kViewerStartFailureTitle=L"釉光 · Overglaze 查看器无法启动";
 // Steam launch-option launcher (overglaze_launch.exe)
 inline constexpr const wchar_t* kLauncherTitle=L"釉光 · Overglaze 启动器";
+// {hotkey}: the configured panel hotkey (lab_panel_hotkey_file.hpp), filled in by the launcher.
 inline constexpr const wchar_t* kLauncherUsage=
-    L"在 Steam 的启动选项里填写：\n\n\"<程序目录>\\overglaze_launch.exe\" %command%\n\n它会照常启动游戏；进游戏后第一次按 Insert 时加载 釉光 · Overglaze 并打开面板。";
+    L"在 Steam 的启动选项里填写：\n\n\"<程序目录>\\overglaze_launch.exe\" %command%\n\n它会照常启动游戏；进游戏后第一次按面板快捷键 {hotkey} 时加载 釉光 · Overglaze 并打开面板（快捷键可在设置里修改）。";
 // Command line help (overglaze_games.exe): the program name as shown in the usage text.
 inline constexpr const wchar_t* kGamesCliName=L"overglaze_games";
 }

@@ -46,6 +46,12 @@ int main(){try{
     {const auto t=render("package-ready");
      need(std::count(t.begin(),t.end(),'?')==2&&t.find('{')==std::string::npos&&t.find('}')==std::string::npos,
           "missing parameters show as ?, independent of UI wording");}
+    // {hotkey}: the configured panel hotkey unless a parameter names one.
+    need(panel_hotkey_text()=="Insert"&&render("launch.insert").find("Insert")!=std::string::npos&&render("launch.insert").find('?')==std::string::npos,"{hotkey} is Insert by default");
+    set_panel_hotkey_text("Ctrl+F10");
+    need(render("launch.insert").find("Ctrl+F10")!=std::string::npos&&render("launch-late",json{{"subdir","overglaze"},{"option","x"}}).find("首次按 Ctrl+F10 接入")!=std::string::npos,"the configured hotkey in the launch texts");
+    need(render("launch.insert",json{{"hotkey","F9"}}).find("F9")!=std::string::npos,"a parameter wins");
+    set_panel_hotkey_text("");need(panel_hotkey_text()=="Insert","empty resets to Insert");
     for(const auto* o:{"pass","fail","unknown"})need(code_text(std::string("outcome.")+o)!=nullptr,"three outcomes named");
     need(outcome_name(Outcome::unknown)==std::string("unknown")&&check_json({"denuvo",Outcome::unknown,nullptr,"exe-unreadable"})["ok"].is_null(),"cannot-check is ok:null, never true");
     need(check_json({"denuvo",Outcome::pass,6,{}})["ok"]==true&&check_json({"denuvo",Outcome::fail,nullptr,"denuvo-sections"})["ok"]==false,"pass and fail are booleans");

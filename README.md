@@ -17,7 +17,7 @@ The in-game plugin files are unchanged from 0.2.0-preview.5: games already updat
 Overglaze inserts the NR model, often called "DLSS 5", into games that already use DLSS Ray Reconstruction or DLSS Super Resolution. When the game's upscaler has finished a frame, Overglaze runs NR on that frame and writes the result back. The game then continues with its own post-processing and UI.
 
 - **NR is off by default** every time a game starts.
-- **In-game panel, opened with Insert:** NR on/off, Tone, Structure, Style, Skin with AutoMask, input exposure, and a split-screen comparison.
+- **In-game panel, opened with a hotkey** (Insert by default; change it in Settings or in the panel, for example to Ctrl+F10): NR on/off, Tone, Structure, Style, Skin with AutoMask, input exposure, and a split-screen comparison.
 - **The panel reports what actually happened**, not only what you asked for: which parameters the model read back, and how many frames were skipped and why.
 - **Desktop program:** the Game Library checks a game, installs Overglaze's files into it, updates them and uninstalls them. Capture Browser opens compatible saved captures separately.
 
@@ -55,7 +55,7 @@ Overglaze verifies only the original model: it checks the file's SHA-256 against
 2. **Import your model.** Select your own model DLL in the initial configuration screen or Settings. It is verified and copied into the application's models folder. Manual placement also works.
 3. **Add a game.** On the Game Library page, choose *Add game* and paste the game's install folder or its EXE. A read-only check runs: store, NVIDIA modules and their signatures, anti-cheat and Denuvo markers, other injectors in the folder, and which DLSS path the game uses. Other injectors (ReShade, a frame-generation mod's `version.dll`, ...) are a risk notice, not a refusal; only another DLSS 5 / NR add-on, or a `dxgi.dll` that isn't Overglaze's where Overglaze would put its own, blocks the install.
 4. **Install.** Close the game. Select it in the library, choose *Prepare installation* to generate the adapter package, then choose *Install*. The confirmation names any anti-cheat, anti-tamper or other injector the check found and the risks of online and protected games; choosing *Install* there is your acknowledgement. Overglaze writes only its own files and records exactly what it wrote, so it can remove exactly those files later.
-5. **Play.** Start the game the usual way and turn on DLSS: Ray Reconstruction if the game offers it, otherwise Super Resolution or DLAA. Press **Insert** to open the panel and enable NR.
+5. **Play.** Start the game the usual way and turn on DLSS: Ray Reconstruction if the game offers it, otherwise Super Resolution or DLAA. Press the panel hotkey (**Insert** unless you changed it under *设置 → 面板快捷键*) to open the panel and enable NR.
 
 ### Games that need late loading
 
@@ -67,7 +67,7 @@ After such an install, the Game Library shows the exact Steam launch option to p
 "<Overglaze folder>\app\overglaze_launch.exe" %command%
 ```
 
-Set it in Steam under Library → right-click the game → Properties → General → Launch Options. The game starts as usual; the first time you press Insert in the game, Overglaze loads and opens the panel. For games not started from Steam, the Game Library shows the `overglaze_games watch` command instead.
+Set it in Steam under Library → right-click the game → Properties → General → Launch Options. The game starts as usual; the first time you press the panel hotkey (Insert by default) in the game, Overglaze loads and opens the panel. For games not started from Steam, the Game Library shows the `overglaze_games watch` command instead.
 
 ### Removing Overglaze
 

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <mutex>
 #include <unordered_map>
 
 namespace lab::games {
@@ -60,7 +61,7 @@ const std::vector<CodeText> kTable{
     {"store.unknown","未识别的商店"},
     {"load-mode.root_dxgi_minimal","根目录 dxgi.dll（研究版）"},
     {"load-mode.root_proxy_d3d12","随游戏启动加载"},
-    {"load-mode.root_proxy_on_insert","首次按 Insert 加载"},
+    {"load-mode.root_proxy_on_insert","首次按面板快捷键加载"},
     {"load-mode.late_d3d12","通过启动器接入（晚加载）"},
     {"load-mode.reframework_plugin","REFramework 插件"},
     {"operation.install","安装"},
@@ -135,16 +136,16 @@ const std::vector<CodeText> kTable{
     {"load-root-dxgi-taken","游戏目录里已有一个不是釉光的 dxgi.dll：这种加载方式要在那里放釉光自己的 dxgi.dll，安装会被拒绝（不覆盖它）。先移除它再安装。"},
     {"package-stale","适配包需刷新至已发布版本 {published}。"},
     {"package-ready","当前版本匹配适配包「{package}」（{route}）。"},
-    {"launch-root-layout","从商店启动，按 Insert 打开面板。NR 默认关闭，运行状态以面板为准。"},
-    {"launch-root-proxy","插件位于 {subdir}\\，根目录为转发器 dxgi.dll。从商店启动，按 Insert 打开面板；NR 默认关闭。"},
-    {"launch-root-proxy-on-insert","插件位于 {subdir}\\，根目录为转发器 dxgi.dll。首次按 Insert 后加载并打开面板，约需几秒；NR 默认关闭。"},
-    {"launch-late","插件位于 {subdir}\\。Steam 启动选项填 {option}，首次按 Insert 接入并打开面板；NR 默认关闭。"},
-    {"launch-late-watch","插件位于 {subdir}\\。先运行 {command} 并保持窗口打开，再启动游戏；接入后按 Insert 打开面板。NR 默认关闭。"},
+    {"launch-root-layout","从商店启动，按 {hotkey} 打开面板。NR 默认关闭，运行状态以面板为准。"},
+    {"launch-root-proxy","插件位于 {subdir}\\，根目录为转发器 dxgi.dll。从商店启动，按 {hotkey} 打开面板；NR 默认关闭。"},
+    {"launch-root-proxy-on-insert","插件位于 {subdir}\\，根目录为转发器 dxgi.dll。首次按 {hotkey} 后加载并打开面板，约需几秒；NR 默认关闭。"},
+    {"launch-late","插件位于 {subdir}\\。Steam 启动选项填 {option}，首次按 {hotkey} 接入并打开面板；NR 默认关闭。"},
+    {"launch-late-watch","插件位于 {subdir}\\。先运行 {command} 并保持窗口打开，再启动游戏；接入后按 {hotkey} 打开面板。NR 默认关闭。"},
     // ---- how a late-loading game is started (the page's launch card)
     {"launch.steam","在 Steam 中：库 → 右键游戏 → 属性 → 通用 → 启动选项，粘贴下面一行。"},
-    {"launch.insert","进入游戏后，首次按 Insert 加载插件并打开面板。"},
+    {"launch.insert","进入游戏后，首次按 {hotkey} 加载插件并打开面板。"},
     {"launch.remove","卸载 Overglaze 前先删除这条启动选项，否则游戏无法启动。"},
-    {"launch.watch","不经 Steam 启动：先运行下面的命令并保持窗口打开，再从商店启动游戏。游戏启动后自动接入，按 Insert 打开面板。"},
+    {"launch.watch","不经 Steam 启动：先运行下面的命令并保持窗口打开，再从商店启动游戏。游戏启动后自动接入，按 {hotkey} 打开面板。"},
     {"launch.uninstall","卸载后可删除 Steam 启动选项；卸载 Overglaze 前必须删除，否则游戏无法启动。"},
     {"installed","插件文件已校验，与适配包清单一致。"},
     {"legacy-install","已安装旧版 DLSS Lab，新版无法加载。退出游戏后可迁移；旧文件卸载前保存恢复副本。"},
@@ -297,13 +298,25 @@ std::vector<std::string> placeholders(std::string_view text){std::vector<std::st
     for(std::size_t i=0;(i=text.find('{',i))!=std::string_view::npos;){const auto end=text.find('}',i);if(end==std::string_view::npos)break;
         std::string name(text.substr(i+1,end-i-1));if(std::find(out.begin(),out.end(),name)==out.end())out.push_back(name);i=end+1;}
     return out;}
+namespace {
+std::mutex& hotkey_mutex(){static std::mutex m;return m;}
+std::string& hotkey_text(){static std::string text="Insert";return text;}
+}
+void set_panel_hotkey_text(std::string text){std::lock_guard lock(hotkey_mutex());hotkey_text()=text.empty()?std::string("Insert"):std::move(text);}
+std::string panel_hotkey_text(){std::lock_guard lock(hotkey_mutex());return hotkey_text();}
+namespace {
+// {hotkey} is the configured panel hotkey unless the caller names one.
+std::string placeholder(const std::string& name,const json& params){
+    if(params.is_object()&&params.contains(name))return value_text(name,params.at(name),params);
+    return name=="hotkey"?panel_hotkey_text():std::string("?");}
+}
 std::string render(std::string_view code,const json& params){
     const auto* raw=code_text(code);if(!raw)return "["+std::string(code)+"]";
     const std::string_view text(raw);std::string out;out.reserve(text.size()+32);
     for(std::size_t i=0;i<text.size();){
         if(text[i]=='{'){const auto end=text.find('}',i);
             if(end!=std::string_view::npos){const std::string name(text.substr(i+1,end-i-1));
-                out+=params.is_object()&&params.contains(name)?value_text(name,params.at(name),params):"?";i=end+1;continue;}}
+                out+=placeholder(name,params);i=end+1;continue;}}
         out+=text[i++];}
     return out;}
 std::string render(const Reason& r){return render(r.code,r.params);}

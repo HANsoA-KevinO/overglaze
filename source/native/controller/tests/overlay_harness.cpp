@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 HANsoA-KevinO
 // SPDX-License-Identifier: MIT
 #include "lab_overlay.hpp"
+#include "lab_panel_hotkey_file.hpp"
 #include <wrl/client.h>
 #include <d3d12sdklayers.h>
 #include <fstream>
@@ -11,9 +12,15 @@
 using Microsoft::WRL::ComPtr;
 namespace {
 void need(bool v,const char* why){if(!v)throw std::runtime_error(why);}
+void need(bool v,const std::string& why){need(v,why.c_str());}
 void hr(HRESULT v,const std::source_location where=std::source_location::current()){if(FAILED(v))throw std::runtime_error("GPU HRESULT "+std::to_string(unsigned(v))+" at overlay_harness.cpp:"+std::to_string(where.line()));}
-unsigned key_events=0;
-LRESULT CALLBACK window_proc(HWND h,UINT m,WPARAM w,LPARAM l){if(m==WM_KEYDOWN&&w=='K')++key_events;if(m==WM_CLOSE){DestroyWindow(h);return 0;}return DefWindowProcW(h,m,w,l);}
+unsigned key_events=0,insert_downs=0,control_ups=0,f10_messages=0;
+LRESULT CALLBACK window_proc(HWND h,UINT m,WPARAM w,LPARAM l){if(m==WM_KEYDOWN&&w=='K')++key_events;
+    // What the "game" saw of the hotkey tests' keys.
+    if(m==WM_KEYDOWN&&w==VK_INSERT)++insert_downs;if(m==WM_KEYUP&&w==VK_CONTROL)++control_ups;
+    // F10 is counted and kept from DefWindowProc, which could enter menu mode.
+    if((m>=WM_KEYFIRST&&m<=WM_KEYLAST)&&w==VK_F10){++f10_messages;return 0;}
+    if(m==WM_CLOSE){DestroyWindow(h);return 0;}return DefWindowProcW(h,m,w,l);}
 void barrier(ID3D12GraphicsCommandList* c,ID3D12Resource* r,D3D12_RESOURCE_STATES a,D3D12_RESOURCE_STATES b){D3D12_RESOURCE_BARRIER v{};v.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;v.Transition={r,0,a,b};c->ResourceBarrier(1,&v);}
 struct Gpu {
     ComPtr<ID3D12Device> device;ComPtr<ID3D12CommandQueue> queue;ComPtr<ID3D12Fence> fence;
@@ -40,6 +47,18 @@ struct Gpu {
         D3D12_RANGE none{0,0};readback->Unmap(0,&none);return data;}
 };
 void toggle(HWND w){SendMessageW(w,WM_KEYDOWN,VK_INSERT,0);SendMessageW(w,WM_KEYUP,VK_INSERT,1LL<<31);}
+// One key as Windows delivers it: the thread's key state holds the modifiers
+// while the messages are handled (GetKeyState reads exactly that), then
+// everything is up again. F10 and Alt combinations arrive as WM_SYSKEY*.
+void press(HWND w,UINT vk,bool ctrl=false,bool shift=false){
+    BYTE keys[256]{};if(ctrl)keys[VK_CONTROL]=keys[VK_LCONTROL]=0x80;if(shift)keys[VK_SHIFT]=keys[VK_LSHIFT]=0x80;
+    need(SetKeyboardState(keys)!=FALSE,"Set the thread's key state");
+    const UINT down=vk==VK_F10?WM_SYSKEYDOWN:WM_KEYDOWN,up=vk==VK_F10?WM_SYSKEYUP:WM_KEYUP;
+    const LPARAM scan=LPARAM(MapVirtualKeyW(vk,MAPVK_VK_TO_VSC))<<16;
+    SendMessageW(w,down,vk,1|scan);SendMessageW(w,up,vk,1|scan|(1LL<<30)|(1LL<<31));
+    BYTE released[256]{};SetKeyboardState(released);}
+std::filesystem::path temp_base(){std::wstring v(32768,L'\0');const auto n=GetEnvironmentVariableW(L"OVERGLAZE_TEST_TEMP",v.data(),DWORD(v.size()));
+    return n&&n<v.size()?std::filesystem::path(v.substr(0,n)):std::filesystem::temp_directory_path();}
 }
 int wmain(int argc,wchar_t** argv){
     const bool interactive=argc==1||(argc>1&&std::wstring(argv[1])==L"--interactive");HWND window{};std::unique_ptr<Gpu> diagnostic_gpu;lab::json result={{"purpose","functional-verification"},{"origin","synthetic-overlay-no-NR"},{"game_launched",false},{"nr_executed",false},{"raw_files",0},{"passed",false}};
@@ -49,7 +68,12 @@ int wmain(int argc,wchar_t** argv){
         window=CreateWindowW(wc.lpszClassName,L"Overglaze — 独立覆盖层测试（不运行 NR）",WS_OVERLAPPEDWINDOW,120,120,1400,940,nullptr,nullptr,wc.hInstance,nullptr);need(window!=nullptr,"Window creation");
         diagnostic_gpu=std::make_unique<Gpu>();auto& gpu=*diagnostic_gpu;ComPtr<IDXGIFactory4> factory;hr(CreateDXGIFactory2(0,IID_PPV_ARGS(&factory)));DXGI_SWAP_CHAIN_DESC1 d{};d.Width=1280;d.Height=800;d.Format=DXGI_FORMAT_R8G8B8A8_UNORM;d.BufferCount=3;d.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;d.SampleDesc.Count=1;d.SwapEffect=DXGI_SWAP_EFFECT_FLIP_DISCARD;
         ComPtr<IDXGISwapChain1> first;hr(factory->CreateSwapChainForHwnd(gpu.queue.Get(),window,&d,nullptr,nullptr,&first));ComPtr<IDXGISwapChain3> chain;hr(first.As(&chain));first.Reset();
-        const auto creation_queue=gpu.queue;lab::Controller controller;controller.enable_nr_preparation(true);controller.enable_embedded_control();lab::GameOverlay overlay(controller);overlay.attach(chain.Get(),gpu.queue.Get());
+        // A data root of its own for the panel hotkey setting (no file yet: Insert);
+        // the panel's other preferences stay read-only (no preferences path).
+        const auto hotkey_root=temp_base()/("overglaze-overlay-hotkey-"+std::to_string(GetCurrentProcessId()));
+        {std::error_code ignored;std::filesystem::remove_all(hotkey_root,ignored);std::filesystem::create_directories(hotkey_root);}
+        const auto creation_queue=gpu.queue;lab::Controller controller;controller.enable_nr_preparation(true);controller.enable_embedded_control();lab::GameOverlay overlay(controller,{},hotkey_root);overlay.attach(chain.Get(),gpu.queue.Get());
+        need(overlay.snapshot().at("hotkey")=="Insert"&&overlay.snapshot().at("hotkey_source")=="default","No setting file: Insert");
         result["profiles"]=lab::json::array();
         const DXGI_FORMAT formats[]{DXGI_FORMAT_R8G8B8A8_UNORM,DXGI_FORMAT_R16G16B16A16_FLOAT,DXGI_FORMAT_R10G10B10A2_UNORM};
         const DXGI_COLOR_SPACE_TYPE spaces[]{DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020};
@@ -172,6 +196,68 @@ int wmain(int argc,wchar_t** argv){
             toggle(window);const auto hidden=overlay.snapshot().at("draws");overlay.present(chain.Get());need(overlay.snapshot().at("draws")==hidden,"Closing stops draws immediately");
             SendMessageW(window,WM_KEYDOWN,'K',0);need(key_events==keys+1,"Closing releases input");hr(chain->Present(0,0));gpu.wait();
         }
+        // ---- The panel hotkey: rebinding in the panel (面板设置 → 修改), a change
+        // made by the desktop program while the game runs, a malformed file, and
+        // 恢复默认. The game must get the keys that are not the hotkey.
+        {RECT client{};need(GetClientRect(window,&client)!=FALSE,"Hotkey client rect");
+         const auto frame=[&]{gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();};
+         const auto snapshot=[&]{frame();return overlay.snapshot();};
+         const auto visible=[&]{return overlay.snapshot().at("visible").get<bool>();};
+         const auto at=[&](const lab::json& rect){return POINT{LONG(std::lround((rect[0].get<float>()+rect[2].get<float>()*.5f)*client.right/1280.f)),LONG(std::lround((rect[1].get<float>()+rect[3].get<float>()*.5f)*client.bottom/800.f))};};
+         // Scroll the panel, as a user would, until the control is fully in view; then click it.
+         const auto click=[&](const char* control){
+             for(unsigned step=0;;++step){
+                 frame();frame();const auto controls=overlay.snapshot()["controls"];need(controls.contains(control),std::string("Hotkey control laid out: ")+control);
+                 const auto rect=controls[control];const float top=rect[1].get<float>(),bottom=top+rect[3].get<float>();
+                 if(top>=0.f&&bottom<=792.f){const auto hit=at(rect);
+                     SendMessageW(window,WM_MOUSEMOVE,0,MAKELPARAM(hit.x,hit.y));frame();SendMessageW(window,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(hit.x,hit.y));frame();
+                     SendMessageW(window,WM_LBUTTONUP,0,MAKELPARAM(hit.x,hit.y));frame();return;}
+                 need(step<40,std::string("Panel never scrolled into view: ")+control);
+                 const LONG wx=LONG(200*client.right/1280),wy=LONG(400*client.bottom/800);POINT screen{wx,wy};ClientToScreen(window,&screen);
+                 SendMessageW(window,WM_MOUSEMOVE,0,MAKELPARAM(wx,wy));SendMessageW(window,WM_MOUSEWHEEL,MAKEWPARAM(0,WORD(short(top<0.f?WHEEL_DELTA:-WHEEL_DELTA))),MAKELPARAM(screen.x,screen.y));}};
+         const auto file=lab::hotkey::settings_file(hotkey_root);
+         const auto follows=[&](const char* name,const char* source){for(unsigned i=0;i<150;++i){const auto s=snapshot();if(s.at("hotkey")==name&&s.at("hotkey_source")==source)return true;Sleep(20);}return false;};
+         need(!visible(),"Panel closed before the hotkey tests");
+         toggle(window);need(visible(),"Insert opens the panel");
+         click("diagnostics");click("hotkey_change");
+         need(snapshot().at("hotkey_capturing")==true,"修改 waits for a key");
+         const auto games_insert=insert_downs;
+         press(window,'A');auto s=snapshot();
+         need(s.at("hotkey_capturing")==true&&s.at("hotkey_refusal")==lab::hotkey::refusal_text(lab::hotkey::Refusal::plain_character)&&s.at("hotkey")=="Insert","A letter alone is refused and the panel keeps waiting");
+         press(window,VK_INSERT);s=snapshot();
+         need(s.at("hotkey_capturing")==false&&s.at("hotkey")=="Insert"&&s.at("visible")==true&&insert_downs==games_insert,"While waiting, Insert is the capture's: chosen again, no toggle, nothing to the game");
+         click("hotkey_change");need(snapshot().at("hotkey_capturing")==true,"修改 again");
+         press(window,VK_F10,true);s=snapshot();
+         need(s.at("hotkey_capturing")==false&&s.at("hotkey")=="Ctrl+F10"&&s.at("hotkey_source")=="file"&&s.at("hotkey_refusal")==""&&s.at("visible")==true,"Ctrl+F10 is taken; the panel stays open");
+         {bool written=false;for(unsigned i=0;i<150&&!written;++i){written=lab::hotkey::read(hotkey_root).binding==lab::hotkey::Binding{VK_F10,true,false,false};if(!written)Sleep(20);}
+          need(written,"The panel writes the setting file");}
+         SendMessageW(window,WM_KEYDOWN,VK_ESCAPE,0);SendMessageW(window,WM_KEYUP,VK_ESCAPE,1LL<<31);need(!visible(),"Esc closes the panel");
+         press(window,VK_INSERT);frame();need(!visible()&&insert_downs==games_insert+1,"After rebinding, Insert opens nothing and reaches the game");
+         const auto ups=control_ups,f10=f10_messages;
+         press(window,VK_F10,true);frame();
+         need(visible()&&control_ups==ups+1&&f10_messages==f10,"Ctrl+F10 opens the panel: the game gets Ctrl's release and nothing of F10");
+         press(window,VK_F10);frame();need(visible()&&f10_messages==f10,"F10 without Ctrl does not close it (the open panel owns the keyboard)");
+         press(window,VK_F10,true);frame();need(!visible()&&f10_messages==f10,"Ctrl+F10 closes it");
+         press(window,VK_F10);frame();need(!visible()&&f10_messages==f10+2,"A plain F10 is the game's, down and up");
+         // The desktop program changes the setting while the game runs.
+         lab::hotkey::write(hotkey_root,{VK_F9,false,true,false});
+         need(follows("Shift+F9","file"),"A changed setting file is picked up");
+         press(window,VK_F10,true);frame();need(!visible(),"The old binding no longer opens the panel");
+         press(window,VK_F9,false,true);frame();need(visible(),"Shift+F9 opens it");
+         press(window,VK_F9,false,true);frame();need(!visible(),"Shift+F9 closes it");
+         {std::ofstream broken(file,std::ios::binary|std::ios::trunc);broken<<"{broken";}
+         need(follows("Insert","malformed"),"A malformed setting file means Insert");
+         need(overlay.snapshot().at("hotkey_error").get<std::string>().size()>0,"and the panel says why");
+         lab::hotkey::write(hotkey_root,{VK_F10,true,false,false});need(follows("Ctrl+F10","file"),"Valid again");
+         press(window,VK_F10,true);frame();need(visible(),"Ctrl+F10 opens the panel");
+         click("hotkey_reset");
+         need(snapshot().at("hotkey")=="Insert","恢复默认 sets Insert");
+         {bool written=false;for(unsigned i=0;i<150&&!written;++i){written=lab::hotkey::read(hotkey_root).binding==lab::hotkey::kDefault&&lab::hotkey::read(hotkey_root).source==lab::hotkey::Source::file;if(!written)Sleep(20);}
+          need(written,"and writes it");}
+         click("diagnostics"); // fold 高级与诊断 again for the steps below
+         toggle(window);need(!visible(),"Insert closes the panel again");
+         result["hotkey_verified"]={{"captured","Ctrl+F10"},{"refused","A"},{"external_change","Shift+F9"},{"malformed","Insert"},{"reset","Insert"},
+             {"game_got_control_release",true},{"game_got_plain_f10",true}};}
 #ifdef LAB_OVERLAY_RESEARCH
         // Synthetic controller publication tests cancellation UI routing, not
         // GPU readback completion. Actual worker cancellation has its own tests.
@@ -245,6 +331,7 @@ int wmain(int argc,wchar_t** argv){
         for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T size=0;info->GetMessage(i,nullptr,&size);std::vector<std::uint8_t> bytes(size);auto* m=reinterpret_cast<D3D12_MESSAGE*>(bytes.data());info->GetMessage(i,m,&size);
             if(m->Severity<=D3D12_MESSAGE_SEVERITY_ERROR)errors.push_back(std::string(m->pDescription,m->DescriptionByteLength));}
         result["debug_errors"]=errors;need(errors.empty(),"D3D12 debug errors");result["modules"]=lab::current_modules();result["passed"]=true;
+        {std::error_code ignored;std::filesystem::remove_all(hotkey_root,ignored);}
         if(window&&IsWindow(window))DestroyWindow(window);
     }catch(const std::exception& e){result["error"]=e.what();if(window&&IsWindow(window))DestroyWindow(window);
         if(diagnostic_gpu){result["device_removed_reason"]=unsigned(diagnostic_gpu->device->GetDeviceRemovedReason());ComPtr<ID3D12InfoQueue> info;

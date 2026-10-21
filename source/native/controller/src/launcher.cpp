@@ -7,7 +7,9 @@
 // Steam launch options:  "<root>\app\overglaze_launch.exe" %command%
 //
 // It starts the game with exactly the command Steam gave, then waits OUTSIDE the
-// game for the player's first Insert press while the game window is in front,
+// game for the player's first press of the panel hotkey (Insert unless changed
+// in 设置 → 面板快捷键; data\settings\panel-hotkey-v1.json, re-read while it
+// waits) while the game window is in front,
 // and only then injects the late-loading controller from the game's overglaze\
 // payload -- the same injection, the same gates, the same moment as a manual
 // `overglaze_games attach` once in play. The panel opens by itself.
@@ -21,6 +23,7 @@
 #include "lab_launch_command.hpp"
 #include "lab_brand.hpp"
 #include "lab_root_locator.hpp"
+#include "lab_panel_hotkey_file.hpp"
 #include <windows.h>
 #include <chrono>
 #include <fstream>
@@ -87,12 +90,18 @@ DWORD game_process(const Target& t,HANDLE started){
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int){
     // <root>\app\overglaze_launch.exe, or overglaze-root.json beside it. A root that
     // cannot be resolved only means no log and no attach: the game still starts.
-    fs::path root;std::string root_refused;
-    try{root=lab::root::resolve_self().root;}catch(const std::exception& e){root_refused=e.what();}
+    fs::path root,data;std::string root_refused;
+    try{const auto where=lab::root::resolve_self();root=where.root;data=where.data;}catch(const std::exception& e){root_refused=e.what();}
     Log log(root);
+    // The panel hotkey, shared with the desktop program and every game. No
+    // root: the default, Insert.
+    lab::hotkey::Settings hotkeys(data);
     const auto command=lab::launch::rest_of_command_line(GetCommandLineW());
     if(command.empty()){
-        MessageBoxW(nullptr,lab::brand::kLauncherUsage,lab::brand::kLauncherTitle,MB_OK|MB_ICONINFORMATION);
+        std::wstring usage=lab::brand::kLauncherUsage;
+        const auto key=lab::wide(hotkeys.current_name());
+        for(auto at=usage.find(L"{hotkey}");at!=std::wstring::npos;at=usage.find(L"{hotkey}",at+key.size()))usage.replace(at,8,key);
+        MessageBoxW(nullptr,usage.c_str(),lab::brand::kLauncherTitle,MB_OK|MB_ICONINFORMATION);
         return 2;
     }
     const fs::path exe=lab::launch::program_of(command);
@@ -108,11 +117,12 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int){
         return 1;
     }
     CloseHandle(pi.hThread);
-    log.line("started pid="+std::to_string(pi.dwProcessId)+(target?" target="+target->package:" passthrough: "+why));
+    log.line("started pid="+std::to_string(pi.dwProcessId)+(target?" target="+target->package+" hotkey="+hotkeys.current_name()+" ("+lab::hotkey::source_name(hotkeys.source())+")":" passthrough: "+why));
     if(!target){WaitForSingleObject(pi.hProcess,INFINITE);DWORD code=0;GetExitCodeProcess(pi.hProcess,&code);CloseHandle(pi.hProcess);log.line("game exited, passthrough");return static_cast<int>(code);}
 
-    // Wait for the player's Insert with the game in front, then inject once.
-    bool attached=false,was_down=true;HANDLE open_panel=nullptr;unsigned misses=0;
+    // Wait for the player's hotkey press with the game in front, then inject once.
+    bool attached=false;lab::hotkey::PressWatch watch;HANDLE open_panel=nullptr;unsigned misses=0;
+    std::uint64_t hotkey_revision=hotkeys.revision();
     for(;;){
         const DWORD pid=game_process(*target,pi.hProcess);
         if(!pid){
@@ -123,11 +133,11 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int){
         misses=0;
         if(attached){Sleep(1000);continue;}
         Sleep(50);
-        const bool down=(GetAsyncKeyState(VK_INSERT)&0x8000)!=0;
-        const bool pressed=down&&!was_down;was_down=down;
-        if(!pressed)continue;
+        if(const auto r=hotkeys.revision();r!=hotkey_revision){hotkey_revision=r;log.line("hotkey now "+hotkeys.current_name());}
+        const auto key=hotkeys.current();
+        if(!watch.poll(key,GetAsyncKeyState))continue;
         DWORD owner=0;const HWND window=GetForegroundWindow();
-        if(!window||!GetWindowThreadProcessId(window,&owner)||!same_file(image_of(owner),target->exe)){log.line("Insert pressed, game not in front; ignored");continue;}
+        if(!window||!GetWindowThreadProcessId(window,&owner)||!same_file(image_of(owner),target->exe)){log.line(lab::hotkey::name(key)+" pressed, game not in front; ignored");continue;}
         // Ask the host to open the panel: this press was for it.
         if(!open_panel)open_panel=CreateEventW(nullptr,TRUE,TRUE,lab::launch::open_panel_event_name(owner).c_str());
         try{
@@ -135,7 +145,7 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int){
             attached=true;
             log.line("attached pid="+std::to_string(r.pid)+" loader="+r.loader_sha256+" loaded="+(r.loaded?"true":"false")+" note="+r.note);
         }catch(const std::exception& e){
-            // Most refusals mean "not yet" (renderer not created); the next Insert retries.
+            // Most refusals mean "not yet" (renderer not created); the next press retries.
             log.line(std::string("attach refused: ")+e.what());
         }
     }

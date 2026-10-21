@@ -43,8 +43,14 @@ const char* code_text(std::string_view code) noexcept;
 // looked up as "<name with _ as ->.<value>" (route, store, parts, load-mode,
 // operation, verdict, check), then used verbatim; "stage" is looked up under its "operation";
 // numbers print in decimal; arrays are joined with "、". An unknown code renders
-// as "[code]" so a missing entry is visible, never silent.
+// as "[code]" so a missing entry is visible, never silent. {hotkey} without a
+// parameter is the panel hotkey set below.
 std::string render(std::string_view code,const json& params=json::object());
+// The in-game panel's hotkey as the texts name it ("Ctrl+F10"): the configured
+// binding, set by the program that shows the texts (the desktop program, the
+// launcher, overglaze_games). "Insert" until set; empty resets to it.
+void set_panel_hotkey_text(std::string);
+std::string panel_hotkey_text();
 std::string render(const Reason&);
 std::string render_all(const std::vector<Reason>&); // joined with a space
 // The placeholders a table entry names, in order of first use.

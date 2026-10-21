@@ -21,4 +21,7 @@ void activate(HWND window,bool on) noexcept;
 bool active() noexcept;
 BOOL real_cursor_position(POINT* out) noexcept; // original GetCursorPos for the panel itself
 BOOL real_clip_rect(RECT* out) noexcept;        // original GetClipCursor (tests, diagnostics)
+// Original GetKeyState: the panel's own hotkey check needs the real Ctrl /
+// Shift / Alt state while the game is told every key is up.
+SHORT real_key_state(int vk) noexcept;
 }

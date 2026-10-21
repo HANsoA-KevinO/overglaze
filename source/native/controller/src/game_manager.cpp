@@ -1127,7 +1127,7 @@ Policy Manager::refresh_package(const std::string& name,const std::string& strat
     // moved by this tool.
     Loader loader=p->loader;
     if(!strategy.empty()){
-        need(strategy=="root_proxy_d3d12"||strategy=="root_proxy_on_insert"||strategy=="late_d3d12","只能在根代理、按 Insert 加载的根代理与晚加载之间切换");
+        need(strategy=="root_proxy_d3d12"||strategy=="root_proxy_on_insert"||strategy=="late_d3d12","只能在根代理、按面板快捷键加载的根代理与晚加载之间切换");
         need(!p->loader.root(),"研究轨的根布局适配包不由本工具改写策略");
         loader.strategy=strategy;loader.basename="overglaze_controller.dll";loader.subdir="overglaze";
     }

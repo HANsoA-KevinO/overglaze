@@ -27,14 +27,20 @@
 // Two modes, chosen by the installation beside the host (root_proxy_on_insert,
 // made for RE9). Normally the host is loaded at once and handed the game's
 // first factory. On Insert, nothing Lab is loaded while the game starts: the
-// worker only watches for the player's first Insert press in this process's own
-// foreground window, and then loads the host, which comes up as a late attach.
+// worker only watches for the player's first press of the panel hotkey (Insert
+// unless changed; <data root>\settings\panel-hotkey-v1.json, read with the
+// shared header-only rules and looked at again every two seconds) in this
+// process's own foreground window, and then loads the host, which comes up as
+// a late attach.
 // RE9 died with the host present from start-up (after a few hundred frames)
 // and has lived through every attach made once in play.
 #include <windows.h>
 #include <array>
 #include <atomic>
 #include <cstdint>
+// Header-only, allocation-free and file-free: the same parser and press rule
+// as the host, the launcher and the desktop program, without linking any of them.
+#include "lab_panel_hotkey.hpp"
 
 namespace {
 // 0x887A0022. Spelled out rather than included so this translation unit needs no
@@ -67,6 +73,12 @@ std::atomic<FactoryCreated> host_factory{nullptr};
 using StartLate=void(__cdecl*)(HMODULE,unsigned);
 // 0 undecided, 1 host at the first factory, 2 host on the first Insert.
 std::atomic<unsigned> mode{0},insert_presses{0},insert_stage{0};
+// The hotkey the on-Insert worker watches (lab::hotkey::pack) and where it came
+// from: 0 not read, 1 no file (default), 2 the file, 3 a malformed file
+// (default), 4 no data root in the installation (default), 5 unreadable now
+// (the previous binding kept).
+std::atomic<std::uint32_t> watched_key{lab::hotkey::pack(lab::hotkey::kDefault)};
+std::atomic<unsigned> hotkey_source{0};
 // Set once the worker has settled the host for now -- loaded, failed, or
 // deferred to Insert -- so a factory never waits for a host that is not coming.
 // Without it a failed host load would make every factory wait the full bound
@@ -150,42 +162,84 @@ bool payload_path(wchar_t* path,unsigned capacity,const wchar_t* name) noexcept 
     lstrcatW(path,kPayloadSubdirectory);lstrcatW(path,L"\\");lstrcatW(path,name);
     return true;
 }
+// The installation beside the host, as text. Worker thread only (static buffer).
+char installation[64*1024];DWORD installation_size=0;
+bool read_installation() noexcept {
+    wchar_t path[MAX_PATH*2];installation_size=0;
+    if(!payload_path(path,static_cast<unsigned>(std::size(path)),kInstallationName))return false;
+    const HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE)return false;
+    DWORD got=0;const BOOL read=ReadFile(file,installation,sizeof(installation),&got,nullptr);CloseHandle(file);
+    if(!read)return false;
+    installation_size=got;return true;
+}
 // Does the installation beside the host ask to be loaded on Insert? A plain
 // search of our own installer's JSON for the strategy value; the host
 // re-validates the whole installation once it is loaded. Anything unreadable
 // keeps the original behaviour (the fixture has no installation at all).
 bool installed_on_insert() noexcept {
-    wchar_t path[MAX_PATH*2];
-    if(!payload_path(path,static_cast<unsigned>(std::size(path)),kInstallationName))return false;
-    const HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
-    if(file==INVALID_HANDLE_VALUE)return false;
-    static char text[64*1024];DWORD got=0;
-    const BOOL read=ReadFile(file,text,sizeof(text),&got,nullptr);CloseHandle(file);
-    if(!read)return false;
+    if(!read_installation())return false;
     constexpr char needle[]="\"root_proxy_on_insert\"";constexpr DWORD length=sizeof(needle)-1;
-    for(DWORD i=0;i+length<=got;++i){DWORD k=0;while(k<length&&text[i+k]==needle[k])++k;if(k==length)return true;}
+    for(DWORD i=0;i+length<=installation_size;++i){DWORD k=0;while(k<length&&installation[i+k]==needle[k])++k;if(k==length)return true;}
     return false;
 }
-// Blocks the worker until Insert goes down while this process owns the
-// foreground window. user32 is only looked up, never loaded or imported: any
-// windowed game has it, and waiting for it keeps it out of the import table.
+// <output_root>\settings\panel-hotkey-v1.json, from the installation's own
+// "output_root" (the data root the host itself uses).
+bool hotkey_path(wchar_t* path,unsigned capacity) noexcept {
+    static char root[MAX_PATH*4];
+    if(!installation_size||!lab::hotkey::string_field(installation,installation_size,"output_root",root,sizeof(root)))return false;
+    const int n=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,root,-1,path,static_cast<int>(capacity));
+    if(n<=1)return false;
+    if(static_cast<unsigned>(n)+10+lstrlenW(lab::hotkey::kFileName)>=capacity)return false;
+    lstrcatW(path,L"\\settings\\");lstrcatW(path,lab::hotkey::kFileName);
+    return true;
+}
+// Missing or malformed: the default. Unreadable right now (another program is
+// replacing it): the binding watched so far.
+void refresh_hotkey(lab::hotkey::Binding& key) noexcept {
+    static wchar_t path[MAX_PATH*2];static bool located=false,tried=false;
+    if(!tried){tried=true;located=hotkey_path(path,static_cast<unsigned>(std::size(path)));}
+    if(!located){key=lab::hotkey::kDefault;hotkey_source=4;watched_key=lab::hotkey::pack(key);return;}
+    const HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+    if(file==INVALID_HANDLE_VALUE){
+        const auto e=GetLastError();
+        if(e==ERROR_FILE_NOT_FOUND||e==ERROR_PATH_NOT_FOUND){key=lab::hotkey::kDefault;hotkey_source=1;}else hotkey_source=5;
+        watched_key=lab::hotkey::pack(key);return;
+    }
+    static char text[lab::hotkey::kMaxFileBytes];DWORD got=0;BY_HANDLE_FILE_INFORMATION info{};
+    // 2 read, 3 not a plain small file (malformed), 5 unreadable now.
+    unsigned outcome=5;
+    if(GetFileInformationByHandle(file,&info)){
+        if((info.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY))||info.nFileSizeHigh||info.nFileSizeLow>lab::hotkey::kMaxFileBytes)outcome=3;
+        else if(ReadFile(file,text,static_cast<DWORD>(sizeof(text)),&got,nullptr))outcome=2;
+    }
+    CloseHandle(file);
+    lab::hotkey::Binding parsed;
+    if(outcome==2&&lab::hotkey::parse_document(text,got,parsed)){key=parsed;hotkey_source=2;}
+    else if(outcome!=5){key=lab::hotkey::kDefault;hotkey_source=3;}
+    else hotkey_source=5;
+    watched_key=lab::hotkey::pack(key);
+}
+// Blocks the worker until the panel hotkey goes down while this process owns
+// the foreground window. user32 is only looked up, never loaded or imported:
+// any windowed game has it, and waiting for it keeps it out of the import table.
 bool await_insert() noexcept {
     HMODULE user=nullptr;
     while(!(user=GetModuleHandleW(L"user32.dll")))Sleep(250);
-    const auto key=reinterpret_cast<SHORT(WINAPI*)(int)>(GetProcAddress(user,"GetAsyncKeyState"));
+    const auto key_state=reinterpret_cast<SHORT(WINAPI*)(int)>(GetProcAddress(user,"GetAsyncKeyState"));
     const auto foreground=reinterpret_cast<HWND(WINAPI*)()>(GetProcAddress(user,"GetForegroundWindow"));
     const auto owner=reinterpret_cast<DWORD(WINAPI*)(HWND,LPDWORD)>(GetProcAddress(user,"GetWindowThreadProcessId"));
-    if(!key||!foreground||!owner){insert_stage=1;return false;}
+    if(!key_state||!foreground||!owner){insert_stage=1;return false;}
+    lab::hotkey::Binding key=lab::hotkey::kDefault;refresh_hotkey(key);
     insert_stage=2;
-    bool was_down=true; // a key already held when watching starts is not a press
-    for(;;){
+    lab::hotkey::PressWatch watch; // a binding already held when watching starts is not a press
+    for(unsigned tick=1;;++tick){
         Sleep(50);
-        const bool down=(key(VK_INSERT)&0x8000)!=0;
-        if(down&&!was_down){
+        if(tick%40==0)refresh_hotkey(key); // the desktop program may change it while the game runs
+        if(watch.poll(key,key_state)){
             DWORD pid=0;const HWND window=foreground();
             if(window&&owner(window,&pid)&&pid==GetCurrentProcessId()){++insert_presses;insert_stage=3;return true;}
         }
-        was_down=down;
     }
 }
 
@@ -327,6 +381,7 @@ struct LabProxyStatus {
     unsigned long last_error,host_last_error;
     unsigned resolved,host_loaded,compat_string_pending,compat_string_replayed;
     unsigned mode,insert_presses,insert_stage;
+    unsigned watched_key,hotkey_source; // the on-Insert worker's binding (lab::hotkey::pack) and its source
 };
 extern "C" void __cdecl LabDXGIProxyStatus(LabProxyStatus* out){
     if(!out||out->size!=sizeof(LabProxyStatus))return;
@@ -336,6 +391,7 @@ extern "C" void __cdecl LabDXGIProxyStatus(LabProxyStatus* out){
     out->resolved=resolved.load()?1u:0u;out->host_loaded=host_loaded.load()?1u:0u;
     out->compat_string_pending=compat_pending.load()?1u:0u;out->compat_string_replayed=compat_replayed.load()?1u:0u;
     out->mode=mode.load();out->insert_presses=insert_presses.load();out->insert_stage=insert_stage.load();
+    out->watched_key=watched_key.load();out->hotkey_source=hotkey_source.load();
 }
 
 // Creating a thread is the one thing allowed here: the loader lets a thread be

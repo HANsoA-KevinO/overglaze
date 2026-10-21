@@ -44,13 +44,13 @@ The installer puts a thin `dxgi.dll` in the game folder.
 - The host is loaded from Overglaze's subfolder on a worker thread started from `DllMain`.
 - If the host can't load, the proxy keeps forwarding and the game runs without Overglaze.
 
-There is also a variant: the proxy only forwards until the first time Insert is pressed while the game's window is in front, and only then loads the host.
+There is also a variant: the proxy only forwards until the first time the panel hotkey (Insert by default) is pressed while the game's window is in front, and only then loads the host.
 
 ### Late load
 
 Some games refuse any non-system `dxgi.dll` in their folder. For these, nothing goes into the game folder's root, and Overglaze is loaded into the running game:
 
-- either by `overglaze_launch.exe` (set as the Steam launch option), which starts the game unchanged and waits for the first Insert press in the game;
+- either by `overglaze_launch.exe` (set as the Steam launch option), which starts the game unchanged and waits for the first press of the panel hotkey in the game;
 - or by `overglaze_games attach --pid <PID>`.
 
 The injector is deliberately plain: `CreateRemoteThread` calling `LoadLibraryW` with an absolute path, into a process owned by the same user in the same session. There is no manual mapping and no hiding, and the module shows up in the module list. Every check runs before anything is written into the game process, and the loaded DLL checks its installation again on its own.

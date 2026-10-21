@@ -43,6 +43,7 @@
 #include "lab_controller_live_sink.hpp"
 #include "lab_indirect_observer.hpp"
 #include "lab_latency_markers.hpp"
+#include "lab_panel_hotkey.hpp"
 #include <sl_core_api.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -71,11 +72,13 @@ struct ProxyStatus {
     unsigned long last_error,host_last_error;
     unsigned resolved,host_loaded,compat_string_pending,compat_string_replayed;
     unsigned mode,insert_presses,insert_stage; // 1 load at the first factory, 2 load on the first Insert
+    unsigned watched_key,hotkey_source;        // the on-Insert worker's panel hotkey (lab::hotkey::pack) and where it came from
 };
 // The proxy hands us its own module when it calls in. Looking it up by name
 // would be wrong: once the system dxgi.dll is loaded, two modules answer to
 // "dxgi.dll" and the name lookup can return the system one.
 std::atomic<HMODULE> root_proxy_module{nullptr};
+std::string hotkey_text(std::uint32_t packed){char text[hotkey::kMaxNameBytes+1]{};return hotkey::format(hotkey::unpack(packed),text,sizeof text)?text:"?";}
 json proxy_status()noexcept{
     const auto dxgi=root_proxy_module.load(std::memory_order_acquire);
     if(!dxgi)return json(nullptr); // late attach: there is no proxy in this process
@@ -87,6 +90,8 @@ json proxy_status()noexcept{
         {"host_loaded",s.host_loaded!=0},{"host_load_stage",s.host_stage},{"host_load_error",s.host_last_error},
         {"compat_string_pending",s.compat_string_pending!=0},{"compat_string_replayed",s.compat_string_replayed!=0},
         {"mode",s.mode==2?"on-insert":s.mode==1?"at-first-factory":"undecided"},{"insert_presses",s.insert_presses},{"insert_stage",s.insert_stage},
+        {"hotkey",s.mode==2?json(hotkey_text(s.watched_key)):json(nullptr)},
+        {"hotkey_source",s.hotkey_source==1?"default-no-file":s.hotkey_source==2?"file":s.hotkey_source==3?"default-malformed":s.hotkey_source==4?"default-no-data-root":s.hotkey_source==5?"unreadable-kept":"not-read"},
         {"scope","the game-directory proxy's own counters: whether it resolved the system dxgi.dll and whether it could load this host from the payload subdirectory"}};
 }
 // Only an address inside this very executable's committed image may be hooked.

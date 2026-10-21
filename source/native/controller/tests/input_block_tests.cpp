@@ -29,6 +29,11 @@ int main(){try{
     need(GetClipCursor(&r)!=FALSE&&same(r,lock),"game still reads the clip it had at activation");
     need(ClipCursor(&lock2)!=FALSE,"blocked ClipCursor reports success");
     need(input_block::real_clip_rect(&r)!=FALSE&&!same(r,lock2),"blocked ClipCursor does not clip for real");
+    // The game is told every key is up; the panel's hotkey check reads the real state.
+    {BYTE keys[256]{};keys[VK_CONTROL]=0x80;need(SetKeyboardState(keys)!=FALSE,"set the thread's key state");
+     const bool game=(GetKeyState(VK_CONTROL)&0x8000)!=0,real=(input_block::real_key_state(VK_CONTROL)&0x8000)!=0;
+     BYTE released[256]{};SetKeyboardState(released);
+     need(!game&&real,"blocked GetKeyState answers up; real_key_state answers the real Ctrl");}
     need(GetClipCursor(&r)!=FALSE&&same(r,lock2),"game reads its latest requested clip");
     need(SetCursorPos(0,0)!=FALSE,"blocked SetCursorPos reports success");
     POINT p{};need(GetCursorPos(&p)!=FALSE,"frozen cursor readable");
@@ -38,6 +43,8 @@ int main(){try{
     input_block::activate(w,false);need(!input_block::active(),"inactive again");
     need(input_block::real_clip_rect(&r)!=FALSE&&!same(r,lock2)&&!same(r,lock),"deactivation without foreground releases the clip");
     need(ClipCursor(&lock)!=FALSE&&input_block::real_clip_rect(&r)!=FALSE&&same(r,lock),"pass-through restored after deactivation");
+    {BYTE keys[256]{};keys[VK_SHIFT]=0x80;SetKeyboardState(keys);const bool game=(GetKeyState(VK_SHIFT)&0x8000)!=0;BYTE released[256]{};SetKeyboardState(released);
+     need(game,"inactive GetKeyState passes through");}
     need(ClipCursor(nullptr)!=FALSE,"cleanup");
     std::printf("PASS input block owns the cursor clip while the panel is shown\n");return 0;
 }catch(const std::exception& e){std::fprintf(stderr,"FAIL %s\n",e.what());return 1;}}

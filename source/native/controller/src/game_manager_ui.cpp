@@ -351,11 +351,12 @@ void GameManagerPage::draw(HWND window,float dpi){
             // An installed late-loading game: the text to paste stays here, to copy again.
             if(s.installed&&!s.launch_command.empty())launch_card(s.launch_via,s.launch_command,"games.copy-launch");
             else if(s.load_mode=="root_proxy_d3d12")muted_text("从商店启动游戏。");
-            else if(s.load_mode=="root_proxy_on_insert")muted_text("首次按 Insert 加载插件并打开面板。");
+            else if(s.load_mode=="root_proxy_on_insert")muted_text(games::render("launch.insert").c_str());
             else if(!launch.empty())ImGui::TextWrapped("%s",launch.c_str());
             else muted_text("安装后启用游戏的 DLSS 光线重构、超分辨率或 DLAA。");
             gap(8*dpi);
-            product::pill("Insert",muted);ImGui::SameLine();ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("打开游戏内面板");
+            // The configured panel hotkey (设置 → 面板快捷键), shared by every game.
+            product::pill(games::panel_hotkey_text().c_str(),muted);mark("games.hotkey");ImGui::SameLine();ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("打开游戏内面板");
             gap(4*dpi);muted_text("NR 默认关闭，运行状态以游戏内面板为准。");
         }
         gap(20*dpi);ImGui::Separator();gap(12*dpi);

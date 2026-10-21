@@ -19,10 +19,21 @@ target_link_libraries(lab_controller_includes INTERFACE lab_provider_includes la
 # Compiled once, linked by object reference into every consumer: the two panel
 # variants and the input-block test. This is the ODR control; it is meaningful
 # only because input_block.cpp uses no target-private macro or include path.
+# The panel hotkey's settings file (data\settings\panel-hotkey-v1.json): read,
+# watched and written by the in-game panel, the desktop program, the Steam
+# launcher and overglaze_games. The format and the allowed keys are the
+# header-only lab_panel_hotkey.hpp, which the root proxy includes without
+# linking this library.
+add_library(lab_panel_hotkey STATIC src/panel_hotkey.cpp)
+target_link_libraries(lab_panel_hotkey PUBLIC lab_controller_includes lab_core)
+add_executable(lab_panel_hotkey_tests tests/panel_hotkey_tests.cpp)
+target_link_libraries(lab_panel_hotkey_tests PRIVATE lab_panel_hotkey)
+add_test(NAME native_panel_hotkey COMMAND lab_panel_hotkey_tests)
+set_tests_properties(native_panel_hotkey PROPERTIES TIMEOUT 40)
 add_library(lab_input_block_objects OBJECT src/input_block.cpp)
 target_link_libraries(lab_input_block_objects PUBLIC lab_controller_includes minhook)
 add_library(lab_overlay STATIC src/overlay.cpp)
-target_link_libraries(lab_overlay PUBLIC lab_controller_includes lab_core lab_ui_preferences lab_imgui minhook d3d12 d3dcompiler lab_input_block_objects)
+target_link_libraries(lab_overlay PUBLIC lab_controller_includes lab_core lab_ui_preferences lab_panel_hotkey lab_imgui minhook d3d12 d3dcompiler lab_input_block_objects)
 add_executable(lab_input_block_tests tests/input_block_tests.cpp)
 target_link_libraries(lab_input_block_tests PRIVATE lab_controller_includes minhook user32 lab_input_block_objects)
 add_test(NAME native_input_block_cursor_clip COMMAND lab_input_block_tests)
@@ -71,11 +82,12 @@ set_tests_properties(native_game_status PROPERTIES TIMEOUT 30)
 add_library(lab_self_update STATIC src/self_update.cpp)
 target_link_libraries(lab_self_update PUBLIC lab_controller_includes lab_core lab_root_locator lab_game_manager winhttp bcrypt)
 add_executable(overglaze_games src/games_cli.cpp)
-target_link_libraries(overglaze_games PRIVATE lab_game_manager lab_self_update)
+target_link_libraries(overglaze_games PRIVATE lab_game_manager lab_self_update lab_panel_hotkey)
 # The Steam launch-option launcher for games that refuse any Lab file in their own
-# directory (RE9): starts the game unchanged, injects on the player's first Insert.
+# directory (RE9): starts the game unchanged, injects on the player's first press
+# of the panel hotkey (Insert unless changed).
 add_executable(overglaze_launch WIN32 src/launcher.cpp)
-target_link_libraries(overglaze_launch PRIVATE lab_game_manager)
+target_link_libraries(overglaze_launch PRIVATE lab_game_manager lab_panel_hotkey)
 add_executable(lab_launch_command_tests tests/launch_command_tests.cpp)
 target_link_libraries(lab_launch_command_tests PRIVATE lab_controller_includes shell32)
 add_test(NAME native_launch_command COMMAND lab_launch_command_tests)
@@ -119,9 +131,12 @@ if(LAB_BUILD_PYTHON)
 else()
   message(FATAL_ERROR "Python is required to generate the Overglaze application icon")
 endif()
-target_link_libraries(overglaze_viewer PRIVATE lab_controller_includes lab_game_manager lab_self_update lab_capture_library lab_preview_export lab_ui_preferences lab_imgui d3dcompiler dwmapi shell32 comdlg32)
+target_link_libraries(overglaze_viewer PRIVATE lab_controller_includes lab_game_manager lab_self_update lab_capture_library lab_preview_export lab_ui_preferences lab_panel_hotkey lab_imgui d3dcompiler dwmapi shell32 comdlg32)
 add_test(NAME native_capture_viewer_smoke COMMAND overglaze_viewer --smoke-test)
 set_tests_properties(native_capture_viewer_smoke PROPERTIES TIMEOUT 40)
+# 设置 → 面板快捷键: the real buttons and the real window procedure, in memory only.
+add_test(NAME native_viewer_hotkey_capture COMMAND overglaze_viewer --ui-test-hotkey)
+set_tests_properties(native_viewer_hotkey_capture PROPERTIES TIMEOUT 40)
 add_test(NAME native_capture_viewer_controls COMMAND lab_capture_library_tests --viewer $<TARGET_FILE:overglaze_viewer>)
 set_tests_properties(native_capture_viewer_controls PROPERTIES TIMEOUT 40)
 add_test(NAME native_color_contract_viewer_controls COMMAND lab_color_contract_tests --viewer $<TARGET_FILE:overglaze_viewer>)
@@ -246,6 +261,8 @@ set_target_properties(overglaze_controller_proxy PROPERTIES PREFIX "" OUTPUT_NAM
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/controller"
   ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/controller")
 target_link_options(overglaze_controller_proxy PRIVATE "/MAP:${CMAKE_BINARY_DIR}/controller/dxgi.map")
+# Headers only (lab_panel_hotkey.hpp): no library is linked into the proxy.
+target_include_directories(overglaze_controller_proxy PRIVATE include)
 # The proxy's two modes on the built file: on Insert nothing is loaded while the
 # game starts and the first factory is not held up; the ordinary mode still
 # loads the host at once. No key is synthesised.
@@ -253,7 +270,8 @@ add_executable(lab_proxy_on_insert_tests tests/proxy_on_insert_tests.cpp)
 add_dependencies(lab_proxy_on_insert_tests overglaze_controller_proxy)
 add_test(NAME native_proxy_on_insert COMMAND lab_proxy_on_insert_tests $<TARGET_FILE:overglaze_controller_proxy> ${CMAKE_BINARY_DIR}/proxy-on-insert-test on-insert)
 add_test(NAME native_proxy_at_first_factory COMMAND lab_proxy_on_insert_tests $<TARGET_FILE:overglaze_controller_proxy> ${CMAKE_BINARY_DIR}/proxy-first-factory-test at-first-factory)
-set_tests_properties(native_proxy_on_insert native_proxy_at_first_factory PROPERTIES TIMEOUT 30)
+add_test(NAME native_proxy_on_insert_hotkey COMMAND lab_proxy_on_insert_tests $<TARGET_FILE:overglaze_controller_proxy> ${CMAKE_BINARY_DIR}/proxy-on-insert-hotkey-test on-insert-configured)
+set_tests_properties(native_proxy_on_insert native_proxy_at_first_factory native_proxy_on_insert_hotkey PROPERTIES TIMEOUT 30)
 
 # The controller host, executed: a synthetic game with real D3D12 and real NR.
 # Driven by Test-ControllerHost.ps1, never by ctest (it needs an NVIDIA RTX GPU,

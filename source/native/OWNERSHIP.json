@@ -942,6 +942,18 @@
   },
   "controller/tests/self_update_tests.cpp": {
    "track": "controller"
+  },
+  "controller/include/lab_panel_hotkey.hpp": {
+   "track": "controller"
+  },
+  "controller/include/lab_panel_hotkey_file.hpp": {
+   "track": "controller"
+  },
+  "controller/src/panel_hotkey.cpp": {
+   "track": "controller"
+  },
+  "controller/tests/panel_hotkey_tests.cpp": {
+   "track": "controller"
   }
  }
 }

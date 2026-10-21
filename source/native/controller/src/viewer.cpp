@@ -14,6 +14,8 @@
 #include "lab_root_locator.hpp"
 #include "lab_model_setup.hpp"
 #include "lab_self_update_ui.hpp"
+#include "lab_game_reasons.hpp"
+#include "lab_panel_hotkey_file.hpp"
 #include <imgui.h>
 #include <imgui_impl_win32.h>
 #include <imgui_impl_dx11.h>
@@ -41,7 +43,28 @@ const std::filesystem::path& library_root(){static const auto data=[]{auto d=lab
 void need(bool ok,const char* why){if(!ok)throw std::runtime_error(why);}
 void hr(HRESULT r){if(FAILED(r))throw std::runtime_error("Viewer HRESULT="+std::to_string(unsigned(r)));}
 unsigned resize_width=0,resize_height=0;bool moved=true;
+// 设置 → 面板快捷键 → 修改: while active, the window procedure hands the next
+// key, with the modifiers held, to the setting before ImGui sees it (Esc alone
+// cancels; Alt+F4 still closes the program). Same rules as the in-game panel.
+struct HotkeyCapture {
+    std::atomic<bool> active{false};std::atomic<unsigned> refusal{0};
+    std::atomic<lab::hotkey::Settings*> target{nullptr};
+    void key(UINT vk){
+        lab::hotkey::Binding chosen;lab::hotkey::Refusal why;
+        switch(lab::hotkey::capture_step(vk,GetKeyState,chosen,why)){
+        case lab::hotkey::CaptureStep::wait:return;
+        case lab::hotkey::CaptureStep::cancel:active=false;refusal=0;return;
+        case lab::hotkey::CaptureStep::refused:refusal=unsigned(why);return;
+        case lab::hotkey::CaptureStep::chosen:break;}
+        auto* settings=target.load();why=settings?settings->set(chosen):lab::hotkey::Refusal::unsupported;
+        refusal=unsigned(why);if(why==lab::hotkey::Refusal::none)active=false;
+    }
+} hotkey_capture;
 LRESULT CALLBACK procedure(HWND w,UINT m,WPARAM a,LPARAM b){
+    if(hotkey_capture.active&&!(m==WM_SYSKEYDOWN&&a==VK_F4)){
+        if(m==WM_KEYDOWN||m==WM_SYSKEYDOWN){if(!(b&(1LL<<30)))hotkey_capture.key(UINT(a));return 0;}
+        if(m==WM_KEYUP||m==WM_SYSKEYUP||m==WM_CHAR||m==WM_SYSCHAR||m==WM_DEADCHAR||m==WM_SYSDEADCHAR)return 0;
+    }
     if(ImGui_ImplWin32_WndProcHandler(w,m,a,b))return 1;
     if(m==WM_SIZE&&a!=SIZE_MINIMIZED){resize_width=LOWORD(b);resize_height=HIWORD(b);return 0;}
     if(m==WM_MOVE||m==WM_DISPLAYCHANGE)moved=true;
@@ -135,6 +158,9 @@ struct View {
     bool about=false;std::string about_error;std::future<lab::games::ModelStatus> model_job;lab::games::ModelStatus model;bool model_checked=false;
     std::unique_ptr<lab::ModelSetupPreferences> model_setup;
     std::unique_ptr<lab::UpdatePanel> updates; // check, notice and hand-over to the Setup (out of game only)
+    // The in-game panel's hotkey (data\settings\panel-hotkey-v1.json), shared by
+    // every game and the Steam launcher. Regression modes: this process only.
+    std::unique_ptr<lab::hotkey::Settings> hotkeys;std::uint64_t hotkey_shown=~0ULL;
     bool setup_requested=false,setup_importing=false,startup_model_check=false;std::string setup_error;
     Renderer::Draw ui{&gpu,0,0},a{&gpu,1,1},b{&gpu,1,2},delta{&gpu,2,1};
     lab::ViewerPreferences preferences()const{lab::ViewerPreferences p;p.display=gpu.display;p.processing=gpu.processing_enabled;p.nearest=gpu.pixel_nearest;p.library=library_visible;p.hdr=hdr_preferred;p.view=difference?2u:wipe?1u:0u;p.wipe=wipe_position;return p;}
@@ -162,6 +188,9 @@ struct View {
         const bool allow=allow_unrecognized();
         model_job=std::async(std::launch::async,[root,selected_model,allow]{lab::games::Manager m(root);m.allow_unrecognized_model(allow);return m.import_model(selected_model);});}
     void poll(){using namespace std::chrono_literals;if(updates)updates->poll();
+        // Every text that names the hotkey (game page, launch card) follows the setting,
+        // including a change made in a game's panel while this program is open.
+        if(hotkeys&&hotkeys->revision()!=hotkey_shown){hotkey_shown=hotkeys->revision();lab::games::set_panel_hotkey_text(hotkeys->current_name());}
         if(model_job.valid()&&model_job.wait_for(0ms)==std::future_status::ready){const bool imported=setup_importing;
             try{auto checked=model_job.get();if(imported&&!checked.error.empty())setup_error=checked.error;else{model=std::move(checked);model_checked=true;
                     if(imported&&model.usable()){if(model_setup)model_setup->remember(lab::ModelSetupState::Decision::completed);manager.reset();}}}
@@ -269,7 +298,7 @@ struct View {
             lab::product::pill(status,ready&&!unrecognized?lab::product::accent:lab::product::amber);
             if(unrecognized){ImGui::TextDisabled("SHA-256 %s",model.sha256.c_str());ImGui::TextWrapped("%s",lab::games::render("model-unrecognized-notice").c_str());}
             if(ready){if(!model.label.empty())ImGui::TextWrapped("%s",model.label.c_str());
-                ImGui::TextDisabled("Insert 打开游戏内面板。NR 默认关闭。");}
+                ImGui::TextDisabled("%s 打开游戏内面板。NR 默认关闭。",lab::games::panel_hotkey_text().c_str());}
             else ImGui::TextWrapped("模型需自行提供，也可稍后导入。");
             // The model in place that is not a reviewed version says what it is
             // (a refused import already says it in its own message below).
@@ -286,7 +315,8 @@ struct View {
             ImGui::EndDisabled();ImGui::Spacing();ImGui::TextDisabled("可在设置中重新配置。");ImGui::EndPopup();}
         ImGui::SetNextWindowPos({io.DisplaySize.x*.5f,io.DisplaySize.y*.5f},ImGuiCond_Appearing,{.5f,.5f});
         {const float w=std::min(620*dpi,io.DisplaySize.x-48*dpi);ImGui::SetNextWindowSizeConstraints({w,0},{w,FLT_MAX});}
-        if(ImGui::BeginPopupModal("设置##product",&about,ImGuiWindowFlags_AlwaysAutoResize)){
+        bool settings_open=false;
+        if(ImGui::BeginPopupModal("设置##product",&about,ImGuiWindowFlags_AlwaysAutoResize)){settings_open=true;
             lab::product::wordmark(dpi);ImGui::Spacing();ImGui::TextDisabled("%s  /  WINDOWS · DX12",updates&&!updates->version().empty()?updates->version().c_str():"版本未知");ImGui::Spacing();
             ImGui::TextWrapped("NR 控制与采集浏览");
             ImGui::Spacing();ImGui::SeparatorText("模型");
@@ -313,6 +343,21 @@ struct View {
             ImGui::BeginDisabled(model_job.valid()||!manager_allowed);if(ImGui::Button("重新校验"))check_model();ImGui::SameLine();
             if(lab::product::action("配置模型",{},true)){start_model_setup();ImGui::CloseCurrentPopup();}ImGui::EndDisabled();
             if(!about_error.empty()){ImGui::PushStyleColor(ImGuiCol_Text,lab::product::amber);ImGui::TextWrapped("%s",about_error.c_str());ImGui::PopStyleColor();}
+            if(hotkeys){ImGui::Spacing();ImGui::SeparatorText("游戏内面板");
+                // The same setting as the in-game panel's 面板设置: every game and
+                // the Steam launcher use it; a running game picks a change up at once.
+                ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("面板快捷键");ImGui::SameLine();
+                lab::product::pill(hotkeys->current_name().c_str());mark("app.about.hotkey");ImGui::SameLine();
+                const bool capturing=hotkey_capture.active.load();
+                if(capturing){if(ImGui::Button("取消##hotkey",{96*dpi,0})){hotkey_capture.active=false;hotkey_capture.refusal=0;}mark("app.about.hotkey-cancel");}
+                else{if(ImGui::Button("修改##hotkey",{96*dpi,0})){hotkey_capture.refusal=0;hotkey_capture.active=true;}mark("app.about.hotkey-change");}
+                ImGui::SameLine();
+                if(ImGui::Button("恢复默认（Insert）")){hotkey_capture.active=false;hotkey_capture.refusal=0;(void)hotkeys->set(lab::hotkey::kDefault);}mark("app.about.hotkey-reset");
+                if(capturing)ImGui::TextColored(lab::product::accent,"请按下新的快捷键，可加 Ctrl / Shift / Alt。Esc 取消。");
+                if(const auto why=lab::hotkey::Refusal(hotkey_capture.refusal.load());why!=lab::hotkey::Refusal::none){
+                    ImGui::PushStyleColor(ImGuiCol_Text,lab::product::amber);ImGui::TextWrapped("%s",lab::hotkey::refusal_text(why));ImGui::PopStyleColor();}
+                else if(!capturing)ImGui::TextWrapped("打开和收起游戏内面板。所有游戏和 Steam 启动器共用；游戏运行中修改也会立即生效。");
+                if(const auto problem=hotkeys->error();!problem.empty()){ImGui::PushStyleColor(ImGuiCol_Text,lab::product::amber);ImGui::TextWrapped("%s",problem.c_str());ImGui::PopStyleColor();}}
             if(ImGui::CollapsingHeader("存储位置")){
                 const auto root=lab::utf8(library_root().parent_path().wstring());
                 ImGui::TextWrapped("程序：%s",lab::utf8(lab::root::self_executable().wstring()).c_str());
@@ -324,6 +369,7 @@ struct View {
             ImGui::TextWrapped("无遥测。只有检查更新时联网（读取 GitHub 公开发布信息，可关闭）；游戏内组件从不联网。非 NVIDIA 官方产品。");
             ImGui::Spacing();ImGui::TextDisabled("MIT · 第三方许可见 THIRD_PARTY_NOTICES.md");
             if(ImGui::Button("关闭",{100*dpi,36*dpi}))ImGui::CloseCurrentPopup();mark("app.about.close");ImGui::EndPopup();}
+        if(!settings_open)hotkey_capture.active=false; // a rebinding ends with the settings window
         ImGui::Dummy({0,12*dpi});ImGui::Separator();ImGui::Dummy({0,8*dpi});
         if(updates){updates->banner(window,dpi);if(updates->take_open_games())games_page=true;}
         if(games_page){if(manager_allowed){if(!manager)manager=std::make_unique<lab::GameManagerPage>(library_root().parent_path(),true,allow_unrecognized());manager->draw(window,dpi);}else ImGui::TextDisabled("采集回归模式：不读写游戏管理登记。");ImGui::End();return;}
@@ -426,10 +472,11 @@ struct View {
 }
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
     bool smoke=false;
-    try{bool ui_test=false,sdr_view=false,nr_interface=false,processing=false,view_check=false,games=false,captures=false;std::filesystem::path source,report;int argc=0;auto** argv=CommandLineToArgvW(GetCommandLineW(),&argc);
-        for(int i=1;i<argc;++i){const std::wstring arg=argv[i];if(arg==L"--games")games=true;else if(arg==L"--captures")captures=true;else if(arg==L"--smoke-test")smoke=true;else if(arg==L"--sdr-view")sdr_view=true;else if(arg==L"--nr-interface")nr_interface=true;else if(arg==L"--view-processing")processing=true;else if(arg==L"--view-check"){smoke=view_check=true;}else if(arg==L"--ui-test"){smoke=ui_test=true;}else if(arg==L"--pair"&&i+1<argc)source=argv[++i];else if(arg==L"--report"&&i+1<argc)report=argv[++i];else throw std::runtime_error("Unknown viewer argument");}LocalFree(argv);library_root();
+    try{bool ui_test=false,sdr_view=false,nr_interface=false,processing=false,view_check=false,games=false,captures=false,hotkey_test=false;std::filesystem::path source,report;int argc=0;auto** argv=CommandLineToArgvW(GetCommandLineW(),&argc);
+        for(int i=1;i<argc;++i){const std::wstring arg=argv[i];if(arg==L"--games")games=true;else if(arg==L"--captures")captures=true;else if(arg==L"--smoke-test")smoke=true;else if(arg==L"--sdr-view")sdr_view=true;else if(arg==L"--nr-interface")nr_interface=true;else if(arg==L"--view-processing")processing=true;else if(arg==L"--view-check"){smoke=view_check=true;}else if(arg==L"--ui-test"){smoke=ui_test=true;}else if(arg==L"--ui-test-hotkey"){smoke=hotkey_test=true;}else if(arg==L"--pair"&&i+1<argc)source=argv[++i];else if(arg==L"--report"&&i+1<argc)report=argv[++i];else throw std::runtime_error("Unknown viewer argument");}LocalFree(argv);library_root();
         need(!view_check||(!source.empty()&&!ui_test),"View check requires a source and no UI test");
         need(!ui_test||!source.empty(),"UI test needs a bounded synthetic capture");
+        need(!hotkey_test||(!ui_test&&!view_check),"The hotkey UI test runs alone");
         if(!report.empty())need(report.is_absolute()&&!std::filesystem::exists(report),"Report requires a new absolute path");
         ImGui_ImplWin32_EnableDpiAwareness();WNDCLASSEXW wc{sizeof(wc)};wc.hInstance=instance;wc.lpfnWndProc=procedure;wc.lpszClassName=L"OverglazeCaptureViewer";wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
         wc.hIcon=static_cast<HICON>(LoadImageW(instance,MAKEINTRESOURCEW(101),IMAGE_ICON,GetSystemMetrics(SM_CXICON),GetSystemMetrics(SM_CYICON),LR_SHARED));
@@ -461,6 +508,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
         if(!smoke)view.check_model(true);
         // The regression modes never touch the network or the update record.
         view.updates=std::make_unique<lab::UpdatePanel>(!smoke);
+        // The regression modes never write the setting: this process only.
+        view.hotkeys=std::make_unique<lab::hotkey::Settings>(smoke?std::filesystem::path{}:library_root());hotkey_capture.target=view.hotkeys.get();
         auto previous=library_root()/L"settings"/L"viewer.json";
         for(const auto* name:{L"viewer-display-v2.json",L"viewer-display-v3.json"})if(std::filesystem::exists(library_root()/L"settings"/name))previous=library_root()/L"settings"/name;
         lab::UiPreferencesFile preferences(smoke?std::filesystem::path{}:library_root()/L"settings"/L"viewer-display-v4.json",lab::ViewerPreferences{}.document(),smoke?std::filesystem::path{}:previous,smoke?std::filesystem::path{}:library_root());view.restore(lab::ViewerPreferences::parse(preferences.loaded()));view.test_folder_dispatch=smoke;
@@ -477,6 +526,29 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
             {"display.processing",[&]{return gpu.processing_enabled&&gpu.viewing_request().nr_reconstruct==1&&gpu.display.contrast==1.15f;}},
             {"mapping.aces",[&]{return gpu.display.mapping==3&&view.left==1&&view.right==2;}},
             {"export",[&]{return !view.last_export.empty()&&!view.exporting.valid();}}};
+        // A key as Windows would deliver it to this window: the thread's key state
+        // holds the modifiers while the messages are handled, then everything is up.
+        const auto press=[&](UINT vk,bool ctrl){BYTE keys[256]{};if(ctrl){keys[VK_CONTROL]=keys[VK_LCONTROL]=0x80;}SetKeyboardState(keys);
+            const UINT down=vk==VK_F10||vk==VK_MENU?WM_SYSKEYDOWN:WM_KEYDOWN,up=down==WM_SYSKEYDOWN?WM_SYSKEYUP:WM_KEYUP;
+            const LPARAM scan=LPARAM(MapVirtualKeyW(vk,MAPVK_VK_TO_VSC))<<16;
+            SendMessageW(window,down,vk,1|scan);SendMessageW(window,up,vk,1|scan|(1LL<<30)|(1LL<<31));
+            BYTE released[256]{};SetKeyboardState(released);};
+        using lab::hotkey::Binding;
+        struct HotkeyStep{const char* click;std::function<void()> act;std::function<bool()> check;};
+        const std::vector<HotkeyStep> hotkey_steps{
+            {"app.about",{},[&]{return view.controls.contains("app.about.hotkey-change");}},
+            {"app.about.hotkey-change",{},[&]{return hotkey_capture.active.load()&&view.controls.contains("app.about.hotkey-cancel");}},
+            // A letter alone is refused and the control keeps waiting.
+            {nullptr,[&]{press('A',false);},[&]{return hotkey_capture.active.load()&&lab::hotkey::Refusal(hotkey_capture.refusal.load())==lab::hotkey::Refusal::plain_character&&view.hotkeys->current()==lab::hotkey::kDefault;}},
+            // Ctrl+F10 is taken; the texts that name the hotkey follow it.
+            {nullptr,[&]{press(VK_F10,true);},[&]{return !hotkey_capture.active.load()&&view.hotkeys->current()==Binding{VK_F10,true,false,false}&&
+                lab::games::render("launch.insert").find("Ctrl+F10")!=std::string::npos;}},
+            {"app.about.hotkey-reset",{},[&]{return view.hotkeys->current()==lab::hotkey::kDefault&&lab::games::panel_hotkey_text()=="Insert";}},
+            // Esc cancels the rebinding and leaves the settings window open.
+            {"app.about.hotkey-change",{},[&]{return hotkey_capture.active.load();}},
+            {nullptr,[&]{press(VK_ESCAPE,false);},[&]{return !hotkey_capture.active.load()&&view.controls.contains("app.about.hotkey-change")&&view.hotkeys->current()==lab::hotkey::kDefault;}},
+            {"app.about.close",{},[&]{return !view.controls.contains("app.about.hotkey-change");}}};
+        unsigned hotkey_step=0,hotkey_phase=0;
         bool quit=false,display_ui_configured=false,processing_qa_started=false;unsigned frames=0,test_phase=0,test_step=0;std::uint64_t next_output=0;const auto start=GetTickCount64();lab::json background_checks=lab::json::object(),wipe_checks=nullptr,final_checks=lab::json::object(),processing_checks=lab::json::array();
         while(!quit){MSG m{};while(PeekMessageW(&m,nullptr,0,0,PM_REMOVE)){TranslateMessage(&m);DispatchMessageW(&m);if(m.message==WM_QUIT)quit=true;}if(quit)break;
             view.poll();if(view.updates&&view.updates->exit_requested())break; // the Setup takes over
@@ -495,6 +567,15 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
             if(ui_test&&view.raw&&!view.loading.valid()&&view.controls.contains("pair.nr")&&frames>3&&test_step<steps.size()){
                 input_issued=true;if(test_phase<3){const auto it=view.controls.find(steps[test_step].id);need(it!=view.controls.end(),"Viewer test control disappeared");const auto& r=*it;
                     io.AddMousePosEvent(r[0].get<float>()+r[2].get<float>()*.5f,r[1].get<float>()+r[3].get<float>()*.5f);if(test_phase==1)io.AddMouseButtonEvent(0,true);if(test_phase==2)io.AddMouseButtonEvent(0,false);}}
+            // --ui-test-hotkey: 设置 → 面板快捷键 through the real buttons and the real
+            // window procedure (keys are sent as messages with the thread's key state).
+            if(hotkey_test&&frames>3&&hotkey_step<hotkey_steps.size()){
+                auto& step=hotkey_steps[hotkey_step];
+                if(hotkey_phase==0){if(step.click){const auto it=view.controls.find(step.click);need(it!=view.controls.end(),"Hotkey test control missing");const auto& r=*it;
+                        io.AddMousePosEvent(r[0].get<float>()+r[2].get<float>()*.5f,r[1].get<float>()+r[3].get<float>()*.5f);}else step.act();}
+                else if(hotkey_phase==1&&step.click)io.AddMouseButtonEvent(0,true);
+                else if(hotkey_phase==2&&step.click)io.AddMouseButtonEvent(0,false);
+                if(++hotkey_phase>=4){if(step.check()){hotkey_phase=0;if(++hotkey_step==hotkey_steps.size())quit=true;}else hotkey_phase=3;}}
             view.preference_error=preferences.error();ImGui::NewFrame();view.draw();preferences.save(view.preferences().document());if(input_issued&&++test_phase>=4){if(steps[test_step].check()){test_phase=0;++test_step;if(test_step==steps.size())quit=true;}else test_phase=3;}
             ImGui::Render();const float clear[]{.05f,.06f,.07f,1};gpu.context->OMSetRenderTargets(1,gpu.target.GetAddressOf(),nullptr);gpu.context->ClearRenderTargetView(gpu.target.Get(),clear);ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
             if(smoke&&frames>3&&!background_checks.contains(gpu.hdr?"hdr":"sdr"))background_checks[gpu.hdr?"hdr":"sdr"]=gpu.verify_background();
@@ -512,8 +593,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
             hr(gpu.chain->Present(smoke?0:1,0));++frames;
             if(smoke){if(!view.error.empty())throw std::runtime_error(view.error);if(GetTickCount64()-start>30000){
                     if(!report.empty()){std::ofstream out(report,std::ios::binary);out<<lab::json{{"passed",false},{"error","Viewer smoke timeout"},{"ui_steps_passed",test_step},{"waiting_for",test_step<steps.size()?steps[test_step].id:"none"},{"controls",view.controls},{"display_preferences",view.preferences().document()}}.dump(2);}
-                    throw std::runtime_error("Viewer smoke timeout at step "+std::to_string(test_step));}
-                if(!ui_test&&!view_check&&!view.loading.valid()&&!view.scanning.valid()&&(source.empty()||view.raw)){
+                    throw std::runtime_error("Viewer smoke timeout at step "+std::to_string(hotkey_test?hotkey_step:test_step));}
+                if(!ui_test&&!view_check&&!hotkey_test&&!view.loading.valid()&&!view.scanning.valid()&&(source.empty()||view.raw)){
                     if(view.raw&&view.raw->display_pair()){if(frames>5){if(test_phase==0){gpu.display.exposure=6;gpu.display.mapping=0;++test_phase;}
                         else if(test_phase==1){gpu.display.exposure=-6;gpu.display.mapping=3;++test_phase;}else quit=true;}}
                     else if(view.raw&&test_phase<4){if(test_phase==0)view.set_pair(0,3);if(test_phase==1){view.difference=true;view.fit=false;view.zoom=2;}if(test_phase==2){view.set_pair(1,2);view.gpu.display.exposure=1;}if(test_phase==3){view.difference=false;view.fit=true;}++test_phase;}else if(frames>5){if(gpu.hdr_available&&!background_checks.contains("hdr")){if(!gpu.hdr)gpu.resize(gpu.width,gpu.height,true);}else quit=true;}}}
@@ -521,12 +602,14 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
         lab::json receipt={{"purpose","functional-verification"},{"kind","capture-viewer-smoke"},{"passed",true},{"frames",frames},{"game_started",false},{"nr_executed",false},{"source_modified",false},{"source",source.empty()?"":lab::utf8(source.wstring())},{"pair_loaded",bool(view.raw)},{"display_hdr",gpu.hdr},{"hdr_output_available",gpu.hdr_available},{"catalog_entries",view.catalog.entries.size()},{"original_resolution_textures",true},{"controls",view.controls},{"modules",lab::current_modules()}};
         if(view.raw){receipt["manifest_sha256"]=view.raw->manifest_hash();receipt["width"]=view.raw->width();receipt["height"]=view.raw->height();receipt["mapped_bytes"]=view.raw->bytes();
             receipt["color_contracts"]=lab::json::array();for(unsigned i=0;i<view.raw->stage_count();++i)receipt["color_contracts"].push_back(view.raw->color_contract(i).document());}
-        receipt["ui_test"]=ui_test;receipt["ui_steps_passed"]=test_step;receipt["derived_export"]=lab::utf8(view.last_export.wstring());
+        receipt["ui_test"]=ui_test;receipt["ui_steps_passed"]=test_step;receipt["hotkey_test"]=hotkey_test;receipt["hotkey_steps_passed"]=hotkey_step;
+        receipt["panel_hotkey"]=view.hotkeys->current_name();receipt["derived_export"]=lab::utf8(view.last_export.wstring());
         receipt["capture_folder_requested"]=lab::utf8(view.last_folder.wstring());receipt["explorer_suppressed_for_test"]=smoke;receipt["ui_white_nits"]=gpu.display.ui_white_nits;receipt["ui_white_observed"]=gpu.ui_white_observed;
         receipt["window_background_checks"]=background_checks;receipt["wipe_pixel_checks"]=wipe_checks;receipt["output_generation"]=gpu.output_generation;receipt["display_preferences"]=view.preferences().document();receipt["preferences_enabled"]=!smoke;
         receipt["final_sdr_code_checks"]=final_checks;
         receipt["processing_window_checks"]=processing_checks;receipt["display_processing_enabled"]=gpu.processing_enabled;receipt["rr_assisted_view"]=gpu.viewing_request().nr_reconstruct!=0;
         if(!report.empty()){std::ofstream out(report,std::ios::binary);out<<receipt.dump(2);need(bool(out),"Write smoke receipt");}
+        hotkey_capture.active=false;hotkey_capture.target=nullptr;
         preferences.close();gpu.clear_images();ImGui_ImplDX11_Shutdown();ImGui_ImplWin32_Shutdown();ImGui::DestroyContext();if(IsWindow(window))DestroyWindow(window);return 0;
     }catch(const std::exception& e){OutputDebugStringA(e.what());std::cerr<<e.what()<<'\n';if(!smoke)MessageBoxW(nullptr,lab::wide(e.what()).c_str(),lab::brand::kViewerStartFailureTitle,MB_OK|MB_ICONERROR);return 1;}
 }

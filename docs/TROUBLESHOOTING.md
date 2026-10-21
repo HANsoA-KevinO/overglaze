@@ -12,8 +12,8 @@ Session records and logs are under `data\` in the Overglaze folder.
 
 ## The panel doesn't open
 
-- **Hotkey.** The default is Insert, and it can be changed to F7, F8 or F9 in the panel. The game window must be in front.
-- **Late-load games.** Overglaze loads on the first Insert press, and the panel appears once Overglaze has seen which queue presents the game's frames, about 60 frames later. If the panel disappears later, for example after the game recreated its swap chain, the evidence became contradictory and the panel was withdrawn until it is consistent again. Meanwhile NR can still be controlled with `overglazectl`.
+- **Hotkey.** The default is Insert. It can be changed in the desktop program (*设置 → 面板快捷键*) or in the panel (*高级与诊断 → 面板设置*): one key with optional Ctrl, Shift or Alt, shared by every game and the Steam launcher. The current key is shown there and on each game's page in the Game Library. The modifiers must match exactly: with Ctrl+F10, F10 alone or Ctrl+Shift+F10 does nothing. If `data\settings\panel-hotkey-v1.json` is malformed, Insert applies and the panel says so. The game window must be in front.
+- **Late-load games.** Overglaze loads on the first press of the panel hotkey, and the panel appears once Overglaze has seen which queue presents the game's frames, about 60 frames later. If the panel disappears later, for example after the game recreated its swap chain, the evidence became contradictory and the panel was withdrawn until it is consistent again. Meanwhile NR can still be controlled with `overglazectl`.
 - **Proxy-DLL games.** On the Games page, check that the game shows as installed and *healthy*. If it says *needs update* or *game changed*, update or re-adapt it first.
 - **Antivirus.** Proxy DLLs are a common target for antivirus heuristics. If `dxgi.dll` or files in Overglaze's subfolder were quarantined, the health check reports modified or missing files. Restore them, or uninstall and reinstall.
 

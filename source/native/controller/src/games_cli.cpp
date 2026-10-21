@@ -9,6 +9,7 @@
 #include "lab_brand.hpp"
 #include "lab_root_locator.hpp"
 #include "lab_self_update.hpp"
+#include "lab_panel_hotkey_file.hpp"
 #include <iostream>
 #include <algorithm>
 #include <map>
@@ -105,7 +106,9 @@ int wmain(int argc,wchar_t** argv){
         // Where this program sits decides the Lab root (<root>\app\ or a track
         // build directory), unless overglaze-root.json beside it says otherwise.
         // Preflight above needs no root at all.
-        const auto root=lab::root::resolve_self().root;
+        const auto where=lab::root::resolve_self();const auto root=where.root;
+        // The texts below name the configured panel hotkey, not a fixed Insert.
+        lab::games::set_panel_hotkey_text(lab::hotkey::name(lab::hotkey::read(where.data).binding));
         lab::games::Manager m(root);
         // The desktop setting's command-line twin: off unless said here.
         m.allow_unrecognized_model(has(L"--allow-unrecognized-model"));
@@ -261,7 +264,7 @@ int wmain(int argc,wchar_t** argv){
                         handled[pid]="attached";any=true;
                         std::cout<<json{{"event","attached"},{"id",t.id},{"package",t.package},{"pid",r.pid},
                             {"loader_sha256",r.loader_sha256},{"loaded",r.loaded},{"note",r.note},
-                            {"next","the host asks for NR preparation itself on this path, then the panel attaches; Insert opens it"}}.dump()<<std::endl;
+                            {"next","the host asks for NR preparation itself on this path, then the panel attaches; "+lab::games::panel_hotkey_text()+" opens it"}}.dump()<<std::endl;
                     }catch(const std::exception& e){
                         const std::string note=e.what();
                         if(seen==handled.end()||seen->second!=note){

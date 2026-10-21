@@ -10,6 +10,7 @@
 #include "lab_nr_panel.hpp"
 #include "lab_product_ui.hpp"
 #include "lab_ui_preferences.hpp"
+#include "lab_panel_hotkey_file.hpp"
 #include <imgui.h>
 #include <imgui_impl_dx12.h>
 #include <d3dcompiler.h>
@@ -68,7 +69,14 @@ NetworkModel network_model(const std::string& sha256){
 }
 struct GameOverlay::Impl {
     Controller& control;mutable std::recursive_mutex mutex;std::mutex input_mutex;
-    std::atomic<bool> visible{false},stopped{false},failed{false};std::atomic<UINT> hotkey{VK_INSERT};
+    std::atomic<bool> visible{false},stopped{false},failed{false};
+    // Rebinding from the panel (面板设置 → 修改): the window procedure gives the
+    // next key to capture_key() while this is set; the refusal it found, if any.
+    std::atomic<bool> capturing{false};std::atomic<unsigned> capture_refusal{0};
+    // The hotkey's key while its press is held: its repeats and its release are
+    // swallowed too, and only those (a plain F10 is the game's when the binding
+    // is Ctrl+F10).
+    std::atomic<UINT> held_vk{0};
     // Bound to a chain (attach) and not detached since. The hotkey opens the
     // panel only while bound: an unbound panel would take the game's input and
     // draw nothing.
@@ -77,6 +85,10 @@ struct GameOverlay::Impl {
     std::atomic<bool> capture_hidden{false},capture_override{false},cancel_capture{false};
 #endif
     UiPreferencesFile preferences;
+    // The panel hotkey: one setting for every game (settings/panel-hotkey-v1.json
+    // under the data root), re-read when the desktop program changes it. No
+    // data root (fixtures): Insert, changeable for this process only.
+    hotkey::Settings hotkeys;
     HWND window=nullptr;WNDPROC original_proc=nullptr;IDXGISwapChain* chain_key=nullptr;
     struct Message{UINT id;WPARAM w;LPARAM l;};std::deque<Message> input;
     bool clear_input=false,input_block_installed=false;
@@ -102,13 +114,16 @@ struct GameOverlay::Impl {
     static inline std::atomic<Impl*> input_owner=nullptr;
     OverlayPreferences saved_model;bool settings_restored=false;
     std::string preference_error; // a refused save, shown in the panel; never thrown out of render
-    Impl(Controller& c,std::filesystem::path path,std::filesystem::path data_root):control(c),preferences(std::move(path),OverlayPreferences{}.document(),{},std::move(data_root)){
-        const auto saved=OverlayPreferences::parse(preferences.loaded());hotkey=saved.hotkey;paper_white=saved.white;saved_model=saved;}
+    Impl(Controller& c,std::filesystem::path path,std::filesystem::path data_root):control(c),preferences(std::move(path),OverlayPreferences{}.document(),{},data_root),hotkeys(data_root){
+        // The per-game "hotkey" field of earlier versions is kept in the file as
+        // it was read and no longer used: the global setting above replaced it.
+        const auto saved=OverlayPreferences::parse(preferences.loaded());paper_white=saved.white;saved_model=saved;}
     D3D12_CPU_DESCRIPTOR_HANDLE cpu(unsigned i)const{auto h=srv->GetCPUDescriptorHandleForHeapStart();h.ptr+=static_cast<SIZE_T>(i)*srv_stride;return h;}
     D3D12_GPU_DESCRIPTOR_HANDLE gpu(unsigned i)const{auto h=srv->GetGPUDescriptorHandleForHeapStart();h.ptr+=static_cast<UINT64>(i)*srv_stride;return h;}
     D3D12_CPU_DESCRIPTOR_HANDLE target(unsigned i)const{auto h=rtv->GetCPUDescriptorHandleForHeapStart();h.ptr+=static_cast<SIZE_T>(i)*rtv_stride;return h;}
     void visibility(bool value){
         std::lock_guard lock(input_mutex);visible=value;input.clear();clear_input=true;
+        if(!value)capturing=false; // a rebinding never outlives the open panel
         // Cursor clip ownership lives in input_block: released while the panel
         // is shown, the game's own clip re-applied when it closes.
         refresh_input_block();
@@ -120,18 +135,55 @@ struct GameOverlay::Impl {
 #else
     void refresh_input_block(){input_block::activate(window,visible&&!stopped);}
 #endif
+    // The next key, with the modifiers held, judged by the shared rules
+    // (lab_panel_hotkey.hpp). Esc alone cancels; a refusal keeps waiting.
+    void capture_key(UINT vk){
+        hotkey::Binding chosen;hotkey::Refusal why;
+        switch(hotkey::capture_step(vk,input_block::real_key_state,chosen,why)){
+        case hotkey::CaptureStep::wait:return; // a modifier: wait for the key that goes with it
+        case hotkey::CaptureStep::cancel:capturing=false;capture_refusal=0;return;
+        case hotkey::CaptureStep::refused:capture_refusal=unsigned(why);return;
+        case hotkey::CaptureStep::chosen:break;}
+        why=hotkeys.set(chosen);capture_refusal=unsigned(why);
+        if(why==hotkey::Refusal::none){capturing=false;held_vk=chosen.vk;} // its release is ours too
+    }
+    // The game saw Ctrl / Shift go down before the panel opened and, with the
+    // panel owning the keyboard, would not see them come up: hand it those
+    // releases now. Not Alt: a lone Alt release reaching DefWindowProc can
+    // open the window menu.
+    void release_modifiers(HWND w,const hotkey::Binding& key){
+        const std::pair<bool,UINT> modifiers[]{{key.ctrl,VK_CONTROL},{key.shift,VK_SHIFT}};
+        for(const auto& [needed,vk]:modifiers){
+            if(!needed)continue;
+            const LPARAM up=1|(LPARAM(MapVirtualKeyW(vk,MAPVK_VK_TO_VSC))<<16)|(1LL<<30)|(1LL<<31);
+            CallWindowProcW(original_proc,w,WM_KEYUP,vk,up);
+        }
+    }
     static bool message_sink(HWND w,UINT m,WPARAM a,LPARAM b){auto* s=input_owner.load();if(!s||w!=s->window||!s->visible||s->stopped)return false;
         return procedure(w,m,a,b)==0;}
     static LRESULT CALLBACK procedure(HWND w,UINT m,WPARAM a,LPARAM b){
         auto* s=input_owner.load();if(!s||w!=s->window)return DefWindowProcW(w,m,a,b);
-        if(m==WM_KILLFOCUS||(m==WM_ACTIVATEAPP&&!a)||m==WM_DESTROY)s->visibility(false);
-        if(!s->stopped&&!s->failed&&s->bound&&(m==WM_KEYDOWN||m==WM_SYSKEYDOWN)&&a==s->hotkey.load()){
+        if(m==WM_KILLFOCUS||(m==WM_ACTIVATEAPP&&!a)||m==WM_DESTROY){s->visibility(false);s->held_vk=0;}
+        const bool key_down=m==WM_KEYDOWN||m==WM_SYSKEYDOWN,key_up=m==WM_KEYUP||m==WM_SYSKEYUP,repeat=(b&(1LL<<30))!=0;
+        // Rebinding: while the open panel waits for a key, every key and the
+        // characters it makes belong to the capture (Alt+F4 still closes the game).
+        if(s->capturing&&s->visible&&!s->stopped&&!(m==WM_SYSKEYDOWN&&a==VK_F4)){
+            if(key_down){if(!repeat)s->capture_key(UINT(a));return 0;}
+            if(key_up||m==WM_CHAR||m==WM_SYSCHAR||m==WM_DEADCHAR||m==WM_SYSDEADCHAR)return 0;
+        }
+        // The hotkey: its key with exactly its Ctrl / Shift / Alt, read from the
+        // real key state (the game's GetKeyState answers "up" while the panel is open).
+        const auto key=s->hotkeys.current();
+        if(!s->stopped&&!s->failed&&s->bound&&key_down&&a==key.vk&&(repeat?s->held_vk==key.vk:hotkey::modifiers_match(key,input_block::real_key_state))){
+            if(!repeat){s->held_vk=key.vk;const bool was=s->visible;
 #ifdef LAB_OVERLAY_RESEARCH
-            if(!(b&(1LL<<30))){if(s->capture_hidden&&s->visible){s->capture_override=true;s->visibility(true);}else{s->capture_override=false;s->visibility(!s->visible);}}return 0;}
+                if(s->capture_hidden&&s->visible){s->capture_override=true;s->visibility(true);}else{s->capture_override=false;s->visibility(!s->visible);}
 #else
-            if(!(b&(1LL<<30)))s->visibility(!s->visible);return 0;}
+                s->visibility(!s->visible);
 #endif
-        if(!s->stopped&&s->bound&&(m==WM_KEYUP||m==WM_SYSKEYUP)&&a==s->hotkey.load())return 0;
+                if(!was&&s->visible)s->release_modifiers(w,key);}
+            return 0;}
+        if(key_up&&s->held_vk!=0&&a==s->held_vk){s->held_vk=0;return 0;}
         if(s->visible&&!s->stopped){
             // Keep the user's normal window-close command; do not trap Alt+F4.
             if(m==WM_SYSKEYDOWN&&a==VK_F4)return CallWindowProcW(s->original_proc,w,m,a,b);
@@ -371,7 +423,7 @@ struct GameOverlay::Impl {
         product::wordmark(dpi);
         ImGui::SameLine(ImGui::GetWindowWidth()-ImGui::GetStyle().WindowPadding.x-44*dpi);
         if(ImGui::SmallButton("收起"))visibility(false);mark("close");
-        const char* key_name=hotkey==VK_F7?"F7":hotkey==VK_F8?"F8":hotkey==VK_F9?"F9":"Insert";
+        const auto key_name=hotkeys.current_name();
         ImGui::Spacing();
         const auto panel=nr_panel(status,true,false,"@embedded",false);bool on=nr::executes(panel.requested);
         const auto nr=status.value("nr_runtime",json());
@@ -585,10 +637,21 @@ struct GameOverlay::Impl {
 #else
             ImGui::TextDisabled("原始数据采集仅研究版本支持。");
 #endif
-            const char* keys[]{"Insert","F7","F8","F9"};const UINT values[]{VK_INSERT,VK_F7,VK_F8,VK_F9};int selected=0;for(int i=0;i<4;++i)if(hotkey==values[i])selected=i;
             ImGui::Spacing();ImGui::Separator();ImGui::Spacing();product::eyebrow("面板设置");
-            ImGui::TextUnformatted("快捷键");ImGui::SetNextItemWidth(-1);
-            if(ImGui::Combo("##panel_hotkey",&selected,keys,4))hotkey=values[selected];mark("hotkey");
+            // The same setting as the desktop program's 设置 → 面板快捷键: every
+            // game and the launcher use it, and a change applies at once.
+            ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("快捷键");ImGui::SameLine(label_x);
+            product::pill(key_name.c_str());mark("hotkey");
+            const bool rebinding=capturing.load();
+            if(rebinding){if(ImGui::Button("取消##hotkey",{96*dpi,0})){capturing=false;capture_refusal=0;}mark("hotkey_cancel");}
+            else{if(ImGui::Button("修改##hotkey",{96*dpi,0})){capture_refusal=0;capturing=true;}mark("hotkey_change");
+                ImGui::SetItemTooltip("按下新的组合键。所有游戏和启动器共用这个设置。");}
+            ImGui::SameLine();
+            if(ImGui::Button("恢复默认（Insert）")){capturing=false;capture_refusal=0;(void)hotkeys.set(hotkey::kDefault);}mark("hotkey_reset");
+            if(rebinding)ImGui::TextColored(accent,"请按下新的快捷键，可加 Ctrl / Shift / Alt。Esc 取消。");
+            if(const auto why=hotkey::Refusal(capture_refusal.load());why!=hotkey::Refusal::none)ImGui::TextColored(warning,"%s",hotkey::refusal_text(why));
+            else if(!rebinding)ImGui::TextDisabled("所有游戏共用，修改后立即生效。");
+            if(const auto hotkey_error=hotkeys.error();!hotkey_error.empty())ImGui::TextColored(warning,"%s",hotkey_error.c_str());
             ImGui::TextUnformatted("面板白电平");ImGui::SetNextItemWidth(-1);
             ImGui::SliderFloat("##panel_white",&paper_white,80,300,"%.0f nits");mark("paper_white");
             ImGui::Text("输出：%s",space==DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709?"scRGB":space==DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020?"HDR10 / PQ":"SDR / sRGB");
@@ -596,14 +659,14 @@ struct GameOverlay::Impl {
             const auto saved_error=preferences.error();if(!saved_error.empty())ImGui::TextWrapped("界面设置未保存：%s",saved_error.c_str());
             if(!preference_error.empty())ImGui::TextWrapped("界面设置未保存：%s",preference_error.c_str());
             ImGui::PopTextWrapPos();}
-        ImGui::Spacing();ImGui::TextDisabled("%s 收起  ·  Esc 返回游戏",key_name);
-        {OverlayPreferences current;current.hotkey=hotkey.load();current.white=paper_white;
+        ImGui::Spacing();ImGui::TextDisabled("%s 收起  ·  Esc 返回游戏",key_name.c_str());
+        {OverlayPreferences current;current.hotkey=saved_model.hotkey;current.white=paper_white;
          if(settings_loaded){current.has_model=true;current.tone=tone;current.structure=structure;current.style=unsigned(model_style);current.exposure_stops=exposure_stops;current.exposure_auto=exposure_auto?1u:0u;current.skin=skin;current.automask=automask?1u:0u;
              current.extrapolate=extrapolate?1u:0u;current.extrapolate_factor=extrapolate_factor;current.network=unsigned(network);current.compare_split_position=compare_split_position;}
          // A settings file must never take the panel down. A file range check
          // narrower than the slider's (-6..10 against -12..10) once made this
-         // throw on every frame: render failed, the panel hid, and each Insert
-         // re-failed on its first frame.
+         // throw on every frame: render failed, the panel hid, and each hotkey
+         // press re-failed on its first frame.
          try{preferences.save(current.document());preference_error.clear();}
          catch(const std::exception& e){preference_error=e.what();}}
         ImGui::End();ImGui::PopFont();if(!open)visibility(false);
@@ -794,7 +857,7 @@ void GameOverlay::resized_default_queue(IDXGISwapChain3* chain)noexcept{
 }
 bool GameOverlay::bound()const noexcept{return p_->bound.load();}
 void GameOverlay::show()noexcept{auto& s=*p_;if(s.stopped||s.failed||!s.bound)return;try{s.visibility(true);}catch(...){}}
-void GameOverlay::stop()noexcept{auto& s=*p_;if(s.stopped.exchange(true))return;s.bound=false;s.visibility(false);s.preferences.close();std::lock_guard lock(s.mutex);
+void GameOverlay::stop()noexcept{auto& s=*p_;if(s.stopped.exchange(true))return;s.bound=false;s.visibility(false);s.preferences.close();s.hotkeys.close();std::lock_guard lock(s.mutex);
     if(s.window&&IsWindow(s.window)){
         if(reinterpret_cast<WNDPROC>(GetWindowLongPtrW(s.window,GWLP_WNDPROC))==&Impl::procedure)SetWindowLongPtrW(s.window,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(s.original_proc));
         else s.input_hook_retained=true;
@@ -807,9 +870,11 @@ json GameOverlay::snapshot()const{const auto& s=*p_;std::lock_guard lock(s.mutex
     {"color_space",unsigned(s.space)},{"failed",s.failed.load()},{"error",s.error},{"controls",s.controls},{"hidden_draws",0},{"automatic_sampling",false},
     {"bound",s.bound.load()},{"attaches",s.attaches},{"detaches",s.detaches},{"rebinds",s.rebinds},{"reshapes",s.reshapes},
     {"back_buffers","acquired per present, released after recording; none held between presents"},
+    {"hotkey",s.hotkeys.current_name()},{"hotkey_source",hotkey::source_name(s.hotkeys.source())},{"hotkey_revision",s.hotkeys.revision()},
+    {"hotkey_capturing",s.capturing.load()},{"hotkey_refusal",hotkey::refusal_text(hotkey::Refusal(s.capture_refusal.load()))},{"hotkey_error",s.hotkeys.error()},
 #ifdef LAB_OVERLAY_RESEARCH
-    {"capture_hidden",s.capture_hidden.load()},{"capture_override",s.capture_override.load()},{"hotkey",s.hotkey.load()}};}
+    {"capture_hidden",s.capture_hidden.load()},{"capture_override",s.capture_override.load()}};}
 #else
-    {"hotkey",s.hotkey.load()}};}
+    };}
 #endif
 }

@@ -38,7 +38,7 @@ You also need the model in place (see [MODEL.md](MODEL.md)).
    - records the transaction.
 
    If any step fails, the files written so far are removed, and you are told which step failed.
-5. **Play.** Start the game normally. In its graphics settings, turn on DLSS: Ray Reconstruction if available (usually needs ray tracing or path tracing on), otherwise Super Resolution or DLAA. Press **Insert**, and tick *Enable Neural Rendering*.
+5. **Play.** Start the game normally. In its graphics settings, turn on DLSS: Ray Reconstruction if available (usually needs ray tracing or path tracing on), otherwise Super Resolution or DLAA. Press the panel hotkey (**Insert** by default; it can be changed under *设置 → 面板快捷键*), and tick *Enable Neural Rendering*.
 
 ### What to look at in the panel the first time
 
@@ -72,7 +72,7 @@ Useful `make-package` options:
 | Option | When to use it |
 |---|---|
 | `--late` | The game refuses a proxy DLL in its folder: it crashes at start with only Overglaze's `dxgi.dll` present. Overglaze then loads after the game starts. The Games page uses this for every game whose EXE carries Denuvo. |
-| `--root-proxy-on-insert` | The proxy DLL only forwards until the first Insert press, and then loads Overglaze. |
+| `--root-proxy-on-insert` | The proxy DLL only forwards until the first press of the panel hotkey (Insert by default), and then loads Overglaze. |
 | `--binding-preservation` | The game crashes in the graphics driver right after NR first runs. This usually means the game keeps recording commands after the upscaler without setting its state again. With this option, Overglaze restores the game's bindings after inserting NR. |
 | `--exposure <stops>` | Default input exposure for the panel. Automatic metering usually makes this unnecessary. |
 
@@ -88,7 +88,7 @@ On the Streamline route, the viewport and depth type are read from the game's ow
      "<Overglaze root>\app\overglaze_launch.exe" %command%
      ```
 
-     The launcher starts the game unchanged. The first time you press Insert with the game in front, Overglaze loads and the panel opens. For a game without a late-load package, the launcher just starts it.
+     The launcher starts the game unchanged. The first time you press the panel hotkey (Insert by default) with the game in front, Overglaze loads and the panel opens. For a game without a late-load package, the launcher just starts it.
    - **Other launchers:** `overglaze_games watch` waits for late-load games to start and loads Overglaze into each one once. Or, with the game running, use `overglaze_games attach <id> --pid <PID>`.
 3. The panel appears after Overglaze has seen which queue presents the game's frames, which takes about 60 frames. Until then the panel stays hidden.
 

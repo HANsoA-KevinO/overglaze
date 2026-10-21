@@ -43,7 +43,7 @@ OWNERSHIP = json.loads((ROOT / "source/native/OWNERSHIP.json").read_text(encodin
 ALLOWED_LIBRARIES = {
     "lab_controller_host", "lab_core", "lab_provider", "lab_live_runtime_client",
     "lab_indirect_observer",
-    "lab_overlay", "lab_ui_preferences", "lab_imgui", "lab_native_resume",
+    "lab_overlay", "lab_ui_preferences", "lab_panel_hotkey", "lab_imgui", "lab_native_resume",
     "lab_capture_library", "lab_preview_export", "lab_pair_preview", "minhook",
     "x64",  # the toolchain's own import/runtime members, e.g. x64:asm.obj
 }
