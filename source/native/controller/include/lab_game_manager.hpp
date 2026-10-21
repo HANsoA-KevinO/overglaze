@@ -118,7 +118,8 @@ struct Status {
     bool installed=false,can_install=false,can_uninstall=false,can_make_package=false,can_refresh_package=false,running=false;
     // Installed and something newer exists: the package no longer matches the
     // installed files (needs-update), or the package itself is behind the
-    // published host, or only the proxy differs (update-available).
+    // published host or the program's current model (another model was
+    // imported), or only the proxy differs (update-available).
     bool update_available=false;
     json preflight=nullptr;
     // ---- axes
@@ -135,7 +136,10 @@ struct Status {
     std::string load_mode;
     struct Update {
         bool host=false,bridge=false,config=false,proxy=false; // installed file != package payload
-        bool package_behind_published=false;                  // package payload != published host of its track
+        // package payload != published host of its track, or its model != the
+        // usable model now in app\models (reasons name which: parts "model",
+        // model-update-available). update() then refreshes the package first.
+        bool package_behind_published=false;
     } update;
     // What the in-game host would decide at start-up, checked here first:
     // ok | needs-update (the manifest no longer names the installed
@@ -212,9 +216,20 @@ struct ModelStatus {
     // changes what is accepted.
     std::string file_version,signer,classification;
     std::optional<bool> nvidia_signed;
+    // Set only by import_model() when it replaced a different model in
+    // app\models: the outgoing file's SHA-256 and file version (empty when none
+    // could be read), and where that file is kept now (the shared model store,
+    // _models\<sha256>\nvngx_dlssnr.dll under the manager's data).
+    std::string replaced_sha256,replaced_version;
+    std::filesystem::path replaced_kept;
     bool usable()const noexcept{return present&&error.empty()&&(known||unrecognized_allowed);}
 };
 json model_json(const ModelStatus&);
+// What an import that replaced the model says, through the code table
+// (model-replaced: the old and the new file version, or the first 12 hex of
+// the SHA-256, and that installed games need 更新插件). Empty code when the
+// import replaced nothing.
+Reason model_replacement(const ModelStatus&);
 // What an NR model file says about itself, read WITHOUT loading or executing
 // it: the file version from its version resource (GetFileVersionInfoExW maps
 // the file as data) and its Authenticode signature (WinVerifyTrust with
@@ -351,7 +366,8 @@ public:
     void install(const std::string& id,bool risk_accepted,const std::string& consent,const Progress& progress={});
     void uninstall(const std::string& id,bool confirmed,const Progress& progress={});
     // One user operation: when the package is behind the published host of
-    // its track, re-run the refresh gates first, then uninstall, refresh the
+    // its track or the program's current model, re-run the refresh gates
+    // first, then uninstall, refresh the
     // package and install; otherwise uninstall and install the package's
     // current payload. Same consent rules as install(). Only when
     // update_available. If anything fails after the uninstall the game is left
@@ -371,9 +387,16 @@ public:
     void migrate(const std::string& id,bool risk_accepted,const std::string& consent,const Progress& progress={});
     ModelStatus model_status() const;
     // User-selected file, reviewed SHA only -- or any file once unrecognized
-    // models are allowed. Existing different content is refused; a matching
-    // model is reused. No DLL is loaded by this operation. A refused file is
-    // described first (read_model_facts) and the refusal says which case it is
+    // models are allowed. A matching model is reused. A different model already
+    // in app\models is replaced, but only by a file that passes these same
+    // rules, and only after the outgoing file is kept (copied by handle,
+    // verified by SHA-256) in the shared model store, unless an identical copy
+    // is already there; the new file is written beside it under a temporary
+    // name, flushed and verified, then renamed over it, so on any failure the
+    // old file stays in place. The result names what was replaced
+    // (replaced_*). Installed games keep their own copies until updated. No DLL
+    // is loaded by this operation. A refused file is described first
+    // (read_model_facts) and the refusal says which case it is
     // (model_explanation): a newer original, an NVIDIA-signed file not
     // reviewed, or no valid NVIDIA signature.
     ModelStatus import_model(const std::filesystem::path&);

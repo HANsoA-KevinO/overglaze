@@ -758,12 +758,13 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
       const auto mj=lab::games::model_json(ms);need(mj["reason"]["code"]=="model-unrecognized-allowed"&&mj["usable"]==true&&mj["known"]==false&&mj["unrecognized_allowed"]==true,"the status says unrecognized and allowed");
       need(lab::games::render(lab::games::Reason{"model-unrecognized-allowed",{{"hash",ms.sha256}}}).find("风险自负")!=std::string::npos&&
            lab::games::render("model-unrecognized-notice").find("只校验原版")!=std::string::npos,"and says it is at the user's own risk");}
-     // Import: refused while off, as before; accepted while on, never over a different file.
+     // Import: refused while off, as before; accepted while on (a different
+     // model in place is then replaced -- below, with a game installed).
      const auto same=root/L"incoming-model.dll",other=root/L"incoming-other.dll";
      fs::copy_file(root/L"app/models/nvngx_dlssnr.dll",same);put(other,"another unrecognized model");
      reject([&]{off.import_model(same);},"an unrecognized model is not imported while the setting is off");
-     {const auto im=on.import_model(same);need(im.present&&!im.known&&im.unrecognized_allowed&&im.sha256==model_hash,"allowed: imported (the identical file in place is reused)");}
-     reject([&]{on.import_model(other);},"a different file already in app\\models is never overwritten, allowed or not");
+     {const auto im=on.import_model(same);need(im.present&&!im.known&&im.unrecognized_allowed&&im.sha256==model_hash&&im.replaced_sha256.empty(),"allowed: imported (the identical file in place is reused)");}
+     reject([&]{off.import_model(other);},"while off, another unrecognized model replaces nothing");
      need(lab::sha256(root/L"app/models/nvngx_dlssnr.dll")==model_hash,"the model in place is untouched");
      // Packaging.
      auto g=on.add(root/L"game12/Twelve.exe");
@@ -797,8 +798,72 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
       bool refused=false;try{(void)lab::load_installation_file(cfgp,exe_j,host_j);}catch(const std::exception& e){refused=std::string(e.what()).find("Pinned model")!=std::string::npos;}
       need(refused,"a pin that is not the package's own model is refused by the host");
       put(man_path,manifest.dump(2));}
-     on.uninstall(g.id,true);need(!fs::exists(root/L"game12/overglaze")&&!fs::exists(root/L"game12/dxgi.dll"),"uninstalled");on.forget(g.id);
+     // Another model imported while the game is installed: the old one is kept
+     // first, the game keeps its own copy and offers 更新插件, which moves it
+     // to the new model through a package refresh.
+     const auto other_hash=lab::sha256(other);const auto kept_first=store/L"_models"/lab::wide(model_hash)/L"nvngx_dlssnr.dll";
+     {const auto im=on.import_model(other);
+      need(im.replaced_sha256==model_hash&&im.replaced_kept==kept_first&&lab::sha256(kept_first)==model_hash&&lab::sha256(root/L"app/models/nvngx_dlssnr.dll")==other_hash,
+           "the program's model is replaced, the old one kept in the shared model store");
+      const auto s=st(on,g);
+      need(s.state=="installed"&&s.install_state=="update-available"&&s.health=="ok"&&s.update.package_behind_published&&s.can_update&&!s.refusals.contains("update")&&
+           lab::sha256(root/L"game12/overglaze/nvngx_dlssnr.dll")==model_hash,"installed: still on its own copy, an update offered");
+      const auto words=lab::games::render(s.reasons.front());
+      need(s.reasons.front().code=="model-update-available"&&words.find("更新插件")!=std::string::npos&&words.find(other_hash.substr(0,12))!=std::string::npos&&words.find(model_hash.substr(0,12))!=std::string::npos,
+           "the primary reason names both models and points to 更新插件: "+words);
+      need(lab::games::present(s).label=="label.update-available"&&check_named(s.checks,"local-model")&&check_named(s.checks,"local-model")->reason=="model-update-available","有更新, with a named check");
+      need(st(off,g).install_state=="installed","while off, the unrecognized model in place offers no update to it");
+      on.update(g.id,true,"fixture consent: the program's model changed");
+      need(st(on,g).install_state=="installed"&&lab::sha256(root/L"game12/overglaze/nvngx_dlssnr.dll")==other_hash&&read(root/L"game12/overglaze/overglaze.install.json")["model_sha256"]==other_hash,
+           "after 更新插件 the game uses the new model, pinned");
+      // Back to the first model, imported from the kept copy: an update is offered again.
+      const auto back=on.import_model(kept_first);
+      need(back.replaced_sha256==other_hash&&lab::sha256(root/L"app/models/nvngx_dlssnr.dll")==model_hash&&lab::sha256(store/L"_models"/lab::wide(other_hash)/L"nvngx_dlssnr.dll")==other_hash&&
+           st(on,g).reasons.front().code=="model-update-available","switched back from the kept copy");}
+     on.uninstall(g.id,true);need(!fs::exists(root/L"game12/overglaze")&&!fs::exists(root/L"game12/dxgi.dll"),"uninstalled");
+     // Not installed, with a package made for the other model: refresh it.
+     {const auto s=st(on,g);const auto* why=[&]()->const lab::games::Reason*{for(const auto& r:s.reasons)if(r.code=="package-model-changed")return &r;return nullptr;}();
+      need(s.state=="package-stale"&&s.can_refresh_package&&!s.can_install&&why&&lab::games::render(*why).find("刷新适配包")!=std::string::npos&&lab::games::present(s).actions.front().name=="refresh-package",
+           "a package for another model asks for 刷新适配包, not a blocked state");}
+     on.forget(g.id);
      fs::remove_all(root/L"app/adapters/twelve");fs::remove(same);fs::remove(other);}
+    // ---- switching models: an accepted import replaces a different model in
+    // app\models, only after the outgoing file is kept in the shared model
+    // store. Both models are accepted through the tests' synthetic-hash hook,
+    // in a throwaway root.
+    {namespace mg=lab::games;constexpr auto npos=std::string::npos;
+     const auto r=root/L"model-switch-root";need(fs::create_directory(r),"switch root");
+     const auto a=root/L"model-a.dll",b=root/L"model-b.dll",refused=root/L"model-refused.dll",target=r/L"app/models/nvngx_dlssnr.dll";
+     put(a,"synthetic model A, never loaded");put(b,"synthetic model B, never loaded, a little longer");put(refused,"synthetic model that no hook accepts");
+     const auto ha=lab::sha256(a),hb=lab::sha256(b);const auto models=r/L"data/settings/plugin-manager/_models";
+     auto kept=[&](const std::string& h){return models/lab::wide(h)/L"nvngx_dlssnr.dll";};
+     auto listing=[&]{std::set<std::wstring> out;std::error_code ec;if(fs::exists(models,ec))for(const auto& f:fs::recursive_directory_iterator(models))
+         out.insert(f.path().wstring()+L"|"+(f.is_regular_file()?lab::wide(lab::sha256(f.path())):std::wstring(L"dir")));return out;};
+     auto staged=[&]{unsigned n=0;for(const auto& f:fs::directory_iterator(r/L"app/models"))if(f.path().filename().wstring().starts_with(L".model-import-"))++n;return n;};
+     {const auto im=mg::Manager(r,std::vector<mg::Policy>{},ha,false).import_model(a);
+      need(im.known&&im.replaced_sha256.empty()&&mg::model_replacement(im).code.empty()&&lab::sha256(target)==ha,"A imported into an empty models folder: nothing replaced");}
+     // A file that would be refused never replaces anything, and keeps nothing.
+     {const auto before=listing();reject([&]{mg::Manager(r,std::vector<mg::Policy>{},ha,false).import_model(refused);},"a refused file is refused while A is in place");
+      need(lab::sha256(target)==ha&&listing()==before&&staged()==0,"A untouched, the model store unchanged");}
+     // B accepted: A is kept first, then replaced by B.
+     {mg::Manager with_b(r,std::vector<mg::Policy>{},hb,false);const auto im=with_b.import_model(b);
+      need(im.known&&im.sha256==hb&&lab::sha256(target)==hb,"app\\models now holds B");
+      need(im.replaced_sha256==ha&&im.replaced_kept==kept(ha)&&lab::sha256(kept(ha))==ha,"A is kept in the shared model store, with its hash");
+      const auto text=mg::render(mg::model_replacement(im));
+      need(text.find("已更换模型：SHA-256 "+ha.substr(0,12)+" → SHA-256 "+hb.substr(0,12))!=npos&&text.find("「更新插件」")!=npos&&text.find("随时可以重新导入")!=npos,"the result says what was replaced and what to do: "+text);
+      const auto j=mg::model_json(im);need(j["replaced"]["sha256"]==ha&&fs::path(lab::wide(j["replaced"]["kept_at"].get<std::string>()))==kept(ha)&&j["replaced_text"]==text,"the JSON carries the replacement");
+      const auto again=with_b.import_model(b);need(again.replaced_sha256.empty()&&lab::sha256(target)==hb&&staged()==0,"importing B again is a no-op");
+      need(mg::model_json(with_b.model_status())["replaced"].is_null(),"a plain status carries no replacement");}
+     // A failure at the replace itself (a read-only target) leaves the original in place.
+     {need(SetFileAttributesW(target.c_str(),FILE_ATTRIBUTE_READONLY)!=FALSE,"read-only target");
+      std::string message;try{mg::Manager(r,std::vector<mg::Policy>{},ha,false).import_model(a);}catch(const std::exception& x){message=x.what();}
+      need(SetFileAttributesW(target.c_str(),FILE_ATTRIBUTE_NORMAL)!=FALSE,"target writable again");
+      need(message.find("原来的模型仍在原处")!=npos&&lab::sha256(target)==hb&&staged()==0,"a failed replace leaves B where it was: "+message);
+      need(lab::sha256(kept(hb))==hb,"B was kept before the replace was tried");}
+     // Back to A, imported from its kept copy.
+     {const auto im=mg::Manager(r,std::vector<mg::Policy>{},ha,false).import_model(kept(ha));
+      need(im.replaced_sha256==hb&&lab::sha256(target)==ha&&lab::sha256(kept(ha))==ha&&lab::sha256(kept(hb))==hb,"switched back from the kept copy; both copies kept");}
+     fs::remove_all(r);fs::remove(a);fs::remove(b);fs::remove(refused);}
     // ================================================================ a check that cannot run is "unknown"
     put(root/L"game8/Locked.exe",pe64(standard,"locked"));put(root/L"game8/sl.interposer.dll","sl");put(root/L"game8/sl.dlss_d.dll","dlss_d");
     {lab::Handle hold(CreateFileW((root/L"game8/Locked.exe").c_str(),GENERIC_READ,0,nullptr,OPEN_EXISTING,0,nullptr));need(hold.valid(),"exclusive fixture handle");

@@ -100,7 +100,9 @@ int wmain(int argc,wchar_t** argv){if(argc>1)return child(argc,argv);fs::path ba
     const auto unknown=base/L"unsupported.dll";put(unknown,std::string("Unknown synthetic model"));
     refuses([&]{manager.import_model(unknown);},"unknown version cannot replace the model");need(lab::sha256(manager.model_file())==hash,"refused import preserves destination");
     put(manager.model_file(),std::string("User existing different content"));const auto before=lab::sha256(manager.model_file());
-    refuses([&]{manager.import_model(source);},"different existing destination not overwritten");need(lab::sha256(manager.model_file())==before,"different destination preserved");
+    {const auto replaced=manager.import_model(source);
+     need(replaced.replaced_sha256==before&&lab::sha256(manager.model_file())==hash,"an accepted import replaces a different destination");
+     need(replaced.replaced_kept.filename()==L"nvngx_dlssnr.dll"&&lab::sha256(replaced.replaced_kept)==before,"the outgoing file is kept, verified, in the shared model store");}
     const auto hardlink=base/L"alias.dll";need(CreateHardLinkW(hardlink.c_str(),source.c_str(),nullptr)!=FALSE,"hard-link fixture created");
     refuses([&]{manager.import_model(hardlink);},"hard-linked model source refused");fs::remove(hardlink);
     unsigned temporary=0;for(const auto& item:fs::directory_iterator(manager.models_dir()))if(item.path().filename().native().find(L".model-import-")==0)++temporary;

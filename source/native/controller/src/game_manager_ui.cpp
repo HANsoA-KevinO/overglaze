@@ -303,7 +303,8 @@ void GameManagerPage::draw(HWND window,float dpi){
         // These three preparation states get concise navigation copy. The
         // complete backend reasons, including refusals, remain in the fold.
         if(s.state=="needs-package")muted_text("已识别 DLSS，尚无适配包。");
-        else if(s.state=="package-stale")muted_text("适配包需要刷新。");
+        else if(s.state=="package-stale"){const auto changed=std::find_if(s.reasons.begin(),s.reasons.end(),[](const games::Reason& r){return r.code=="package-model-changed";});
+            muted_text(changed!=s.reasons.end()?games::render(*changed).c_str():"适配包需要刷新。");}
         else if(s.state=="available")muted_text("当前游戏版本可安装。");
         else if(!s.reasons.empty())ImGui::TextWrapped("%s",games::render(s.reasons.front()).c_str());
         if(s.running){gap(6*dpi);ImGui::TextColored(ink(games::Tone::warning),"%s",games::render("game-running").c_str());}

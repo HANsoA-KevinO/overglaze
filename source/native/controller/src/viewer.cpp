@@ -300,6 +300,13 @@ struct View {
             if(ready){if(!model.label.empty())ImGui::TextWrapped("%s",model.label.c_str());
                 ImGui::TextDisabled("%s 打开游戏内面板。NR 默认关闭。",lab::games::panel_hotkey_text().c_str());}
             else ImGui::TextWrapped("模型需自行提供，也可稍后导入。");
+            // The import just replaced a different model: what changed, that
+            // installed games need 更新插件, and where the old file is kept.
+            if(!model_job.valid()&&model_checked&&setup_error.empty())
+                if(const auto replaced=lab::games::model_replacement(model);!replaced.code.empty()){
+                    ImGui::PushStyleColor(ImGuiCol_Text,lab::product::accent);ImGui::TextWrapped("%s",lab::games::render(replaced).c_str());ImGui::PopStyleColor();
+                    ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    ImGui::TextWrapped("%s",lab::games::render("model-replaced-kept",lab::json{{"path",lab::utf8(model.replaced_kept.wstring())}}).c_str());ImGui::PopStyleColor();}
             // The model in place that is not a reviewed version says what it is
             // (a refused import already says it in its own message below).
             if(setup_error.empty()&&!model_job.valid()&&model_checked&&model.present&&!model.known&&model.error.empty())

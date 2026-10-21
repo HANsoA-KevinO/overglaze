@@ -2,6 +2,14 @@
 
 All notable changes to Overglaze are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Importing a model now replaces a different model already in `app\models` instead of refusing with *模型目录已有不同文件；请先核对该文件，不会自动覆盖*, so switching between 310.8.0.0 and 310.9.16.0, or replacing a model, is just *导入模型*. The new file must pass the same checks as before (a known version, or an unrecognized one with *允许使用未识别的模型* on); a refused file never replaces anything, and importing the same file again changes nothing. Before anything is replaced, the outgoing file is copied by handle into Overglaze's own model store (`data\settings\plugin-manager\_models\<SHA-256>\nvngx_dlssnr.dll`, the store recovery copies already share) and verified by SHA-256, unless an identical copy is already there. The new file is then written beside the old one under a temporary name, flushed and verified, and renamed over it; on any failure the old file stays in place. The model setup screen says what happened, for example *已更换模型：310.8.0.0 → 310.9.16.0。已装游戏要在游戏库点一次「更新插件」才会用上新模型；原来的模型已保存在釉光的模型库中，随时可以重新导入。*, and where the old file is kept. `overglaze_games import-model` reports it as `replaced` and `replaced_text`. No model is loaded or executed during an import.
+- Installed games keep their own copy of the model and keep working after a switch. The Game Library now shows *有更新* for each of them, with *釉光的模型已换成 …，这款游戏还在用 …* and *更新插件* as the way to move it to the new model (the update refreshes the package first, as for a newer plugin). A game without the plugin whose package was made for the previous model shows *适配包需要刷新* (*刷新适配包*) instead of the blocked *Lab 的本地 NR 模型与适配包清单不一致*. An update that needs the model and finds none usable in `app\models` is refused before anything is uninstalled.
+- The docs no longer tell you to move the model out of `app\models` by hand; see *Switching models* in [docs/MODEL.md](docs/MODEL.md#switching-models).
+
 ## [0.2.0-preview.9] - 2026-10-21
 
 ### Added

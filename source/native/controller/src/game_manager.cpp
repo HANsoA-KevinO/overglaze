@@ -310,6 +310,10 @@ constexpr const char* kModelName="nvngx_dlssnr.dll";
 // standing in for one. Anything else is unrecognized.
 bool reviewed_model(const std::string& sha,const std::string& test_sha){return test_sha.empty()?lab::model::known(sha)!=nullptr:sha==test_sha;}
 bool hex_sha256(const std::string& h){if(h.size()!=64)return false;for(const char c:h)if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')))return false;return true;}
+// How a model is named to the user: its file version when one is known (the
+// review's, or read from the file), else the first 12 hex of its SHA-256.
+std::string model_name(const std::string& sha,const std::string& version={}){
+    if(!version.empty())return version;if(const char* v=reviewed_file_version(sha))return v;return "SHA-256 "+sha.substr(0,12);}
 fs::path shared_models(const fs::path& store){return store/L"_models";}
 fs::path shared_model_file(const fs::path& store,const std::string& sha){need(hex_sha256(sha),"模型身份格式不对");return shared_models(store)/wide(sha)/L"nvngx_dlssnr.dll";}
 // Makes sure the shared copy for `sha` exists and is intact; copies it from the
@@ -705,7 +709,7 @@ std::vector<std::string> behind_published(const Policy& p,const std::map<std::st
     const auto proxy=p.loader.proxy_basename();
     if(!proxy.empty()&&p.payload.contains(proxy)&&published.contains(proxy)&&p.payload.at(proxy)!=published.at(proxy))parts.push_back("proxy");
     return parts;}
-bool conflict_code(const std::string& c){return c=="loader-conflict"||c=="foreign-loader"||c=="model-mismatch"||c=="package-payload-mismatch"||c=="local-model-mismatch"||c=="package-config-mismatch"||c=="published-host-missing"||
+bool conflict_code(const std::string& c){return c=="loader-conflict"||c=="foreign-loader"||c=="model-mismatch"||c=="package-payload-mismatch"||c=="package-config-mismatch"||c=="published-host-missing"||
     c=="model-missing"||c=="model-unknown-version";}
 // A present model that is not a reviewed version (and not allowed), with what
 // the file says about itself: the code table renders the classification, the
@@ -820,16 +824,30 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         s.health=broken?"needs-update":"ok";
         // ---- the package itself behind the published host of its track
         std::vector<std::string> newer;
-        if(full){try{newer=behind_published(*p,published_host(p->track));s.update.package_behind_published=!newer.empty();
+        // ---- or behind the program's model: another model was imported since
+        // this package was made. The game keeps working with its own copy; an
+        // update refreshes the package (which takes the model now in
+        // app\models) and reinstalls.
+        ModelStatus current;bool model_changed=false;
+        if(full){try{newer=behind_published(*p,published_host(p->track));
                 record(s,"published",newer.empty()?Outcome::pass:Outcome::fail,newer,newer.empty()?"":"package-behind-published");}
-            catch(const std::exception& ex){record(s,"published",Outcome::unknown,ex.what(),"published-unreadable");}}
+            catch(const std::exception& ex){record(s,"published",Outcome::unknown,ex.what(),"published-unreadable");}
+            current=model_status();
+            if(const auto pinned=p->payload.find(kModelName);pinned!=p->payload.end()&&current.usable()){model_changed=current.sha256!=pinned->second;
+                record(s,"local-model",model_changed?Outcome::fail:Outcome::pass,current.sha256,model_changed?"model-update-available":"");}}
+        s.update.package_behind_published=!newer.empty()||model_changed;
         s.update_available=broken||s.update.proxy||s.update.package_behind_published;
         s.install_state=broken?"needs-update":s.update_available?"update-available":"installed";
         json parts=json::array();if(s.update.host)parts.push_back("host");if(s.update.bridge)parts.push_back("bridge");if(s.update.config)parts.push_back("config");if(s.update.proxy)parts.push_back("proxy");
+        const Reason model_reason=model_changed?Reason{"model-update-available",{{"installed",model_name(p->payload.at(kModelName))},{"current",model_name(current.sha256,current.file_version)}}}:Reason{};
         if(broken)s.reasons.push_back({"needs-update",{{"parts",parts}}});
-        else if(s.update_available){for(const auto& n:newer)if(std::find(parts.begin(),parts.end(),n)==parts.end())parts.push_back(n);s.reasons.push_back({"update-available",{{"parts",parts}}});}
+        else if(s.update_available){for(const auto& n:newer)if(std::find(parts.begin(),parts.end(),n)==parts.end())parts.push_back(n);
+            // Only the model changed: say that, and that 更新插件 is the way.
+            if(model_changed&&parts.empty())s.reasons.push_back(model_reason);
+            else{if(model_changed)parts.push_back("model");s.reasons.push_back({"update-available",{{"parts",parts}}});}}
         else s.reasons.push_back({"installed"});
-        if(s.update.package_behind_published)s.reasons.push_back({"package-behind-published",{{"published",p->track=="controller"?"app/plugin":"app/research/host"}}});
+        if(!newer.empty())s.reasons.push_back({"package-behind-published",{{"published",p->track=="controller"?"app/plugin":"app/research/host"}}});
+        if(model_changed&&s.reasons.front().code!="model-update-available")s.reasons.push_back(model_reason);
         s.reasons.push_back(launch_reason(strategy,sub,root_,s.store));
         // An update that has to refresh the package re-runs the refresh gates
         // first; say now whether they would pass, rather than after an uninstall.
@@ -839,6 +857,12 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         if(full&&s.update_available)
             if(const auto addons=nr_addons(dir);!addons.empty())s.refusals["update"]=Reason{"loader-conflict",{{"files",addons},{"cause","nr-addon"}}};
         if(full&&s.update.package_behind_published&&!s.refusals.contains("update")){const auto why=refresh_refusal(*p,games::preflight(exe));if(!why.code.empty())s.refusals["update"]=why;}
+        // The refresh writes the model now in app\models into the package: with
+        // none usable (or an unrecognized one for a research package, whose V3
+        // config cannot pin it) it would stop after the uninstall, so say so now.
+        if(full&&s.update.package_behind_published&&!s.refusals.contains("update")){
+            if(!current.usable())s.refusals["update"]=current.present?unknown_model(current):Reason{"model-missing",{{"path",text(current.path)}}};
+            else if(!current.known&&p->track!="controller")s.refusals["update"]=unknown_model(current);}
         s.can_update=s.update_available&&!s.running&&!s.refusals.contains("update");
         return s;}}
     if(!p){const auto pre=games::preflight(exe);s.preflight=pre.to_json();s.route=pre.route;s.checks=pre.checks;s.store=pre.store;
@@ -940,17 +964,25 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
     if(full){
         bool payload_ok=true;for(const auto& n:{p->loader.basename,std::string("overglaze_nvngx.dll")})if(within("file-unreadable",[&]{return digest(p->directory/wide(n));})!=p->payload.at(n))payload_ok=false;
         gate(s,"package-payload",payload_ok,"package-payload-mismatch","适配包载荷与清单不一致");
+        Reason model_changed;
         {const auto m=model_status();
          gate(s,"local-model",m.present,"model-missing","找不到 NR 模型 nvngx_dlssnr.dll：本项目不包含、也不分发它，请自行准备并放进 "+text(m.path.parent_path()),json{{"path",text(m.path)}});
          // An unrecognized model passes only with the user's explicit opt-in.
          gate(s,"local-model",m.known||m.unrecognized_allowed,"model-unknown-version","这份 nvngx_dlssnr.dll 不是已审阅的版本，不使用。"+render(model_explanation(m)),unknown_model(m).params,m.sha256);
-         gate(s,"local-model",m.sha256==p->payload.at("nvngx_dlssnr.dll"),"local-model-mismatch","本地模型与适配包清单不一致",json::object(),m.sha256);}
+         // Another model was imported since this package was made: refreshing
+         // the package takes the current one (nothing is installed to keep).
+         const auto& pinned=p->payload.at("nvngx_dlssnr.dll");
+         if(m.sha256!=pinned){record(s,"local-model",Outcome::fail,m.sha256,"package-model-changed");
+             model_changed={"package-model-changed",{{"package",model_name(pinned)},{"current",model_name(m.sha256,m.file_version)}}};}
+         else record(s,"local-model",Outcome::pass,m.sha256);}
         gate(s,"package-config",!p->config_sha256.empty()&&within("file-unreadable",[&]{return digest(p->directory/L"overglaze.install.json");})==p->config_sha256,"package-config-mismatch","适配包配置与清单 config_sha256 不一致");
         const auto published=within("published-host-missing",[&]{return published_host(p->track);});
         const auto newer=behind_published(*p,published);
-        if(!newer.empty()){record(s,"published",Outcome::fail,newer,"package-stale");
+        if(!newer.empty()||!model_changed.code.empty()){
+            record(s,"published",newer.empty()?Outcome::pass:Outcome::fail,newer,newer.empty()?"":"package-stale");
             s.state="package-stale";s.can_refresh_package=true;
-            s.reasons.push_back({"package-stale",{{"published",p->track=="controller"?"app/plugin":"app/research/host"}}});
+            if(!newer.empty())s.reasons.push_back({"package-stale",{{"published",p->track=="controller"?"app/plugin":"app/research/host"}}});
+            if(!model_changed.code.empty())s.reasons.push_back(model_changed);
             return s;}
         record(s,"published",Outcome::pass);}
     s.state="available";s.can_install=!s.running;
@@ -1736,20 +1768,38 @@ ModelStatus Manager::import_model(const fs::path& source_path){
         throw Refusal("model-unknown-version",render(model_explanation(refused)),unknown_model(refused).params);}
     Writer writer(store_);directory(root_/L"app");directory(models_dir());pins.parents(models_dir());
     const auto destination=model_file();
-    if(fs::exists(destination)){
-        need(handle_digest(pins.file(destination))==hash,"模型目录已有不同文件；请先核对该文件，不会自动覆盖");
-    }else{
-        const auto staging=models_dir()/wide(".model-import-"+uuid()+".tmp");
-        try{copy_handle(source_handle,staging,hash);
-            need(MoveFileExW(staging.c_str(),destination.c_str(),MOVEFILE_WRITE_THROUGH)!=FALSE,"模型导入未完成：目标文件已存在或目录不可写");}
-        catch(...){DeleteFileW(staging.c_str());throw;}
-    }
     ModelStatus out;out.path=destination;out.present=true;out.sha256=hash;
     out.known=reviewed_model(hash,model_sha256_);out.unrecognized_allowed=!out.known;
     out.label=reviewed?reviewed->label:out.known?"test model":"";
     describe_model(out,source); // the source is still pinned and hash-identical to the copy
+    // The new file is written beside the destination under a temporary name,
+    // flushed and verified (copy_handle), and only then renamed into place.
+    const auto staging=models_dir()/wide(".model-import-"+uuid()+".tmp");
+    auto stage=[&]{try{copy_handle(source_handle,staging,hash);}catch(...){DeleteFileW(staging.c_str());throw;}};
+    if(!fs::exists(destination)){stage();
+        if(!MoveFileExW(staging.c_str(),destination.c_str(),MOVEFILE_WRITE_THROUGH)){DeleteFileW(staging.c_str());throw std::runtime_error("模型导入未完成：目标文件已存在或目录不可写");}
+        return out;}
+    // A model is already there. Held by handle (no one else can write, rename
+    // or delete it) until just before the rename that replaces it.
+    Pins held;const auto outgoing=held.file(destination);const auto old=handle_digest(outgoing);
+    if(old==hash)return out; // the same file again: nothing to do
+    {ModelStatus was;was.present=true;was.sha256=old;was.known=reviewed_model(old,model_sha256_);describe_model(was,destination);out.replaced_version=was.file_version;}
+    // Kept first, in the program's own model store (the one recovery copies
+    // share), copied from the held handle and verified by SHA-256 -- unless an
+    // identical, intact copy is already there. Nothing is replaced before this.
+    if(!fs::exists(shared_model_file(store_,old))){const auto needed=recovery_space_needed(file_bytes(outgoing));
+        need(fs::space(root_/L"data").available>=needed,"保存原来的模型需要数据盘至少 "+std::to_string((needed+(1ULL<<20)-1)>>20)+" MiB 可用空间；模型未更换");}
+    keep_shared_model(store_,outgoing,old);
+    stage();
+    held.handles.clear();
+    if(!MoveFileExW(staging.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){const auto error=GetLastError();DeleteFileW(staging.c_str());
+        throw std::runtime_error("模型更换未完成：无法替换 "+text(destination)+"（Windows 错误 "+std::to_string(error)+"，文件可能被占用或只读）；原来的模型仍在原处");}
+    out.replaced_sha256=old;out.replaced_kept=shared_model_file(store_,old);
     return out;
 }
+Reason model_replacement(const ModelStatus& m){
+    if(m.replaced_sha256.empty())return {};
+    return {"model-replaced",{{"from",model_name(m.replaced_sha256,m.replaced_version)},{"to",model_name(m.sha256,m.file_version)}}};}
 bool Manager::model_hash_usable(const std::string& sha256)const{return reviewed_model(sha256,model_sha256_)||allow_unrecognized_model_;}
 
 AppMaintenanceStatus app_maintenance_check(const fs::path& selected,const std::string& operation){
@@ -1863,6 +1913,9 @@ json model_json(const ModelStatus& m){json known=json::array();
         {"signer",m.signer.empty()?json(nullptr):json(m.signer)},
         {"classification",m.classification.empty()?json(nullptr):json(m.classification)},
         {"explanation",why.code.empty()?json(nullptr):reason_json(why)},{"explanation_text",why.code.empty()?json(nullptr):json(render(why))},
+        // An import that replaced a different model: what it was and where it is kept.
+        {"replaced",m.replaced_sha256.empty()?json(nullptr):json{{"sha256",m.replaced_sha256},{"file_version",m.replaced_version.empty()?json(nullptr):json(m.replaced_version)},{"kept_at",text(m.replaced_kept)}}},
+        {"replaced_text",m.replaced_sha256.empty()?json(nullptr):json(render(model_replacement(m)))},
         {"known_versions",known},
         {"scope","read-only. This project does not include or redistribute nvngx_dlssnr.dll; the user supplies their own copy. Overglaze verifies only the reviewed versions listed; "
                  "an unrecognized model is used only after the user explicitly allows it (--allow-unrecognized-model or the desktop setting), at the user's own risk, pinned by SHA-256 per install. "

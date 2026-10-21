@@ -10,12 +10,21 @@ Issues and pull requests that ask for the model, link to it, or attach it are cl
 
 ## Where to put it
 
-Copy the file to `app\models\nvngx_dlssnr.dll` in the Overglaze folder, next to the programs.
-
+Import it in the desktop program (*模型配置 → 导入模型*, or *设置 → 配置模型*; on the command line `overglaze_games import-model <file>`). It is checked and copied to `app\models\nvngx_dlssnr.dll` in the Overglaze folder, next to the programs. Copying the file there yourself also works.
 
 - Overglaze never modifies the file.
 - When you install Overglaze into a game, a copy of the model goes into Overglaze's own subfolder in that game. If an identical model is already there, it is reused.
 - Uninstalling removes only the copy Overglaze put there. A model that was in the game folder before is left alone.
+
+## Switching models
+
+To use another model, for example to switch between 310.8.0.0 and 310.9.16.0, import the other file the same way (*导入模型*, or *重新选择* once a model is configured). If it passes the checks below, it replaces the one in `app\models`:
+
+- The current file is kept first. It is copied into Overglaze's model store, `data\settings\plugin-manager\_models\<SHA-256>\nvngx_dlssnr.dll`, and the copy is verified by SHA-256; if an identical copy is already there, that one is kept instead. Only then is the new file written beside the old one under a temporary name, verified and renamed into place. If any step fails, the old file stays where it was.
+- A file that would be refused never replaces anything. Importing the same file again changes nothing.
+- The confirmation says what changed, for example *已更换模型：310.8.0.0 → 310.9.16.0*.
+- Installed games keep their own copy and keep working. Each one shows *有更新* in the Game Library; choose *更新插件* to move it to the new model. A game without the plugin whose package was made for the old model shows *适配包需要刷新*; choose *刷新适配包*, then install.
+- To go back, import the old file again, for example the copy kept in the model store.
 
 ## What is checked
 
@@ -55,7 +64,7 @@ An unrecognized model may not run, may produce a different image from the origin
 
 With the setting on, the checks above still apply, to that exact file:
 
-- importing accepts it, but never overwrites a different file already in `app\models`;
+- importing accepts it; a different model already in `app\models` is kept and then replaced, as in [Switching models](#switching-models);
 - the package generated for a game pins its SHA-256 in the game's installation config (`model_sha256`);
 - in the game, the in-game component loads a known version or exactly that pinned file, nothing else. If the file changes after installation, it is refused as before.
 
@@ -68,7 +77,7 @@ Installations made without the setting have no pin and keep accepting known vers
 | 310.8.0.0 | `e16bcf15e16e13f527491cdf7845b2fe6521a738d8f7c9c721866a8496e1fc8e` | 165,840,496 | Supported, tested |
 | 310.9.16.0 | `2bc19bc09a7b89dd44f73e2ac0108fcc586e2154bdd0830f242f4f040e28789f` | 266,424,944 | Supported, tested on the real-NR fixture |
 
-Both known versions take the same parameters; 310.9.16.0 adds one input Overglaze does not set (`DLSSNR.MaskBlendMode`). To switch between them, move the current file out of `app\models`, import the other one, then update each game's plugin so its package carries the new hash. 310.9.16.0 also carries two networks, chosen when NR starts: network 1 is the same as 310.8.0.0's only network and network 2, a newer and smaller one, is its default; the panel's *网络* setting (自动 / 1 / 2) picks one for comparison, and switching rebuilds NR and clears its history.
+Both known versions take the same parameters; 310.9.16.0 adds one input Overglaze does not set (`DLSSNR.MaskBlendMode`). To switch between them, import the other one, then choose *更新插件* for each installed game so its package carries the new hash (see [Switching models](#switching-models)). 310.9.16.0 also carries two networks, chosen when NR starts: network 1 is the same as 310.8.0.0's only network and network 2, a newer and smaller one, is its default; the panel's *网络* setting (自动 / 1 / 2) picks one for comparison, and switching rebuilds NR and clears its history.
 
 Other versions are refused until they have been tested and added here, unless you allow unrecognized models (above). If you have a different version of the original, open an issue with its file version and SHA-256 only. Never attach the file.
 

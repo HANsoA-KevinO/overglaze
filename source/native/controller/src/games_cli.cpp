@@ -48,7 +48,9 @@ const wchar_t* kVerbs=L" <verb> ...\n"
     L"  model                             the user-supplied NR model: where it is looked for, present, reviewed version, and\n"
     L"                                    for any other file its file version and NVIDIA signature, read as data (read-only)\n"
     L"  import-model <file> [--allow-unrecognized-model]\n"
-    L"                validate and import your model; existing different files are not overwritten. A refusal says\n"
+    L"                validate and import your model. A different model already in app\\models is kept first in the\n"
+    L"                shared model store (data\\settings\\plugin-manager\\_models), then replaced; installed games\n"
+    L"                use the new one after update. A refusal says\n"
     L"                which case the file is (newer original, NVIDIA-signed but not verified, no valid NVIDIA signature)\n"
     L"  --allow-unrecognized-model\n"
     L"                import-model, make-package, refresh-package, install, update, migrate, repin: also use a model\n"
@@ -113,7 +115,7 @@ int wmain(int argc,wchar_t** argv){
         // The desktop setting's command-line twin: off unless said here.
         m.allow_unrecognized_model(has(L"--allow-unrecognized-model"));
         if(verb=="import-model"){if(a.size()<2)throw std::runtime_error("import-model needs a file");auto result=lab::games::model_json(m.import_model(a[1]));
-            result["scope"]="User-selected model validated; identical destination reused or a verified copy imported. No DLL loaded.";
+            result["scope"]="User-selected model validated; identical destination reused or a verified copy imported. A different model in app\\models is kept in the shared model store (verified by SHA-256) before it is replaced. No DLL loaded.";
             std::cout<<result.dump(2)<<'\n';return 0;}
         // The user's risk acknowledgement, said on this command line or not at
         // all: the CLI's equivalent of the install dialog's button. The older
