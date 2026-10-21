@@ -6,11 +6,11 @@ Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Ren
 
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
-## 0.2.0-preview.8
+## 0.2.0-preview.9
 
-Clearer model imports and fewer refusals. When a model file is refused, the program now says why: an NVIDIA original newer than this version knows (update Overglaze), an NVIDIA-signed file it has not verified, or a file without a valid NVIDIA signature, with its file version and the start of its SHA-256. Other injection tools in a game folder (`version.dll`, `winmm.dll`, `d3d12.dll`, `dinput8.dll`, ReShade and the like) are now a notice in the install confirmation instead of a refusal; only a foreign `dxgi.dll` where Overglaze puts its own, or another DLSS 5 / NR add-on, still blocks the install. 0.2.0-preview.7 and later offer this version through the update notice.
+A rebindable panel key and a steadier update notice. The key that opens the in-game panel can now be changed (default Insert; a single key or with Ctrl / Shift / Alt) in Settings or in the panel itself, and late-loading games inject on that key too. A found update is remembered and shown again at every start, without waiting for the daily check. When the program cannot use one-click update because Windows has no uninstall entry for it, the reason now carries the Windows error code.
 
-The in-game plugin files are unchanged from 0.2.0-preview.5: games already updated for it need nothing, and games on an older plugin show *Update plugin* as before. The model is still supplied by you. This preview does not add game certifications or new image-quality, performance or stability results. See [CHANGELOG.md](CHANGELOG.md).
+After updating the application, choose *Update plugin* for each installed game: the in-game host and the root-directory proxy changed (the panel key). Until then a game keeps the fixed Insert key. The model is still supplied by you. This preview does not add game certifications or new image-quality, performance or stability results. See [CHANGELOG.md](CHANGELOG.md).
 
 ## What it does
 
