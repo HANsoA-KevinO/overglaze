@@ -37,7 +37,7 @@ Overglaze inserts the NR model, often called "DLSS 5", into games that already u
 - Microsoft Visual C++ v14 x64 runtime. Setup and runtime-enabled ZIPs include signed application-local DLLs. Packages built without them require a separately installed runtime at least as recent as the build tools; see [Microsoft's runtime downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
 - A DX12 game that uses DLSS Ray Reconstruction or Super Resolution, through Streamline or by calling NGX directly. See [SUPPORTED_GAMES.md](SUPPORTED_GAMES.md).
 - Your own copy of `nvngx_dlssnr.dll` (see [The model](#the-model)).
-- Free disk space. Installing keeps a reserve free on the drive that holds Overglaze's data folder (currently 30 GiB).
+- Free disk space. Installing keeps a reserve free on the drive that holds Overglaze's data folder (currently 1 GiB).
 
 NR is expensive. On an RTX 5090 at about 5K output, it added roughly 9–12 ms of GPU time per rendered frame in our measurements. Expect a large drop in frame rate.
 

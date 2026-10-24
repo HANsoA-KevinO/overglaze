@@ -16,7 +16,7 @@ const std::vector<BackendState> kStates{
 };
 // A refusal that means "this tool never offers it for this package": the
 // button is not shown at all; the reason is in the status text.
-bool structural(const std::string& code){return code=="repin-research-track"||code=="repin-compiled-row"||code=="repin-no-game-root";}
+bool structural(const std::string& code){return code=="repin-research-track"||code=="repin-no-game-root";}
 // Blocked by something in the game directory the user has to sort out.
 bool conflict(const std::string& code){return code=="loader-conflict"||code=="foreign-loader"||code=="foreign-bridge"||code=="model-mismatch";}
 }

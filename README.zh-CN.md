@@ -41,7 +41,7 @@
 - Microsoft Visual C++ v14 x64 运行库。安装包和带运行库的 ZIP 将微软签名的 DLL 放在程序旁边；不安装全局运行库。不带这些 DLL 的自建包仍需另行安装匹配的运行库，见 [微软官方下载说明](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)。
 - 使用 DLSS 光线重建或超分的 DX12 游戏，经由 Streamline 或直接调用 NGX 都可以。见 [SUPPORTED_GAMES.md](SUPPORTED_GAMES.md)。
 - 你自己的 `nvngx_dlssnr.dll`（见下文「模型」）。
-- 磁盘余量：安装时会在釉光数据文件夹所在的盘上保留一定空间（目前是 30 GiB）。
+- 磁盘余量：安装时会在釉光数据文件夹所在的盘上保留一定空间（目前是 1 GiB）。
 
 NR 很吃性能。我们在 RTX 5090、约 5K 输出下实测，每个渲染帧多出大约 9–12 ms 的 GPU 时间，帧率会明显下降。
 

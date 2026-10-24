@@ -129,8 +129,8 @@ int main(){try{
      const auto p=present(s);const auto* u=find(p,"update");need(u&&!u->enabled&&u->why_not.code=="update-refresh-refused","a gated update says why");}
     {auto s=shaped("changed","game-changed",false);s.can_repin=false;s.refusals["repin"]={"repin-unsigned-modules"};
      const auto p=present(s);const auto* r=find(p,"repin");need(r&&!r->enabled&&r->why_not.code=="repin-unsigned-modules","a gated repin is shown disabled with its reason");}
-    // A refusal by design (research track, compiled review row): not offered at all.
-    for(const auto* code:{"repin-research-track","repin-compiled-row","repin-no-game-root"}){auto s=shaped("changed","game-changed",false);s.can_repin=false;s.refusals["repin"]={code};
+    // A refusal by design (research track, no game root): not offered at all.
+    for(const auto* code:{"repin-research-track","repin-no-game-root"}){auto s=shaped("changed","game-changed",false);s.can_repin=false;s.refusals["repin"]={code};
         const auto p=present(s);need(!find(p,"repin"),std::string("a structural refusal hides repin: ")+code);}
     {auto s=shaped("changed","game-changed",false);s.installed=false;s.can_uninstall=false;const auto p=present(s);
      need(!find(p,"uninstall")&&find(p,"forget"),"a changed game without Lab files offers no uninstall");}

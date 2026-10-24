@@ -19,10 +19,13 @@ namespace lab::games {
 // startup check in core/src/installation.cpp and the bridge's in
 // runtime/src/nr_live_core.hpp) are compiled into the game side and are
 // deliberately separate from it.
-inline constexpr std::uint64_t kDataDiskReserveBytes=30ULL<<30;   // install: keep free on the Lab data disk
+// An install stages one model copy (about 250 MiB) and a few small files; the
+// 30 GiB this once was belonged to the research captures, which a game-side NR
+// controller never writes. Capture and export keep their own 30 GiB rule.
+inline constexpr std::uint64_t kDataDiskReserveBytes=1ULL<<30;    // install: keep free on the Lab data disk
 inline constexpr std::uint64_t kGameDiskMinimumBytes=512ULL<<20;  // install: free on the game's disk
 // Uninstall writes only a recovery copy of the files it removes, so it needs
-// that copy's size plus this margin -- not the 30 GiB install reserve.
+// that copy's size plus this margin -- not the install reserve.
 inline constexpr std::uint64_t kRecoveryCopyMarginBytes=64ULL<<20;
 inline constexpr std::uint64_t recovery_space_needed(std::uint64_t copy_bytes) noexcept {return copy_bytes+kRecoveryCopyMarginBytes;}
 // Storage retention: recovery copies the manager made under this rule, newest

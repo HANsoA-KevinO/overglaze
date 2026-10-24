@@ -413,6 +413,24 @@ fs::path game_root(const fs::path& exe_dir){std::error_code ec;fs::path d=exe_di
     return {};}
 std::string derive_package_name(const fs::path& exe){std::string s=lower_ascii(text(exe.stem())),out;for(char c:s){if((c>='a'&&c<='z')||(c>='0'&&c<='9'))out+=c;else if(!out.empty()&&out.back()!='-')out+='-';}
     while(!out.empty()&&out.back()=='-')out.pop_back();if(out.empty())out="game";if(out.size()>48)out.resize(48);if(!((out[0]>='a'&&out[0]<='z')||(out[0]>='0'&&out[0]<='9')))out="g"+out;return out;}
+// A compiled review row's profile id names that row's one EXE build: the
+// installation checker binds a config carrying it to the row's hash and refuses
+// every other build ("V3 facts diverge from the reviewed profile"). Any other
+// build -- a patch, another store -- carries an id of its own. Without this a
+// reviewed game patched after its row was written (2077, 2026-10-23) could
+// neither be re-adapted nor installed again.
+std::string build_profile_id(const profiles::Facts& f,const std::string& package,const std::string& exe_hash){
+    const auto* row=profiles::game(f.id);
+    if(!row||(lower_ascii(std::string(row->executable))==lower_ascii(f.executable)&&row->executable_sha256==exe_hash))return f.id;
+    for(const auto* suffix:{"-rr-v1","-build-rr-v1"})if(!profiles::game(package+suffix))return package+suffix;
+    throw std::runtime_error("适配包名与编译期审阅行冲突: "+package);}
+// The review row of the same game, whatever its build. Its game facts (binding
+// preservation, viewport, depth, exposure) hold across patches -- 007's EXE was
+// replaced several times with the same facts -- and RE9 and 007 crash the
+// driver on the generic defaults (no binding preservation).
+const profiles::Game* reviewed_game(const std::string& executable){
+    for(const auto& g:profiles::games)if(lower_ascii(std::string(g.executable))==lower_ascii(executable))return &g;
+    return nullptr;}
 std::string package_from_settings(std::string_view settings){std::string s(settings);const std::string pre="overlay-",post=".json";
     if(s.size()>pre.size()+post.size()&&s.compare(0,pre.size(),pre)==0&&s.compare(s.size()-post.size(),post.size(),post)==0)return s.substr(pre.size(),s.size()-pre.size()-post.size());return {};}
 json facts_json(const profiles::Facts& f){json modules=json::object();for(const auto& [k,v]:f.modules)modules[k]=v;
@@ -488,6 +506,25 @@ bool data_folder(const fs::path& dir){const auto name=lower_ascii(text(dir.filen
     if(name=="content"){std::error_code ec;return fs::is_directory(dir.parent_path()/L"Binaries",ec);}
     for(const auto* data:{"paks","movies","saved","logs","localization","shadercache","crashes"})if(name==data)return true;
     return false;}
+// DLSS modules anywhere in the game's folder, for a game with none where
+// module_directories() looks. A bare "no DLSS" left players and us guessing
+// (Assassin's Creed Shadows, Kingdom Come 2, Where Winds Meet, 2026-10-21..24);
+// the paths found -- or that there are none -- go into the status instead, so a
+// new layout can be added from one screenshot. Bounded by depth, entries and hits.
+std::vector<fs::path> dlss_modules_elsewhere(const fs::path& exe_dir){
+    // From the game's own root: one or two bin-like levels above the EXE (Bin\Win64…,
+    // bin\x64), or the Unreal / GDK root when there is one. Never above that, so a
+    // Steam library's other games are never walked.
+    fs::path top=exe_dir;
+    for(unsigned up=0;up<2;++up){const auto name=lower_ascii(text(top.filename()));
+        if(name.rfind("bin",0)==0||name.rfind("win64",0)==0||name=="x64")top=top.parent_path();else break;}
+    if(const auto root=game_root(exe_dir);!root.empty())top=root;
+    std::vector<fs::path> out;std::error_code ec;unsigned seen=0;
+    for(fs::recursive_directory_iterator it(top,fs::directory_options::skip_permission_denied,ec),end;it!=end&&!ec&&++seen<=8000&&out.size()<4;it.increment(ec)){
+        if(it->is_directory(ec)){if(it.depth()>=5||data_folder(it->path())||it->is_symlink(ec))it.disable_recursion_pending();continue;}
+        const auto name=lower_ascii(text(it->path().filename()));
+        if(name=="nvngx_dlss.dll"||name=="nvngx_dlssd.dll"||name=="sl.interposer.dll")out.push_back(fs::relative(it->path(),top,ec));}
+    return out;}
 }
 
 Discovery discover(const fs::path& input){Discovery out;const auto path=local(input);if(fs::is_regular_file(path)){need(winpath::same_spelling(path.extension(),L".exe"),"请选择游戏目录或 EXE");
@@ -762,12 +799,11 @@ Reason Manager::refresh_refusal(const Policy& p,const Preflight& pre)const{
     for(const auto& [n,pin]:p.facts.modules)if(!pre.modules.contains(n)||pre.modules.at(n).value("sha256","")!=pin)return {"update-refresh-refused",{{"verdict","module "+n}}};
     return {};}
 Reason Manager::repin_refusal(const Policy& p,const fs::path& exe,bool allow_unsigned,Preflight* pre)const{
-    // Only the controller track is re-adapted here. A research package and a
-    // package whose profile is a compiled review row (2077, 007, RE9, AW2:
-    // the in-game host demands the row's own EXE hash) need the research tools
-    // or a reviewed row change, never an automatic repin.
+    // Only the controller track is re-adapted here; a research package needs the
+    // research tools. A package named after a compiled review row (2077, RE9,
+    // AW2) is re-adapted too: write_package gives the new build its own profile
+    // id, so the in-game checker no longer holds it to the row's EXE hash.
     if(p.track!="controller")return {"repin-research-track"};
-    if(profiles::game(p.profile)||p.facts.reviewed)return {"repin-compiled-row",{{"profile",p.profile}}};
     if(p.game_root.empty())return {"repin-no-game-root"};
     *pre=games::preflight(exe);
     if(!admitting_verdict(pre->verdict))return {"repin-preflight-failed",{{"verdict",pre->verdict}}};
@@ -918,7 +954,11 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
                 s.can_make_package=false;s.refusals["make-package"]=why;s.reasons.push_back(why);}}
         // Only another DLSS 5 / NR add-on gets here (verdict loader-conflict).
         else if(s.state=="loader-conflict")s.reasons.push_back({"loader-conflict",{{"files",pre.loader_conflicts},{"cause","nr-addon"}}});
-        else s.reasons.push_back({s.state}); // unsupported-store | no-dlss
+        // No DLSS where the modules are looked for: say whether the folder has
+        // them anywhere else, or none at all.
+        else if(s.state=="no-dlss"){std::string found;for(const auto& f:dlss_modules_elsewhere(dir))found+=(found.empty()?"":"、")+text(f);
+            s.reasons.push_back(found.empty()?Reason{"no-dlss-anywhere"}:Reason{"no-dlss-elsewhere",{{"paths",found}}});}
+        else s.reasons.push_back({s.state}); // unsupported-store
         json unknown=json::array();for(const auto& c:pre.checks)if(c.outcome==Outcome::unknown)unknown.push_back(c.name);
         if(!unknown.empty())s.reasons.push_back({"preflight-incomplete",{{"count",unknown.size()},{"check",unknown}}});
         return s;}
@@ -1081,6 +1121,10 @@ Policy Manager::write_package(const fs::path& exe,const std::string& name,const 
     // The package carries the route the preflight actually measured. A fixed
     // "sl-rr" would be wrong for every NGX-direct title.
     facts.route=pre.route;facts.title=title;facts.executable=text(exe.filename());facts.executable_sha256=pre.executable_sha256;
+    // make_package, refresh and repin all come through here, so a package that
+    // still names a review row's id for another build is corrected on any of them.
+    if(const auto id=build_profile_id(facts,name,pre.executable_sha256);id!=facts.id){
+        notes.push_back("profile "+facts.id+" is the review row of another build; this build is "+id);facts.id=id;facts.reviewed=false;}
     // The installation contract derives the capture origin from the route's
     // stage (rr for sl-rr/ngx-rr, sr otherwise). Writing "-rr-stage" for every
     // package would get any SR-route package -- ngx-sr included -- refused at
@@ -1160,6 +1204,7 @@ Policy Manager::make_package(const std::string& id,const PackageOptions& opt){
     need(admitting_verdict(pre.verdict),"预检未通过（"+pre.verdict+"）；不生成适配包");
     need(pre.modules_signed||opt.allow_unsigned_modules,"Streamline 模块签名未通过校验；如确认为测试夹具请显式允许");
     const auto* row=profiles::executable(text(exe.filename()),pre.executable_sha256);
+    const auto* same_game=row?nullptr:reviewed_game(text(exe.filename()));
     std::string name=!opt.name.empty()?opt.name:row?package_from_settings(row->settings_file):derive_package_name(exe);
     profiles::Facts facts;json notes=json::array();
     if(pre.verdict=="ngx-rr-ready"||pre.verdict=="ngx-sr-ready"){
@@ -1171,6 +1216,11 @@ Policy Manager::make_package(const std::string& id,const PackageOptions& opt){
             :"根目录代理：游戏启动时的 CreateFeature 会被看到，不需要切档。");}
     if(!pre.risks().empty())notes.push_back(risk_note(pre));
     if(row){facts=profiles::Facts::from(*row);notes.push_back("facts taken from the reviewed compiled row "+std::string(row->id)+"; options ignored");}
+    else if(same_game){
+        // Another build of a reviewed game: the row's game facts under this
+        // package's own names (write_package keeps the id off the row's).
+        facts=profiles::Facts::from(*same_game);facts.reviewed=false;facts.id=name+"-rr-v1";facts.settings_file.clear();facts.capture_origin.clear();
+        notes.push_back("game facts taken from the reviewed row "+std::string(same_game->id)+" (another build of the same game); options ignored");}
     else{facts.id=name+"-rr-v1";facts.viewport=opt.viewport;facts.linear_depth=opt.linear_depth;facts.native_evaluate_host_rebind=opt.native_evaluate_host_rebind;
         facts.binding_preservation=opt.binding_preservation;facts.default_exposure_stops=opt.default_exposure_stops;
         // The controller host self-configures the Streamline route:
@@ -1282,7 +1332,7 @@ void Manager::install_impl(const std::string& id,bool risk_accepted,const std::s
         pins.file(found);need(digest(found)==h,"检查后游戏 EXE/模块发生变化: "+n);}
     steps.enter("space");
     need(!running(e.exe),"游戏仍在运行");need(fs::space(dir).available>kGameDiskMinimumBytes&&fs::space(root_/L"data").available>=kDataDiskReserveBytes,
-        "游戏盘需 "+std::to_string(kGameDiskMinimumBytes>>20)+" MiB，Lab 数据盘需保留 "+std::to_string(kDataDiskReserveBytes>>30)+" GiB");
+        "磁盘空间不足：游戏所在盘需 "+std::to_string(kGameDiskMinimumBytes>>20)+" MiB 可用，釉光数据所在盘需 "+std::to_string(kDataDiskReserveBytes>>30)+" GiB 可用");
     steps.enter("receipts");
     const auto box=store_/wide(id);directory(box);const auto tx=box/L"transaction.json";if(fs::exists(tx))need(receipt(tx,e).at("state")=="removed","仍有未完成的安装事务");
     // The second receipt, read in both places. The legacy one is only read
@@ -1423,7 +1473,7 @@ void Manager::uninstall_impl(const std::string& id,bool confirmed,const Progress
     std::map<std::string,HANDLE> targets;for(auto it=j["files"].begin();it!=j["files"].end();++it){const auto f=located(it.key());if(!fs::exists(f))continue;auto h=pins.file(f,true);need(handle_digest(h)==it.value().get<std::string>(),"卸载前文件发生变化，停止");targets[it.key()]=h;}
     steps.enter("space");
     // Uninstall writes only the recovery copy of what it removes: it needs that
-    // copy's size plus a margin, not the 30 GiB install reserve. Checked
+    // copy's size plus a margin, not the install reserve. Checked
     // before the directory exists, so a refusal leaves nothing behind.
     std::uint64_t copy_bytes=0;json copied=json::object(),shared=json::object();
     for(auto& [n,h]:targets){const auto sha=j["files"][n].get<std::string>();

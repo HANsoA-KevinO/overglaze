@@ -118,6 +118,8 @@ const std::vector<CodeText> kTable{
     {"conflicts-found","发现：{value}。"},
     {"other-loaders-found","发现：{value}（提示，不阻止安装）。"},
     {"no-dlss-modules","目录内没有 Streamline 或 NGX DLSS 模块。"},
+    {"no-dlss-elsewhere","游戏目录里有 DLSS 模块，但不在釉光认识的位置：{paths}。请把这条说明截图发给开发者，以便适配这种目录结构。"},
+    {"no-dlss-anywhere","游戏目录里没有找到 DLSS 模块（nvngx_dlss.dll、nvngx_dlssd.dll、sl.interposer.dll）。釉光接在游戏自己的 DLSS 后面，没有 DLSS 的游戏用不了。如果选的是启动器，请改选游戏本体的 EXE。"},
     {"published-unreadable","无法读取已发布的插件：{value}"},
     // ---- status reasons, by state
     {"package-missing","已识别 DLSS（{route}，{store}），尚无适配包。"},
@@ -220,7 +222,6 @@ const std::vector<CodeText> kTable{
     {"forget-installed","游戏目录里还有已登记的插件文件；先卸载，再从列表移除。"},
     {"update-refresh-refused","更新预检未通过（{verdict}），无法刷新适配包。"},
     {"repin-research-track","研究轨适配包由研究工具管理，本页不改写。"},
-    {"repin-compiled-row","需先更新编译期审阅行（{profile}），无法自动适配。"},
     {"repin-no-game-root","适配包没有记录游戏目录，无法重新预检。"},
     {"repin-preflight-failed","重新预检没有通过（{verdict}）：不重新适配。"},
     {"repin-unsigned-modules","Streamline 签名未通过，不自动适配；命令行可用 --allow-unsigned-modules 显式允许。"},

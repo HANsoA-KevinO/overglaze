@@ -66,7 +66,7 @@ The Games page shows the reason for each refused action; hover over a disabled b
 | Unsigned NVIDIA modules | The game's Streamline or DLSS modules don't carry a valid signature. Overglaze won't hook them. |
 | Game is running | Close it. |
 | A file already exists | Overglaze never overwrites files it didn't create. |
-| Not enough disk space | Installing keeps a reserve free on the drive with Overglaze's data folder (currently 30 GiB). |
+| Not enough disk space | Installing keeps a reserve free on the drive with Overglaze's data folder (currently 1 GiB). |
 | Model mismatch | The model in `models\`, or one already in the game folder, isn't a known version (and unrecognized models are not allowed). The message and *Settings → 模型* say which case it is (see [MODEL.md](MODEL.md#when-a-model-is-refused)). To use another model, import it: the current one is kept and replaced (see [MODEL.md](MODEL.md#switching-models)). |
 | *有更新* or *适配包需要刷新* after importing another model | The game's package still carries the previous model. Installed games: choose *更新插件*. Games without the plugin: choose *刷新适配包*, then install. |
 

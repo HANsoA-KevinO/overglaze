@@ -439,6 +439,11 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     // Leave the registry and the package set exactly as the assertions below expect.
     fs::remove_all(root/L"app/adapters/sr-only"); // the registry entry is forgotten with the others below
     put(root/L"game5/Plain.exe",pe64(standard,"plain"));auto plain=m.add(root/L"game5/Plain.exe");need(st(m,plain).state=="no-dlss"&&st(m,plain).route=="none","no DLSS modules");
+    {auto s=st(m,plain);need(s.reasons.size()==1&&s.reasons.front().code=="no-dlss-anywhere","and the status says none was found anywhere in the folder");}
+    fs::create_directories(root/L"game5/runtime/nvidia");put(root/L"game5/runtime/nvidia/nvngx_dlss.dll","dlss somewhere else");
+    {auto s=st(m,plain);need(s.state=="no-dlss"&&s.reasons.front().code=="no-dlss-elsewhere"&&s.reasons.front().params["paths"].get<std::string>().find("nvngx_dlss.dll")!=std::string::npos,
+          "DLSS where the scan does not look: still no route, but the path is named");}
+    fs::remove_all(root/L"game5/runtime");
     put(root/L"game5/MicrosoftGame.config","<Game/>");need(st(m,plain).preflight["store"]=="gdk","store marker detected");
     // An installed OS package identity means Xbox app / GDK, whatever the
     // directory looks like (an Unreal GDK title keeps its marker far above the EXE).
@@ -625,15 +630,15 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      need(it!=view.actions.end()&&!it->enabled&&it->why_not.code=="repin-unsigned-modules","shown, disabled, with the reason on hover");
      need(s.preflight.is_object()&&check_named(s.checks,"module-signatures")->outcome==lab::games::Outcome::fail,"the fresh preflight is shown");}
     reject([&]{m.repin(g.id,false,"c",true);},"repin needs the risk acknowledgement");
-    // A package whose profile is a compiled review row is refused (the host would
-    // demand that row's EXE hash): same package, the profile id of a reviewed row.
-    {auto policies=m.policies();for(auto& p:policies)if(p.name=="seven")p.profile="re9-rr-v1";
-     lab::games::Manager reviewed(root,policies,model_hash,false);auto s=st(reviewed,g);
-     need(s.refusals.at("repin").code=="repin-compiled-row"&&!s.can_repin,"a compiled review row is never repinned automatically");
-     const auto view=lab::games::present(s);need(std::none_of(view.actions.begin(),view.actions.end(),[](const lab::games::Action& a){return a.name=="repin";}),"and not offered");
-     bool refused=false;try{reviewed.repin(g.id,true,"c",true);}catch(const lab::games::OperationError& x){refused=x.reason.code=="operation-failed"&&x.install_after=="game-changed";}need(refused,"repin refuses it before touching anything");
-     need(fs::exists(root/L"game7/dxgi.dll")&&fs::is_directory(seven),"nothing touched");}
-    ev.clear();const auto retired=m.repin(g.id,true,"fixture consent: re-adapt",true,cb);
+    // A package that names a compiled review row's profile id for another build
+    // (2077 after a patch) is re-adapted like any other, under an id of its own:
+    // the in-game checker holds a row's id to that row's one EXE hash.
+    auto policies=m.policies();for(auto& p:policies)if(p.name=="seven"){p.profile="re9-rr-v1";p.facts.id="re9-rr-v1";}
+    lab::games::Manager reviewed(root,policies,model_hash,false);
+    {auto s=st(reviewed,g);need(s.refusals.at("repin").code=="repin-unsigned-modules","a review row's id is not a refusal of its own");}
+    ev.clear();const auto retired=reviewed.repin(g.id,true,"fixture consent: re-adapt",true,cb);
+    need(read(seven/L"package.json")["profile"]=="seven-rr-v1"&&read(seven/L"overglaze.install.json")["profile"]=="seven-rr-v1","the re-adapted package leaves the review row's id");
+    m=lab::games::Manager(root,std::nullopt,model_hash,false);
     need(started(ev,"repin","")==lab::games::operation_stages("repin"),"repin reports every stage in order");
     need(lab::winpath::same_spelling(retired.parent_path(),(root/L"app/adapters-retired").lexically_normal())&&retired.filename().wstring().starts_with(L"seven-repin-")&&read(retired/L"package.json")["pins"]["Seven.exe"]==old_exe,"the old package is retired, not deleted");
     need(fs::is_regular_file(retired/L"overglaze_controller.dll")&&fs::is_regular_file(retired/L"overglaze.install.json"),"retired with its payload");
@@ -666,6 +671,17 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
       need(!fs::exists(root/L"game10/dxgi.dll")&&fs::exists(root/L"game10/overglaze/overglaze_controller.dll"),"nothing in the game's root");
       const auto j=lab::games::status_json(s);need(j["launch"]["via"]=="steam"&&j["launch"]["command"]==option&&j["risks"]==json::array({"anti-tamper"}),"and so does the status JSON");}
      m.uninstall(dz.id,true);m.forget(dz.id);}
+    // ---- another build of a reviewed game: the row's game facts, an id of its own
+    fs::create_directory(root/L"game-aw2");
+    put(root/L"game-aw2/AlanWake2.exe",pe64(standard,"alan wake 2, not the reviewed build"));put(root/L"game-aw2/sl.interposer.dll","sl aw2");put(root/L"game-aw2/sl.common.dll","common aw2");put(root/L"game-aw2/sl.dlss_d.dll","dlss_d aw2");
+    {auto aw=m.add(root/L"game-aw2/AlanWake2.exe");
+     auto o=lab::games::PackageOptions::controller_root_proxy();o.allow_unsigned_modules=true;const auto p=m.make_package(aw.id,o);
+     const auto* row=lab::profiles::game("alanwake2-rr-v1");
+     const auto cfg=read(root/L"app/adapters/alanwake2/overglaze.install.json");
+     need(p.name=="alanwake2"&&p.profile=="alanwake2-build-rr-v1"&&cfg["profile"]=="alanwake2-build-rr-v1","the package does not borrow the review row's id");
+     need(cfg["facts"]["viewport"]==row->viewport&&cfg["facts"]["linear_depth"]==row->linear_depth&&cfg["facts"]["binding_preservation"]==row->binding_preservation&&cfg["facts"]["settings_file"]=="overlay-alanwake2.json",
+          "it carries the row's game facts, not the generic defaults");
+     m.forget(aw.id);}
     // ================================================================ rename / host contract V4
     // A game installed by the pre-rename build: legacy package, legacy transaction,
     // legacy files in game11\dlsslab\. It is recognised, shown as "legacy", and

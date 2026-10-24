@@ -2,6 +2,24 @@
 
 All notable changes to Overglaze are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The data disk no longer needs 30 GiB free. That reserve came from the research captures and was asked of every game launch and every NR start, so on a fuller data disk — the Setup's default location is on C: — the in-game host stopped with *30 GiB disk reserve required* (often hidden behind the game, so the panel hotkey seemed to do nothing) and NR stopped with *Existing data directory and disk reserve required*. A launch and an NR start now need 256 MiB free, an install keeps 1 GiB free on the drive with Overglaze's data folder, and only capture and export keep the 30 GiB rule.
+- The panel's state line for a failed NR start reads *NR 启动失败 · 原因见下方* instead of *本次开启未通过安全检查*, which read like a security block. The common reasons get a line saying what to do above the original text: NR Init / Create failed (the GPU is not an RTX 50 series, an old driver, or a model that does not fit the GPU), no usable model, a full data disk, another NR add-on loaded. NR Init / Create failures now carry NGX's result code, for example *NR Create failed (NGX 0xBAD00001)*.
+- When the in-game host cannot start, the dialog says what to do first — *重新适配* after a game update, *更新插件* when Overglaze's own files in the game folder changed, freeing disk space — with the original reason and the diagnostic file below. The identity check now names which side changed: *Installed executable identity changed* or *Installed host identity changed*. The dialog stays on top of the game window.
+- A game with no DLSS where Overglaze looks now says more than *没有 DLSS 模块*: the Game Library searches the game's folder (bounded) and names the DLSS files it found elsewhere, asking for a screenshot so the layout can be supported, or says there are none at all and to pick the game's own EXE rather than a launcher.
+- **Plugin update needed.** The in-game host (`overglaze\overglaze_controller.dll`) and the NR bridge changed. An installed game keeps the previous behaviour until it is updated with *更新插件* in the Game Library.
+
+### Fixed
+
+- Cyberpunk 2077, Resident Evil Requiem and Alan Wake 2 could not be installed or re-adapted on any build other than the one their built-in review row was made from. A package for another build (a patch, another store) took the row's profile id, and the installation checker refused it with *V3 facts diverge from the reviewed profile*; re-adaptation after a game update was refused with *需先更新编译期审阅行*. After Cyberpunk 2077's update of 2026-10-23 that left every 2077 install unusable. Another build now gets a profile id of its own (for example `cyberpunk2077-build-rr-v1`) and keeps the row's game facts (binding preservation, viewport, depth, exposure) instead of the generic defaults, and *重新适配* works for these games like any other. This also gives another build of 007 First Light the binding preservation it needs.
+- A launcher or other program in the game folder that creates a DXGI factory (Mount & Blade II: Bannerlord's launcher) loaded the root `dxgi.dll` too, and the host showed *Overglaze 未能启动 … Installed executable/host identity changed* in it. The host now starts only in the EXE the installation was made for; in any other program it stays silent and the proxy only forwards DXGI.
+- In games that read the mouse through raw input without window messages while playing, the panel took clicks only in the game's menus. The panel now also reads the mouse buttons' real state every frame.
+- In games whose window never receives the hotkey's key messages, the hotkey did nothing. The panel now also watches the key's real state at every present; a press still opens or closes the panel once.
+- After one failed panel draw (for example with a swapchain wrapped by another tool), the panel stayed hidden and the hotkey did nothing until the game recreated its swapchain. The next press of the hotkey now rebuilds the panel's resources and tries again.
+
 ## [0.2.0-preview.10] - 2026-10-21
 
 ### Changed
