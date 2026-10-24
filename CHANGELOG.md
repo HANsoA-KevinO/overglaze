@@ -2,6 +2,12 @@
 
 All notable changes to Overglaze are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Adding a game by folder could preselect a crash reporter when it shared the game's DLSS directory. Auxiliary EXEs are now ranked after the game even beside those modules; selecting one directly offers the adjacent game EXEs first. Preflight names it as *不是游戏本体* and refuses to generate or install its package. An auxiliary EXE already packaged or installed by an older version shows the same explanation, with its identity-checked uninstall still available. Select the game's actual EXE so its own identity and anti-tamper risk determine the package and loading mode. This fixes selection and installation handling; it does not certify a game's NR output. The in-game plugin is unchanged.
+
 ## [0.2.0-preview.11] - 2026-10-24
 
 ### Changed

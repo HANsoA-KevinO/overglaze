@@ -27,6 +27,7 @@ const std::vector<CodeText> kTable{
     {"label.blocked","无法处理"},
     {"label.no-dlss","不支持：游戏没有 DLSS"},
     {"label.unsupported-store","商店包未识别"},
+    {"label.helper-executable","不是游戏本体"},
     {"label.loader-conflict","插件冲突"},
     {"label.running","游戏运行中"},
     {"label.legacy","旧版 DLSS Lab · 需迁移"},
@@ -76,6 +77,7 @@ const std::vector<CodeText> kTable{
     {"verdict.loader-conflict","目录里有其他 DLSS 5 / NR 插件"},
     {"verdict.no-dlss","没有 DLSS 模块"},
     {"verdict.unsupported-store","无法识别商店包"},
+    {"verdict.helper-executable","辅助程序，不是游戏本体"},
     {"verdict.identity","EXE 身份与适配包不同"},
     // ---- check names
     {"check.identity","游戏身份"},
@@ -170,6 +172,7 @@ const std::vector<CodeText> kTable{
     {"existing-research","研究版安装由研究工具管理；本页只读。"},
     {"installed-by-other-copy","插件属于另一份 Lab（数据目录 {output_root}），需在原程序中管理或卸载。"},
     {"unsupported-store","EXE 无法读取且无商店包身份，无法校验身份，暂不支持。"},
+    {"helper-executable","所选 EXE 是崩溃上报、安装或启动之类的辅助程序，不是游戏本体，插件在它里面不会生效。若已安装，请先卸载该条目的插件，再从列表移除，改为添加游戏本体的 EXE。"},
     // Refused only where installing would do harm: another NR add-on, or a
     // file that is not ours where Overglaze writes its own. {cause} says which.
     {"loader-conflict","游戏目录里有 {files}：{cause}"},

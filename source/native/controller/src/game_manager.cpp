@@ -492,8 +492,10 @@ std::vector<fs::path> unreal_games(const fs::path& root){std::vector<fs::path> o
 // installers, crash reporters, launchers and anti-cheat helpers. `root` is the
 // folder the scan started from.
 int candidate_rank(const fs::path& exe,const fs::path& root){
-    if(holds_dlss(exe.parent_path()))return 0;if(shipping_name(exe))return 1;
+    // Classify helpers before the shared directory: a crash reporter may sit
+    // beside exactly the same DLSS modules as the game.
     if(helper_name(lower_ascii(text(exe.filename()))))return 3;
+    if(holds_dlss(exe.parent_path()))return 0;if(shipping_name(exe))return 1;
     if(project_binary(exe,root))return 1;
     return 2;}
 // Folders of game data, never of the game's EXE. Skipping them keeps a large
@@ -532,6 +534,16 @@ Discovery discover(const fs::path& input){Discovery out;const auto path=local(in
         // the chosen EXE as the last choice.
         if(!holds_dlss(path.parent_path())){auto games=unreal_games(path.parent_path());if(!games.empty()){out.executables=std::move(games);out.executables.push_back(path);
             out.notice="所选 EXE 是虚幻引擎的启动器，旁边没有 DLSS 模块。游戏本体已排在最前。";return out;}}
+        // A helper picked by hand (a crash reporter, an installer, a launcher):
+        // the other EXEs beside it first, the chosen one last.
+        if(helper_name(lower_ascii(text(path.filename())))){std::vector<fs::path> games;std::error_code hec;unsigned seen=0;
+            for(fs::directory_iterator it(path.parent_path(),fs::directory_options::skip_permission_denied,hec),end;it!=end&&!hec&&++seen<=256;it.increment(hec))
+                {const auto attr=GetFileAttributesW(it->path().c_str());
+                 if(attr==INVALID_FILE_ATTRIBUTES||(attr&FILE_ATTRIBUTE_REPARSE_POINT)){out.complete=false;continue;}
+                 if(it->is_regular_file(hec)&&winpath::same_spelling(it->path().extension(),L".exe")&&!helper_name(lower_ascii(text(it->path().filename()))))games.push_back(it->path());}
+            if(hec||seen>256)out.complete=false;
+            if(!games.empty()){std::sort(games.begin(),games.end());out.executables=std::move(games);out.executables.push_back(path);
+                out.notice="所选 EXE 是崩溃上报、安装或启动之类的辅助程序，不是游戏本体。游戏本体已排在最前。";return out;}}
         out.executables.push_back(path);return out;}need(fs::is_directory(path)&&path!=path.root_path(),"请选择具体游戏目录，不扫描整块磁盘");
     const auto start=GetTickCount64();unsigned count=0;std::error_code ec;for(fs::recursive_directory_iterator it(path,fs::directory_options::none,ec),end;it!=end;it.increment(ec)){if(ec){out.complete=false;break;}
         if(++count>8192||GetTickCount64()-start>15000||out.executables.size()>=128){out.complete=false;break;}const auto attr=GetFileAttributesW(it->path().c_str());if(attr==INVALID_FILE_ATTRIBUTES){out.complete=false;continue;}
@@ -685,7 +697,14 @@ Preflight preflight(const fs::path& input){
     // it does not by itself turn a supported game into a refused one -- the
     // Xbox app titles that work today (Hellblade 2, A Plague Tale) are exactly
     // the unreadable-EXE case.
+    // A helper is not an installation target. Modules beside it belong to the
+    // game too, but its identity and PE sections do not describe that game.
+    // In particular, selecting it can miss the game's anti-tamper risk and the
+    // viewer's corresponding late-load choice.
+    const bool helper=helper_name(lower_ascii(r.executable));
+    if(helper)r.notes.push_back("所选 EXE 是辅助程序（崩溃上报、安装、启动或反作弊启动器），不是游戏本体：不生成适配包");
     if(!r.executable_readable&&r.package_identity.is_null())r.verdict="unsupported-store";
+    else if(helper)r.verdict="helper-executable";
     else if(!r.loader_conflicts.empty())r.verdict="loader-conflict";
     else if(r.route=="sl-rr"){r.verdict="sl-rr-ready";
         r.notes.push_back("控制器宿主：游戏关闭光线重建、改用 DLSS 超分时，NR 自动改接在超分输出之后");}
@@ -749,6 +768,12 @@ std::map<std::string,std::string> Manager::published_host(const std::string& tra
     for(const auto* n:{"overglaze_controller.dll"}){const auto p=dir/wide(n);if(fs::is_regular_file(p))out[n]=cached_digest(p);}
     return out;}
 Status Manager::inspect(const Entry& e)const{auto s=inspect_impl(e,true);
+    // Old versions could package a helper. Keep the measured installation and
+    // its identity-checked uninstall, but never offer to install or update it.
+    if(helper_name(lower_ascii(text(e.exe.filename())))){
+        s.compatibility="unsupported";s.can_make_package=false;s.can_install=false;s.can_refresh_package=false;s.can_update=false;s.can_repin=false;
+        for(const auto* action:{"make-package","install","refresh-package","update","repin"})s.refusals[action]={"helper-executable"};
+        if(s.state=="installed"||s.state=="available"||s.state=="package-stale"||s.state=="changed")s.reasons.insert(s.reasons.begin(),Reason{"helper-executable"});}
     // Other injectors beside the EXE, as they are now, in every state: a named,
     // counted notice. dxgi.dll is left out where this game's load mode puts
     // Overglaze's own file of that name there (a foreign one is then refused or
@@ -958,7 +983,7 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         // them anywhere else, or none at all.
         else if(s.state=="no-dlss"){std::string found;for(const auto& f:dlss_modules_elsewhere(dir))found+=(found.empty()?"":"、")+text(f);
             s.reasons.push_back(found.empty()?Reason{"no-dlss-anywhere"}:Reason{"no-dlss-elsewhere",{{"paths",found}}});}
-        else s.reasons.push_back({s.state}); // unsupported-store
+        else s.reasons.push_back({s.state}); // unsupported-store | helper-executable
         json unknown=json::array();for(const auto& c:pre.checks)if(c.outcome==Outcome::unknown)unknown.push_back(c.name);
         if(!unknown.empty())s.reasons.push_back({"preflight-incomplete",{{"count",unknown.size()},{"check",unknown}}});
         return s;}
@@ -1201,6 +1226,7 @@ Policy Manager::make_package(const std::string& id,const PackageOptions& opt){
     // There is no observation-only override for an "unsupported-route" verdict:
     // every DLSS route the preflight classifies is admitting, so no verdict could
     // reach it.
+    if(pre.verdict=="helper-executable")throw Refusal("helper-executable",render("helper-executable"));
     need(admitting_verdict(pre.verdict),"预检未通过（"+pre.verdict+"）；不生成适配包");
     need(pre.modules_signed||opt.allow_unsigned_modules,"Streamline 模块签名未通过校验；如确认为测试夹具请显式允许");
     const auto* row=profiles::executable(text(exe.filename()),pre.executable_sha256);
@@ -1524,6 +1550,10 @@ void Manager::update(const std::string& id,bool risk_accepted,const std::string&
         // first take the working plugin away.
         need(risk_accepted,"安装前需确认风险：联网或带反作弊的游戏可能无法启动、被踢出或被处罚；Overglaze 不绕过任何保护");need(!consent.empty()&&consent.size()<=1024,"安装需要记录本次确认文字");
         const auto e=find(id);const auto s=inspect(e);
+        // A pre-existing helper package must be refused before the uninstall,
+        // even when a caller invokes update directly instead of using the UI.
+        if(const auto refusal=s.refusals.find("update");refusal!=s.refusals.end()&&refusal->second.code=="helper-executable")
+            throw Refusal(refusal->second.code,render(refusal->second));
         need(s.state=="installed"&&s.update_available&&!s.running,"没有可用更新，或游戏正在运行／文件身份不符");
         // Another NR add-on would refuse the install step; refuse before the uninstall.
         if(const auto addons=nr_addons(e.exe.parent_path());!addons.empty())

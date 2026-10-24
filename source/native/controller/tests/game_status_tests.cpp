@@ -103,6 +103,7 @@ int main(){try{
         {"no-dlss","not-installed","label.no-dlss",Tone::neutral,nullptr},
         {"unsupported-store","not-installed","label.unsupported-store",Tone::neutral,nullptr},
         {"loader-conflict","not-installed","label.loader-conflict",Tone::warning,nullptr},
+        {"helper-executable","not-installed","label.helper-executable",Tone::neutral,nullptr},
     };
     need(std::size(rows)==backend_states().size(),"one expectation per backend state");
     for(const auto& r:rows){const auto p=present(shaped(r.state,r.install,false));const std::string where=std::string(r.state)+"/"+r.install;
@@ -124,6 +125,11 @@ int main(){try{
     need(render("load-plan",json{{"load_mode","late_d3d12"}}).find(code_text("load-mode.late_d3d12"))!=std::string::npos,"the planned load mode renders by name");
     for(const auto* code:{"risk-notice","risk-anti-tamper","tag.anti-tamper","tag.anticheat","launch.steam","launch.watch","launch.insert","launch.remove","launch.uninstall"})need(code_text(code)!=nullptr,std::string("risk / launch text: ")+code);
     for(const auto* gone:{"label.denuvo-blocked","label.anticheat-blocked","update-needs-denuvo-flag","refresh-needs-denuvo-flag","repin-needs-denuvo-flag","denuvo-override"})need(code_text(gone)==nullptr,std::string("no refusal for a risk: ")+gone);
+    // An auxiliary EXE installed by an older version still needs safe removal.
+    for(const bool running:{false,true}){auto s=shaped("installed","update-available",running);s.reasons.push_back({"helper-executable"});
+        const auto p=present(s);const auto* u=find(p,"uninstall");
+        need(p.label=="label.helper-executable"&&p.tone==Tone::warning&&!find(p,"update")&&u&&u->primary&&u->enabled==!running,
+             "an already installed helper offers uninstall, never update; running still blocks removal");}
     // A refusal decided by the backend: shown disabled, with its reason.
     {auto s=shaped("installed","update-available",false);s.can_update=false;s.refusals["update"]={"update-refresh-refused",{{"verdict","identity"}}};
      const auto p=present(s);const auto* u=find(p,"update");need(u&&!u->enabled&&u->why_not.code=="update-refresh-refused","a gated update says why");}

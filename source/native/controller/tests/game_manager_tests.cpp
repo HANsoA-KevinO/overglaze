@@ -498,6 +498,44 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
         const auto boot=lab::games::discover(ue/L"Game.exe");need(boot.executables.size()==2&&boot.executables.front()==fs::canonical(shipping)&&!boot.notice.empty(),"Unreal bootstrap: game offered first");
         const auto notes=lab::games::preflight(ue/L"Game.exe").notes;
         need(std::any_of(notes.begin(),notes.end(),[](const std::string& n){return n.find("Proj-Win64-Shipping.exe")!=std::string::npos;}),"preflight names the game behind the bootstrap");}
+    // ---- a helper beside the game (Onimusha's CrashReport.exe): never the game
+    {const auto dir=root/L"game-helper";fs::create_directory(dir);
+     put(dir/L"Game.exe",pe64(standard,"game"));put(dir/L"CrashReport.exe",pe64(standard,"crash report"));put(dir/L"nvngx_dlss.dll","x");
+     const auto scanned=lab::games::discover(dir);
+     need(!scanned.executables.empty()&&scanned.executables.front().filename()==L"Game.exe","scanning the folder offers the game before a helper beside the same DLSS");
+     const auto picked=lab::games::discover(dir/L"CrashReport.exe");
+     need(picked.executables.size()==2&&picked.executables.front().filename()==L"Game.exe"&&picked.executables.back().filename()==L"CrashReport.exe"&&!picked.notice.empty(),
+          "picking the helper by hand offers the game first, and says so");
+     need(lab::games::preflight(dir/L"CrashReport.exe").verdict=="helper-executable"&&lab::games::preflight(dir/L"Game.exe").verdict=="ngx-sr-ready","the helper is not a target even beside a supported route");
+     const auto helper_entry=m.add(dir/L"CrashReport.exe");const auto helper_status=st(m,helper_entry);
+     need(helper_status.state=="helper-executable"&&!helper_status.can_make_package&&!helper_status.can_install&&has_reason(helper_status,"helper-executable"),
+          "a registered helper shows why it cannot be packaged or installed");
+     auto options=lab::games::PackageOptions::for_viewer(false);options.name="helper-refused";options.allow_unsigned_modules=true;
+     bool refused=false;try{m.make_package(helper_entry.id,options);}catch(const std::exception& ex){refused=std::string(ex.what()).find("游戏本体")!=std::string::npos;}
+     need(refused&&!fs::exists(root/L"app/adapters/helper-refused"),"packaging refuses the helper by name before writing a package");
+     // An older package can already exist: its valid payload is no reason to
+     // offer a new installation into an auxiliary process.
+     {const auto policies=m.policies();const auto found=std::find_if(policies.begin(),policies.end(),[](const lab::games::Policy& p){return p.name=="testgame";});
+      need(found!=policies.end(),"the legacy helper fixture uses the existing valid test-game package");
+      auto old=*found;const auto original=old.game_root;old.game_root=dir;old.pins.erase(old.executable);
+      for(const auto& [name,hash]:old.pins)fs::copy_file(original/lab::wide(name),dir/lab::wide(name));
+      old.executable="CrashReport.exe";
+      old.pins[old.executable]=lab::sha256(dir/L"CrashReport.exe");old.facts.executable=old.executable;old.facts.executable_sha256=old.pins[old.executable];
+      lab::games::Manager older(root,std::vector<lab::games::Policy>{old},model_hash,false);const auto old_status=st(older,helper_entry);
+      need(old_status.state=="available"&&!old_status.can_install&&!old_status.can_refresh_package&&old_status.reasons.front().code=="helper-executable",
+           "an older package is still recognised but not offered for installation or refresh");
+      reject([&]{older.install(helper_entry.id,true,"fixture consent");},"even an older valid package cannot install into a helper");
+      std::string update_reason;try{older.update(helper_entry.id,true,"fixture consent");}catch(const std::exception& ex){update_reason=ex.what();}
+      need(update_reason.find("游戏本体")!=std::string::npos,"direct update refuses the old helper target before any uninstall");
+      need(!fs::exists(dir/L"dxgi.dll")&&!fs::exists(dir/L"overglaze.install.json"),"the legacy helper refusal wrote no game files");
+      for(const auto& [name,hash]:old.pins)if(name!=old.executable)fs::remove(dir/lab::wide(name));}
+     m.forget(helper_entry.id);need(fs::exists(dir/L"Game.exe")&&fs::exists(dir/L"CrashReport.exe"),"forgetting a helper preserves both executables");
+     put(dir/L"Game.exe",pe64({".text",".xtext",".rdata"},"game with anti-tamper"));
+     const auto correct=lab::games::preflight(dir/L"Game.exe"),wrong=lab::games::preflight(dir/L"CrashReport.exe");
+     need(correct.verdict=="ngx-sr-ready"&&correct.denuvo_suspected&&!wrong.denuvo_suspected&&wrong.verdict=="helper-executable",
+          "the game's sections, not its adjacent helper's, decide the anti-tamper risk");
+     need(lab::games::PackageOptions::for_viewer(correct.denuvo_suspected).loader.strategy=="late_d3d12","the viewer chooses late loading from the correct game's preflight");
+     fs::remove_all(dir);}
     reject([&]{lab::games::discover(root/L"game2/../game");},"noncanonical input rejected");reject([&]{lab::games::discover(root.root_path());},"whole drive rejected");
     m.forget(plain.id);need(m.list().size()==4&&fs::exists(root/L"game5/Plain.exe"),"forget registry only");
     // ---- hardlinks can alias a protected file even without a reparse point
@@ -654,7 +692,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     // other game; the risk stays recorded, and how to start it comes from this root
     put(root/L"game10/DenuvoSl.exe",pe64({".text",".xtext",".rdata"},"denuvo-sl"));put(root/L"game10/sl.interposer.dll","sl ten");put(root/L"game10/sl.common.dll","common ten");put(root/L"game10/sl.dlss_d.dll","dlss_d ten");
     {auto dz=m.add(root/L"game10/DenuvoSl.exe");
-     {auto o=lab::games::PackageOptions::for_viewer(true);o.allow_unsigned_modules=true;o.name="denuvo-sl";const auto pkg=m.make_package(dz.id,o);need(pkg.anti_tamper()&&pkg.loader.strategy=="late_d3d12","the risk is recorded on the package, which loads late");}
+     {auto o=lab::games::PackageOptions::for_viewer(m.preflight(dz).denuvo_suspected);o.allow_unsigned_modules=true;o.name="denuvo-sl";const auto pkg=m.make_package(dz.id,o);need(pkg.anti_tamper()&&pkg.loader.strategy=="late_d3d12","the risk is recorded on the package, which loads late");}
      // A manifest written while Denuvo was a refusal says so through its verdict.
      {auto man=read(root/L"app/adapters/denuvo-sl/package.json");man["preflight"].erase("denuvo_suspected");man["preflight"].erase("risks");man["preflight"]["verdict"]="denuvo-blocked";put(root/L"app/adapters/denuvo-sl/package.json",man.dump(2));
       lab::games::Manager older(root,std::nullopt,model_hash,false);bool found=false;for(const auto& p:older.policies())if(p.name=="denuvo-sl")found=p.anti_tamper();need(found,"an older manifest's verdict still counts as the risk");}
@@ -961,7 +999,7 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      m.forget(big.id);}
     // ---- every listed backend state the synthetic flow can reach was reached
     for(const auto* pair:{"needs-package/not-installed","package-stale/not-installed","available/not-installed","installed/installed","installed/update-available","installed/needs-update","installed/legacy",
-        "existing/research-managed","changed/game-changed","incomplete/incomplete","blocked/modified","blocked/not-installed","blocked/unknown","no-dlss/not-installed"})need(reached.contains(pair),std::string("the flow reached ")+pair);
+        "existing/research-managed","changed/game-changed","incomplete/incomplete","blocked/modified","blocked/not-installed","blocked/unknown","no-dlss/not-installed","helper-executable/not-installed"})need(reached.contains(pair),std::string("the flow reached ")+pair);
     put(store/L"games.json","broken");reject([&]{m.add(root/L"game5/Plain.exe");},"malformed registry not overwritten");need(fs::file_size(store/L"games.json")==6,"malformed registry preserved");
     // ---- storage statistic (read-only) and the disk rule for uninstall
     {const auto u=m.storage_usage();const lab::games::StorageUsage::Game* g=nullptr;for(const auto& x:u.games)if(x.id==e.id)g=&x;

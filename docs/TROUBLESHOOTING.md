@@ -62,6 +62,7 @@ The Games page shows the reason for each refused action; hover over a disabled b
 |---|---|
 | Another DLSS 5 / NR add-on in the folder | Remove it (for example `renodx-dlss5.addon64`, or an earlier Overglaze add-on) first. Two NR passes would stack on every frame. |
 | A `dxgi.dll` that isn't Overglaze's beside the EXE | The game would load Overglaze through its own `dxgi.dll` in that place, and Overglaze never overwrites another file. Remove the other tool's `dxgi.dll` first. |
+| *不是游戏本体* (for example `CrashReport.exe`) | This is a crash reporter, launcher helper or installer. If Overglaze was installed for this entry, uninstall its plugin first, then remove the entry and add the game's own EXE. Files beside the helper do not identify the game; the correct EXE also lets the check choose the appropriate loading mode. |
 | No usable DLSS path | The game has no DLSS Ray Reconstruction or Super Resolution that Overglaze can use. |
 | Unsigned NVIDIA modules | The game's Streamline or DLSS modules don't carry a valid signature. Overglaze won't hook them. |
 | Game is running | Close it. |

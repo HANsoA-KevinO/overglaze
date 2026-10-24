@@ -13,6 +13,7 @@ const std::vector<BackendState> kStates{
     {"blocked","modified"},{"blocked","other-copy"},{"blocked","not-installed"},{"blocked","unknown"},
     {"no-dlss","not-installed"},
     {"unsupported-store","not-installed"},{"loader-conflict","not-installed"},
+    {"helper-executable","not-installed"},
 };
 // A refusal that means "this tool never offers it for this package": the
 // button is not shown at all; the reason is in the status text.
@@ -40,7 +41,11 @@ Presentation present(const Status& s,bool busy){
     auto forget=[&]{if(!s.installed)action("forget",false,!s.can_uninstall,false);};
     const auto& st=s.state;const auto& in=s.install_state;
     const std::string first=s.reasons.empty()?std::string():s.reasons.front().code;
-    if(st=="needs-package"||st=="package-stale"||st=="available"){
+    if(first=="helper-executable"&&st!="helper-executable"){
+        p.label="label.helper-executable";p.tone=Tone::warning;
+        if(s.installed||s.can_uninstall)action("uninstall",true,s.can_uninstall,true);
+        folder();forget();}
+    else if(st=="needs-package"||st=="package-stale"||st=="available"){
         p.label="label.available";p.tone=Tone::accent;
         if(st=="needs-package")action("make-package",true,s.can_make_package,false);
         else if(st=="package-stale")action("refresh-package",true,s.can_refresh_package,false);
@@ -76,7 +81,7 @@ Presentation present(const Status& s,bool busy){
         folder();forget();}
     // Anti-tamper and anti-cheat are not states: a game with either gets the
     // ordinary states above, and its risks are shown as information.
-    else if(st=="no-dlss"||st=="unsupported-store"){
+    else if(st=="no-dlss"||st=="unsupported-store"||st=="helper-executable"){
         p.label="label."+st;p.tone=Tone::neutral;folder();forget();}
     else if(st=="loader-conflict"){p.label="label.loader-conflict";p.tone=Tone::warning;folder();forget();}
     else{p.label="label.blocked";p.tone=Tone::error;folder();} // not a backend state; the test forbids reaching it
