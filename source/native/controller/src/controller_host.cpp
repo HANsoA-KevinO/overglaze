@@ -800,6 +800,8 @@ void start_late_attach(unsigned flags) noexcept {
         // V4: the program folder or its data root was deleted under an installed
         // game. Stand down silently: nothing hooked, nothing shown, nothing written.
         if(installation_root_missing(self))return;
+        // Another program from the game directory, not the game: nothing to do.
+        if(!runs_in_installed_executable(self))return;
         startup::once(once,[self,flags]{
             auto* h=new Host(self);current=h;h->late_open_panel=(flags&lab::standalone::late_open_panel)!=0;h->start_late();std::thread([h]{h->run();}).detach();
         },[self](const char* why)noexcept{
@@ -823,6 +825,10 @@ void factory_created(IUnknown* value) noexcept {
         // game. The proxy keeps forwarding DXGI; the host never starts and says
         // nothing (no dialog, no startup record, no hooks).
         if(has_installation(self)&&installation_root_missing(self))return;
+        // A launcher or crash reporter beside the game loads the root dxgi.dll too
+        // (Bannerlord's launcher showed the startup dialog for an install made for
+        // Bannerlord.exe). Not the game: forward DXGI, start nothing, say nothing.
+        if(has_installation(self)&&!runs_in_installed_executable(self))return;
         startup::once(once,[self]{
             // The early path: the signature observer is in place before the game's
             // D3D12CreateDevice, which follows this, its first factory.

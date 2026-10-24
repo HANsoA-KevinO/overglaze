@@ -318,6 +318,15 @@ int wmain(int argc,wchar_t** argv){try{
      if(!lab::installation_root_missing(config))throw std::runtime_error("V4: a deleted data root must stand the host down silently");
      {std::ofstream out(config,std::ios::binary|std::ios::trunc);out<<"{broken";}
      if(lab::installation_root_missing(config)||lab::recorded_output_root(config))throw std::runtime_error("V4: an unreadable receipt is reported by the full contract, not silenced");
+     // Which program the host is in: only the EXE the receipt was made for starts
+     // it; a launcher beside the game (same root dxgi.dll) stands down silently.
+     if(!lab::runs_in_installed_executable(config,base/L"game"/L"Other.exe"))throw std::runtime_error("an unreadable receipt is left to the full contract");
+     write(v2);
+     if(!lab::runs_in_installed_executable(config,base/L"game"/L"CYBERPUNK2077.exe")||lab::runs_in_installed_executable(config,base/L"game"/L"REDprelauncher.exe"))
+         throw std::runtime_error("a compiled-profile receipt names its EXE through the row");
+     write(s3);
+     if(!lab::runs_in_installed_executable(config,base/L"game"/L"Sample.exe")||lab::runs_in_installed_executable(config,base/L"game"/L"Sample.Launcher.exe"))
+         throw std::runtime_error("a V3 receipt names its EXE through its facts");
      std::filesystem::remove_all(base);}
-    std::cout<<"PASS identity-bound offline installation contract, V4 recorded data root and silent stand-down, malformed/escape negatives; no game loaded\n";return 0;
+    std::cout<<"PASS identity-bound offline installation contract, V4 recorded data root and silent stand-down, launcher stand-down, malformed/escape negatives; no game loaded\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -126,4 +126,5 @@ bool active() noexcept {return g_active.load(std::memory_order_acquire);}
 BOOL real_cursor_position(POINT* out) noexcept {if(!out)return FALSE;if(o_GetCursorPos)return o_GetCursorPos(out);return GetCursorPos(out);}
 BOOL real_clip_rect(RECT* out) noexcept {if(!out)return FALSE;if(o_GetClipCursor)return o_GetClipCursor(out);return GetClipCursor(out);}
 SHORT real_key_state(int vk) noexcept {if(o_GetKeyState)return o_GetKeyState(vk);return GetKeyState(vk);}
+SHORT real_async_key_state(int vk) noexcept {if(o_GetAsyncKeyState)return o_GetAsyncKeyState(vk);return GetAsyncKeyState(vk);}
 }

@@ -7,6 +7,22 @@
 #include <thread>
 
 namespace lab::startup {
+namespace {
+// What the player can do about it, for the reasons players actually meet. The
+// English reason stays below it in the dialog and in the record, for reports.
+std::wstring advice(const std::string& reason){
+    auto any=[&](std::initializer_list<const char*> causes){for(const auto* c:causes)if(reason==c)return true;return false;};
+    if(any({"Installed executable identity changed","Installed executable/host changed during validation","Game build is not an accepted adapter profile",
+            "Pinned game module changed","Pinned game module is no longer in the game directory"}))
+        return L"游戏更新过，和安装插件时的版本不一样了。\n请退出游戏，打开釉光，在游戏库里对这款游戏点「重新适配」。";
+    if(any({"Installed host identity changed","Installed bridge identity changed","Installed files are not the adapter package's exact payload",
+            "Adapter package manifest missing","Adapter package does not describe this installation","Module pin differs from the adapter package"}))
+        return L"游戏目录里的釉光插件和安装记录对不上（可能被其他工具改动，或只更新了一半）。\n请退出游戏，打开釉光，在游戏库里对这款游戏点「更新插件」。";
+    if(reason=="Data disk has less than 256 MiB free")
+        return L"釉光数据所在的盘剩余空间不足 256 MiB。请清理磁盘后再启动游戏。";
+    return L"请退出游戏，打开釉光，在游戏库里查看这款游戏的状态。";
+}
+}
 json record(DWORD pid,const std::string& error,const std::string& exe,const std::string& host){
     return {{"version",1},{"purpose","startup-diagnostic"},{"pid",pid},
         {"stage","standalone-host-startup"},{"error",error.substr(0,512)},
@@ -38,7 +54,7 @@ void report_async(HMODULE module,const char* error) noexcept{
         // unreadable receipt) there is no file, only the dialog.
         const auto root=recorded_output_root(module);
         std::thread([module,reason,root]{
-            std::wstring message=L"釉光 · Overglaze 未能启动，本次 NR 控制不可用。\n请退出游戏后检查安装配置。\n\n";
+            std::wstring message=L"釉光 · Overglaze 未能启动，本次 NR 控制不可用。\n\n"+advice(reason)+L"\n\n";
             try{
                 if(!root)throw std::runtime_error("no recorded data root");
                 winpath::require_no_reparse(*root);
@@ -50,7 +66,9 @@ void report_async(HMODULE module,const char* error) noexcept{
                 message+=L"原因："+wide(data.at("error").get<std::string>())+L"\n\n诊断文件："+path.wstring();
             }catch(...){message+=L"原因："+wide(reason)+L"\n\n诊断文件未能保存。请检查数据目录和磁盘空间。";}
             OutputDebugStringW(message.c_str());
-            MessageBoxW(nullptr,message.c_str(),L"釉光 · Overglaze — 启动失败",MB_OK|MB_ICONWARNING);
+            // Topmost: a borderless game window otherwise hides it, and the player
+            // only sees the panel hotkey doing nothing.
+            MessageBoxW(nullptr,message.c_str(),L"釉光 · Overglaze — 启动失败",MB_OK|MB_ICONWARNING|MB_TOPMOST);
         }).detach();
     }catch(...){OutputDebugStringW(L"Overglaze: startup failed; notification worker unavailable.\n");}
 }

@@ -24,4 +24,7 @@ BOOL real_clip_rect(RECT* out) noexcept;        // original GetClipCursor (tests
 // Original GetKeyState: the panel's own hotkey check needs the real Ctrl /
 // Shift / Alt state while the game is told every key is up.
 SHORT real_key_state(int vk) noexcept;
+// Original GetAsyncKeyState: the panel reads its hotkey and mouse buttons from
+// the real device state when the game's window never receives their messages.
+SHORT real_async_key_state(int vk) noexcept;
 }

@@ -66,6 +66,20 @@ NetworkModel network_model(const std::string& sha256){
     if(sha256==model::kKnownVersions[1].sha256)return NetworkModel::two;
     return NetworkModel::unrecognized;
 }
+// What a player can do about the NR failures players actually meet. The
+// panel shows the English reason below it unchanged, for reports.
+const char* nr_failure_advice(const std::string& error){
+    auto starts=[&](const char* p){return error.rfind(p,0)==0;};
+    if(starts("NR Init failed")||starts("NR Create failed"))
+        return "NVIDIA 驱动没能创建 NR。常见原因：显卡不是 RTX 50 系、驱动版本过旧，或模型与显卡不匹配。";
+    if(starts("NR model missing")||starts("NR model is"))
+        return "找不到可用的 NR 模型。请在釉光里导入模型，再对这款游戏点「更新插件」。";
+    if(starts("Data disk has less than"))
+        return "釉光数据所在的盘剩余空间不足 256 MiB，请清理磁盘。";
+    if(starts("Conflicting legacy NR"))
+        return "游戏里还加载着另一个 DLSS 5 / NR 插件，两个不能同时用。";
+    return nullptr;
+}
 }
 struct GameOverlay::Impl {
     Controller& control;mutable std::recursive_mutex mutex;std::mutex input_mutex;
@@ -77,6 +91,12 @@ struct GameOverlay::Impl {
     // swallowed too, and only those (a plain F10 is the game's when the binding
     // is Ctrl+F10).
     std::atomic<UINT> held_vk{0};
+    // The same hotkey read from the real key state once per present (render
+    // thread only), for games whose window never receives the key messages.
+    hotkey::PressWatch hotkey_watch;
+    // Set by a hotkey press while the panel's drawing had failed: the next
+    // present releases the old resources and builds them again.
+    std::atomic<bool> retry_render{false};
     // Bound to a chain (attach) and not detached since. The hotkey opens the
     // panel only while bound: an unbound panel would take the game's input and
     // draw nothing.
@@ -159,6 +179,37 @@ struct GameOverlay::Impl {
             CallWindowProcW(original_proc,w,WM_KEYUP,vk,up);
         }
     }
+    // The foreground window belongs to this process: the rule the on-Insert
+    // proxy and the Steam launcher use too, so a key typed in another program
+    // never opens the panel.
+    static bool in_foreground(){const HWND w=GetForegroundWindow();DWORD pid=0;return w&&GetWindowThreadProcessId(w,&pid)&&pid==GetCurrentProcessId();}
+    // One press of the panel hotkey, from the window procedure or the poll. A
+    // panel whose drawing failed stayed shut until the game recreated its
+    // swapchain, the hotkey doing nothing (keepCup, 2026-10-21; a swapchain
+    // wrapped by an OptiScaler fork): a press now tries it again.
+    void hotkey_pressed(){
+        if(failed.exchange(false))retry_render=true;
+#ifdef LAB_OVERLAY_RESEARCH
+        if(capture_hidden&&visible){capture_override=true;visibility(true);}else{capture_override=false;visibility(!visible);}
+#else
+        visibility(!visible);
+#endif
+    }
+    // The hotkey from the real key state, once per present. The window procedure
+    // sees only the key messages a game lets reach its swapchain's window; one
+    // reading the keyboard through raw input without legacy messages never
+    // delivers them, and the hotkey did nothing (Sons of the Forest, Total War,
+    // 2026-10-23). held_vk is shared with the procedure, so a press toggles the
+    // panel once, whichever of the two sees it first.
+    void poll_hotkey(){
+        if(stopped||!bound)return;
+        const auto key=hotkeys.current();
+        const bool pressed=hotkey_watch.poll(key,input_block::real_async_key_state);
+        if(!(static_cast<unsigned short>(input_block::real_async_key_state(int(key.vk)))&0x8000u)){UINT held=key.vk;held_vk.compare_exchange_strong(held,0u);return;}
+        if(!pressed||capturing||!in_foreground())return;
+        UINT none=0;if(!held_vk.compare_exchange_strong(none,key.vk))return; // the window procedure took this press
+        hotkey_pressed();
+    }
     static bool message_sink(HWND w,UINT m,WPARAM a,LPARAM b){auto* s=input_owner.load();if(!s||w!=s->window||!s->visible||s->stopped)return false;
         return procedure(w,m,a,b)==0;}
     static LRESULT CALLBACK procedure(HWND w,UINT m,WPARAM a,LPARAM b){
@@ -174,13 +225,9 @@ struct GameOverlay::Impl {
         // The hotkey: its key with exactly its Ctrl / Shift / Alt, read from the
         // real key state (the game's GetKeyState answers "up" while the panel is open).
         const auto key=s->hotkeys.current();
-        if(!s->stopped&&!s->failed&&s->bound&&key_down&&a==key.vk&&(repeat?s->held_vk==key.vk:hotkey::modifiers_match(key,input_block::real_key_state))){
-            if(!repeat){s->held_vk=key.vk;const bool was=s->visible;
-#ifdef LAB_OVERLAY_RESEARCH
-                if(s->capture_hidden&&s->visible){s->capture_override=true;s->visibility(true);}else{s->capture_override=false;s->visibility(!s->visible);}
-#else
-                s->visibility(!s->visible);
-#endif
+        if(!s->stopped&&s->bound&&key_down&&a==key.vk&&(repeat?s->held_vk==key.vk:hotkey::modifiers_match(key,input_block::real_key_state))){
+            // held_vk already this key: the present-time poll took this press.
+            if(!repeat&&s->held_vk.exchange(key.vk)!=key.vk){const bool was=s->visible;s->hotkey_pressed();
                 if(!was&&s->visible)s->release_modifiers(w,key);}
             return 0;}
         if(key_up&&s->held_vk!=0&&a==s->held_vk){s->held_vk=0;return 0;}
@@ -220,6 +267,14 @@ struct GameOverlay::Impl {
         case WM_KEYDOWN:case WM_SYSKEYDOWN:case WM_KEYUP:case WM_SYSKEYUP:{const auto k=key(m.w);if(k!=ImGuiKey_None)io.AddKeyEvent(k,m.id==WM_KEYDOWN||m.id==WM_SYSKEYDOWN);break;}
         case WM_CHAR:if(m.w>0&&m.w<0x10000)io.AddInputCharacterUTF16(static_cast<ImWchar16>(m.w));break;
         default:break;}}
+        // A game reading the mouse through raw input without legacy messages
+        // while in play sends its window no button messages, so the panel took
+        // clicks only in the game's menus (Star Wars, 2026-10-21). The real button
+        // state is read every frame as well; ImGui ignores a state it already has,
+        // so a game that does send the messages sees no difference.
+        if(in_foreground()){const bool swapped=GetSystemMetrics(SM_SWAPBUTTON)!=0; // the async state is the physical button
+            const int buttons[3]{swapped?VK_RBUTTON:VK_LBUTTON,swapped?VK_LBUTTON:VK_RBUTTON,VK_MBUTTON};
+            for(int i=0;i<3;++i)io.AddMouseButtonEvent(i,(static_cast<unsigned short>(input_block::real_async_key_state(buttons[i]))&0x8000u)!=0);}
     }
     void style(){ImGui::GetStyle()=ImGuiStyle();product::apply_theme();auto& s=ImGui::GetStyle();
         s.WindowPadding={22,20};s.FramePadding={10,6};s.ItemSpacing={10,8};s.WindowBorderSize=1;
@@ -428,7 +483,9 @@ struct GameOverlay::Impl {
         const auto panel=nr_panel(status,true,false,"@embedded",false);bool on=nr::executes(panel.requested);
         const auto nr=status.value("nr_runtime",json());
         const char* state=panel.failed?"STOPPED":panel.observed=="on"?"ON":panel.observed=="compute-only"?"COMPUTE":panel.observed=="off"?"OFF":"WAIT";
-        const char* observed=panel.failed?"本次开启未通过安全检查":panel.observed=="on"?"正在使用 NR 输出":panel.observed=="compute-only"?"仅计算 · 不写回游戏":panel.observed=="off"?"未执行 NR":"等待实际帧回执";
+        // Any terminal NR fault, not a security verdict: the old "未通过安全检查"
+        // read as a block and players stopped there instead of reading the reason.
+        const char* observed=panel.failed?"NR 启动失败 · 原因见下方":panel.observed=="on"?"正在使用 NR 输出":panel.observed=="compute-only"?"仅计算 · 不写回游戏":panel.observed=="off"?"未执行 NR":"等待实际帧回执";
         const char* requested_mode=panel.requested=="on"?"ON":panel.requested=="compute-only"?"COMPUTE":panel.requested=="off"?"OFF":"未知";
         const ImVec4 state_color=panel.failed?warning:panel.observed=="on"?accent:muted;
         // Fixed-height status keeps the main controls in place while requested
@@ -445,7 +502,9 @@ struct GameOverlay::Impl {
         ImGui::SameLine(0,12*dpi);ImGui::TextUnformatted(observed);
         ImGui::TextDisabled("请求 %s · 启动时默认关闭",requested_mode);
         ImGui::EndChild();ImGui::PopStyleVar();
-        if(panel.failed&&!panel.error.empty())ImGui::TextWrapped("%s",panel.error.c_str());
+        if(panel.failed&&!panel.error.empty()){
+            if(const auto* advice=nr_failure_advice(panel.error)){ImGui::PushStyleColor(ImGuiCol_Text,warning);ImGui::TextWrapped("%s",advice);ImGui::PopStyleColor();}
+            ImGui::TextWrapped("%s",panel.error.c_str());}
         if(panel.preparing||panel.rebuilding)
             ImGui::TextWrapped("%s",panel.rebuilding&&nr.is_object()&&nr.value("rebuild_reason",std::string())=="network-changed"?"正在按所选网络重建 NR（历史已清空）…":"等待可用帧…");
         if(nr.is_object()&&nr.value("consecutive_skips",0u))
@@ -817,6 +876,7 @@ bool GameOverlay::presentation_source(IDXGISwapChain* chain,ID3D12CommandQueue**
 }
 void GameOverlay::present(IDXGISwapChain* chain)noexcept{auto& s=*p_;if(s.stopped)return;
 #ifdef LAB_OVERLAY_RESEARCH
+    try{s.poll_hotkey();}catch(...){}
     // A queued cancellation must still be delivered while the panel is hidden.
     if(s.failed||(!s.visible&&!s.cancel_capture))return;
     std::unique_lock lock(s.mutex,std::try_to_lock);if(!lock.owns_lock())return;
@@ -824,10 +884,16 @@ void GameOverlay::present(IDXGISwapChain* chain)noexcept{auto& s=*p_;if(s.stoppe
     if(s.cancel_capture.exchange(false))try{s.dispatch("CancelCapturePair",json::object());}catch(...){}
     if(!s.visible)return;
 #else
+    try{s.poll_hotkey();}catch(...){}
     if(s.failed||!s.visible)return;
     std::unique_lock lock(s.mutex,std::try_to_lock);if(!lock.owns_lock())return;
     if(chain!=s.chain_key)return;
 #endif
+    // A press after a failed draw: build the panel's resources again, unless our
+    // own GPU work on them never completed (then they are kept, as at detach).
+    if(s.retry_render.exchange(false)){
+        if(s.completion_unknown){s.failed=true;s.visibility(false);return;}
+        try{s.release_gpu();}catch(const std::exception& e){s.completion_unknown=true;s.error=e.what();s.failed=true;s.visibility(false);s.control.diagnostic(s.error);return;}}
     try{ComPtr<IDXGISwapChain3> c;hr(chain->QueryInterface(IID_PPV_ARGS(&c)));s.render(c.Get());}catch(const std::exception& e){s.error=e.what();s.failed=true;s.visibility(false);s.control.diagnostic(s.error);}}
 bool GameOverlay::before_resize(IDXGISwapChain* chain)noexcept{auto& s=*p_;std::lock_guard lock(s.mutex);if(chain!=s.chain_key)return true;
     try{s.release_gpu();s.failed=false;return true;}catch(const std::exception& e){s.error=e.what();s.failed=true;s.visibility(false);return false;}}

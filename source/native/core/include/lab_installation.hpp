@@ -67,6 +67,14 @@ std::optional<std::filesystem::path> recorded_output_root(const std::filesystem:
 // reports that one as before.
 bool installation_root_missing(HMODULE module) noexcept;
 bool installation_root_missing(const std::filesystem::path& config) noexcept;
+// False when this process is not the EXE the receipt beside `module` was made
+// for. A root dxgi.dll is loaded by every program in the game directory that
+// creates a DXGI factory -- a launcher (Bannerlord's), a crash reporter -- and
+// none of them is the game: the host stands down silently there and the proxy
+// keeps forwarding DXGI. True when the receipt cannot be read, so the full
+// contract still reports that.
+bool runs_in_installed_executable(HMODULE module) noexcept;
+bool runs_in_installed_executable(const std::filesystem::path& config,const std::filesystem::path& process) noexcept;
 // A synthetic fixture's data root (no installation at all): the parent of its
 // live run directory OVERGLAZE_LIVE_DATA_PATH, held to the same local-disk rules.
 std::filesystem::path fixture_data_root();

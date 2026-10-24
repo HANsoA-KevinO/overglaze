@@ -75,14 +75,20 @@ std::filesystem::path module_path(HMODULE module){std::wstring path(32768,0);aut
     demand(n&&n<path.size(),"Module path unavailable");path.resize(n);return path;}
 bool has_installation(HMODULE module){return std::filesystem::is_regular_file(module_path(module).parent_path()/identity::kInstallationFile);}
 namespace {
-// What the receipt beside the host says about where the product lives, read
-// without validating anything else. Bounded and exception-free for callers.
+// The receipt beside the host, parsed without validating anything else.
+// Bounded and exception-free; discarded when it cannot be read.
+json read_receipt(const std::filesystem::path& config) noexcept {
+    try{
+        std::error_code ec;if(!std::filesystem::is_regular_file(config,ec)||ec)return json(json::value_t::discarded);
+        const auto size=std::filesystem::file_size(config,ec);if(ec||size>16384)return json(json::value_t::discarded);
+        std::ifstream in(config,std::ios::binary);return json::parse(in,nullptr,false);
+    }catch(...){return json(json::value_t::discarded);}
+}
+// What the receipt says about where the product lives. Exception-free for callers.
 struct RecordedRoot {std::filesystem::path data;bool package=false;};
 std::optional<RecordedRoot> read_recorded_root(const std::filesystem::path& config) noexcept {
     try{
-        std::error_code ec;if(!std::filesystem::is_regular_file(config,ec)||ec)return std::nullopt;
-        const auto size=std::filesystem::file_size(config,ec);if(ec||size>16384)return std::nullopt;
-        std::ifstream in(config,std::ios::binary);const auto j=json::parse(in,nullptr,false);
+        const auto j=read_receipt(config);
         if(!j.is_object()||!j.contains("output_root")||!j.at("output_root").is_string())return std::nullopt;
         const std::filesystem::path root(wide(j.at("output_root").get<std::string>()));
         if(!root.is_absolute()||root!=root.lexically_normal()||!root.has_relative_path())return std::nullopt;
@@ -109,6 +115,21 @@ bool installation_root_missing(const std::filesystem::path& config) noexcept {
     // program folder itself. Its absence means the program was removed.
     if(r->package&&!std::filesystem::is_directory(r->data.parent_path()/L"app",ec))return true;
     return false;
+}
+bool runs_in_installed_executable(HMODULE module) noexcept {
+    try{return runs_in_installed_executable(config_beside(module),module_path(nullptr));}catch(...){return true;}
+}
+bool runs_in_installed_executable(const std::filesystem::path& config,const std::filesystem::path& process) noexcept {
+    try{
+        const auto j=read_receipt(config);if(!j.is_object())return true; // unreadable: the full contract reports it
+        std::string executable;
+        if(j.contains("facts")&&j.at("facts").is_object()&&j.at("facts").contains("executable")&&j.at("facts").at("executable").is_string())
+            executable=j.at("facts").at("executable").get<std::string>();
+        else if(j.contains("profile")&&j.at("profile").is_string())
+            if(const auto* row=profiles::game(j.at("profile").get<std::string>()))executable=std::string(row->executable);
+        if(executable.empty())return true;
+        return winpath::same_spelling(process.filename(),wide(executable));
+    }catch(...){return true;}
 }
 std::filesystem::path fixture_data_root(){
     std::array<wchar_t,32768> value{};
@@ -203,7 +224,10 @@ Installation parse_installation(const json& j,const json& exe,const json& host){
     if(data_driven){demand(j.at("package").is_string()&&j.contains("facts"),"V3 requires package and facts");c.package=j.at("package").get<std::string>();
         c.facts=parse_facts(j.at("facts"),id,c.package,j.at("game_sha256").get<std::string>(),profile);}
     else c.facts=profiles::Facts::from(*profile);
-    demand(j.at("game_sha256")==exe.at("sha256")&&j.at("host_sha256")==host.at("sha256"),"Installed executable/host identity changed");
+    // Two causes with two different fixes for the user, so two messages: the
+    // game was patched (re-adapt) or our own files changed (update the plugin).
+    demand(j.at("game_sha256")==exe.at("sha256"),"Installed executable identity changed");
+    demand(j.at("host_sha256")==host.at("sha256"),"Installed host identity changed");
     demand(exe.at("sha256").get<std::string>()==c.facts.executable_sha256,"Game build is not an accepted adapter profile");
     if(j.contains("loader"))c.loader=parse_loader(j.at("loader"));
     const auto game=absolute(exe.at("path").get<std::string>()),dll=absolute(host.at("path").get<std::string>());
@@ -297,7 +321,10 @@ Installation load_installation_file(const std::filesystem::path& p,const json& e
     return c;
 }
 void activate_installation(Installation& c){
-    demand(std::filesystem::space(c.output_root).available>=30ULL*1024*1024*1024,"30 GiB disk reserve required");
+    // A game launch writes one small session receipt here. The 30 GiB this once
+    // demanded was the research capture reserve (manual_capture.cpp keeps it);
+    // asking it of every launch stopped the host on any fuller data disk.
+    demand(std::filesystem::space(c.output_root).available>=256ULL*1024*1024,"Data disk has less than 256 MiB free");
     auto id=uuid();id.erase(std::remove_if(id.begin(),id.end(),[](char c){return c=='{'||c=='}';}),id.end());
     c.run=c.output_root/("daily-"+id);demand(std::filesystem::create_directory(c.run),"Daily run must be unique");
     json receipt={{"version",1},{"purpose","interactive-use"},{"profile",c.profile},{"pid",GetCurrentProcessId()},

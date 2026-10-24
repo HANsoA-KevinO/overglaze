@@ -29,6 +29,11 @@ constexpr auto read_state=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 constexpr auto write_state=D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 inline void demand(bool ok,const char* error){if(!ok)throw std::runtime_error(error);}
 inline void demand(bool ok,const std::string& error){if(!ok)throw std::runtime_error(error);}
+// NGX's own result code with the failure: an unsupported GPU, an outdated
+// driver and a platform error have different fixes, and only the code tells
+// them apart in a player's screenshot of the panel.
+inline std::string ngx_failure(const char* what,NVSDK_NGX_Result result){
+    char text[96];std::snprintf(text,sizeof(text),"%s (NGX 0x%08X)",what,static_cast<unsigned>(result));return text;}
 struct Borrowed {
     // Colour, depth, motion and -- when it is read on this frame -- the game's
     // exposure texture (null otherwise), held until the GPU retires the frame.
@@ -253,7 +258,11 @@ struct Live {
     }
     void prepare(){
         state=State::preparing;
-        demand(std::filesystem::is_directory(data)&&std::filesystem::space(data).available>=30ULL*1024*1024*1024,"Existing data directory and disk reserve required");
+        // NGX keeps only its logs under the data path; the same small reserve
+        // as the host's launch check (core/src/installation.cpp), not the
+        // research capture reserve.
+        demand(std::filesystem::is_directory(data),"NR data directory missing");
+        demand(std::filesystem::space(data).available>=256ULL*1024*1024,"Data disk has less than 256 MiB free");
         if(!session){
         sample_lock.value=CreateFileW(sample.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);
         // Any reviewed version (lab_model_versions.hpp) -- or exactly the
@@ -275,7 +284,8 @@ struct Live {
         checked(device->CreateCommandList(0,q.Type,init_allocator.Get(),nullptr,IID_PPV_ARGS(&init_commands)));
         checked(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&init_fence)));
         session=std::make_unique<lab::nr::Session>(lab::nr::Api::from_verified_module(nr),&gate);
-        demand(session->initialize(device.Get(),data.c_str(),&parameters)==NVSDK_NGX_Result_Success,"NR Init failed");
+        const auto initialized=session->initialize(device.Get(),data.c_str(),&parameters);
+        demand(initialized==NVSDK_NGX_Result_Success,ngx_failure("NR Init failed",initialized));
         nr_module=nr;
         }else{
             demand(!session->pending()&&!session->has_feature(),"Rebuild requires retired and released Feature");
@@ -295,7 +305,7 @@ struct Live {
         ID3D12CommandList* command=init_commands.Get();init_queue->ExecuteCommandLists(1,&command);checked(init_queue->Signal(init_fence.Get(),create_fence));
         checked(init_fence->SetEventOnCompletion(create_fence,event.value));demand(WaitForSingleObject(event.value,30000)==WAIT_OBJECT_0,"NR Create GPU timeout");
         checked(device->GetDeviceRemovedReason());session->acknowledge_outer_queue_completion();init_incomplete=false;
-        demand(result==NVSDK_NGX_Result_Success,"NR Create failed");
+        demand(result==NVSDK_NGX_Result_Success,ngx_failure("NR Create failed",result));
         status.applied_network=network;
         for(auto v:{std::pair{"DLSSNR.Intensity",1.f},std::pair{"DLSSNR.LocalToneStrength",1.f},std::pair{"DLSSNR.LocalStructureStrength",1.f},std::pair{"DLSSNR.SkinStructureStrength",-1.f}})parameters.Set(v.first,v.second);
         parameters.Set("DLSSNR.UseAutoMask",0);parameters.Set("DLSSNR.UICorrection",0);parameters.Set("DLSSNR.Style",0);
