@@ -6,11 +6,11 @@ Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Ren
 
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
-## 0.2.0-preview.10
+## 0.2.0-preview.11
 
-Switching models is just importing. Importing a model while another one is in place now replaces it instead of refusing; the outgoing file is verified and kept in Overglaze's own model store first, so switching back is another import. Installed games keep their own copy until you choose *Update plugin*, which the Games page now offers with the reason. The Games page also refreshes faster: each file is hashed once per change, not on every refresh.
+Fixes for the most common "installed but nothing happens" reports. The data disk no longer needs 30 GiB free (a game launch needs 256 MiB, an install 1 GiB), which stopped the plugin on fuller drives, including the default location on C:. Cyberpunk 2077, Resident Evil Requiem and Alan Wake 2 install and re-adapt again on every build, including 2077 after its 2026-10-23 update. A launcher in the game folder no longer shows a startup error. The panel takes clicks and its hotkey in games that send their window no input messages, comes back after a failed draw on the next press, and explains a failed NR start in plain words with NVIDIA's result code. A game without DLSS where Overglaze looks now says whether DLSS files exist elsewhere in its folder.
 
-The in-game plugin files are unchanged from 0.2.0-preview.9: games already updated for it need nothing, and games on an older plugin show *Update plugin* as before (after switching models, every installed game offers *Update plugin* to pick up the new one). The model is still supplied by you. This preview does not add game certifications or new image-quality, performance or stability results. See [CHANGELOG.md](CHANGELOG.md).
+After updating the application, choose *Update plugin* for each installed game: the in-game host and the NR bridge changed. For a game shown as *游戏已更新 · 需适配* (2077 after its update), choose *重新适配*. The model is still supplied by you. This preview does not add game certifications or new image-quality, performance or stability results. See [CHANGELOG.md](CHANGELOG.md).
 
 ## What it does
 
