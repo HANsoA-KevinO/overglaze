@@ -27,8 +27,13 @@ public:
     bool detach() noexcept;
     // Bound to a chain by attach() and not detached or stopped since.
     bool bound() const noexcept;
+    bool visible() const noexcept;
     void color_space(IDXGISwapChain*,DXGI_COLOR_SPACE_TYPE) noexcept;
-    void present(IDXGISwapChain*) noexcept;
+    // Returns this submission's id, or zero if no work was submitted. The late
+    // path requires a per-call permit and checks its queue under the draw lock.
+    std::uint64_t present(IDXGISwapChain*,bool permitted=true,ID3D12CommandQueue* expected_queue=nullptr) noexcept;
+    // Original Present's result for that submission. S_OK is not display proof.
+    void presented(std::uint64_t submission,HRESULT result,UINT flags) noexcept;
     bool presentation_source(IDXGISwapChain*,ID3D12CommandQueue**,DXGI_COLOR_SPACE_TYPE*) noexcept;
     bool before_resize(IDXGISwapChain*) noexcept;
     // After successful ResizeBuffers1 only. Unresolved/rotating queues disable

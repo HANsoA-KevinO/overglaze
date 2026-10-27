@@ -82,7 +82,17 @@ int wmain(int argc,wchar_t** argv){
             overlay.color_space(chain.Get(),spaces[i]);gpu.clear(chain.Get());const auto baseline=gpu.read(chain.Get());
             const auto before=overlay.snapshot().at("draws");overlay.present(chain.Get());need(overlay.snapshot().at("draws")==before,"Hidden means no drawing");
             SendMessageW(window,WM_KEYDOWN,'K',0);const auto keys=key_events;toggle(window);SendMessageW(window,WM_KEYDOWN,'K',0);need(key_events==keys,"Open panel swallows key input");
-            for(unsigned frame=0;frame<5;++frame){gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();}
+            if(i==0){
+                const auto unchanged=gpu.read(chain.Get());const auto submitted=overlay.snapshot().at("draws");
+                overlay.present(chain.Get(),false,gpu.queue.Get());gpu.wait();
+                need(overlay.snapshot().at("draws")==submitted&&gpu.read(chain.Get())==unchanged,"No per-frame permit means no buffer writes");
+                ComPtr<ID3D12CommandQueue> other;D3D12_COMMAND_QUEUE_DESC q{};q.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
+                hr(gpu.device->CreateCommandQueue(&q,IID_PPV_ARGS(&other)));
+                overlay.present(chain.Get(),true,other.Get());gpu.wait();
+                need(overlay.snapshot().at("draws")==submitted&&gpu.read(chain.Get())==unchanged,"A permit for a different queue cannot write the buffer");
+                need(overlay.snapshot()["submission_evidence"]["proof_skipped"]==2,"Both refused permits are named in diagnostics");
+            }
+            for(unsigned frame=0;frame<5;++frame){gpu.clear(chain.Get());overlay.present(chain.Get(),true,gpu.queue.Get());gpu.wait();}
             auto status=overlay.snapshot();need(status.at("error")==""&&status.at("draws").get<unsigned>()>=before.get<unsigned>()+5,"Overlay must actually draw");
             const auto pixels=gpu.read(chain.Get());const unsigned stride=i==1?8:4;
             need(std::equal(pixels.end()-stride,pixels.end(),baseline.end()-stride),"Zero-alpha outside panel preserves original bits");

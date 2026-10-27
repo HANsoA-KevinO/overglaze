@@ -79,7 +79,7 @@ struct Gpu {
 };
 
 enum class Transition{none,legacy,enhanced};
-enum class Sync{cpu,foreign_direct_wait,compute_wait};
+enum class Sync{cpu,foreign_direct_wait,compute_wait,unrelated_direct_wait};
 
 // Record buffer -> RENDER_TARGET -> PRESENT on `on` and submit it there.
 void transition(Gpu& g,ID3D12Resource* buffer,ID3D12CommandQueue* on,Transition kind){
@@ -106,28 +106,30 @@ void sync_after(Gpu& g,ID3D12CommandQueue* on,Sync sync){
         // Transitioned on `on`, and a different DIRECT queue made to wait for it
         // on the GPU before the present: "transitioned on Q, presented on P".
         hr(on->Signal(g.fence.Get(),++g.value),"Signal");hr(g.present->Wait(g.fence.Get(),g.value),"Wait");
+    }else if(sync==Sync::unrelated_direct_wait){
+        hr(on->Signal(g.fence.Get(),++g.value),"Signal");hr(g.other->Wait(g.fence.Get(),g.value),"unrelated DIRECT Wait");
     }else if(sync==Sync::compute_wait){
         // An async-compute queue waiting on graphics is not a present queue.
         hr(on->Signal(g.fence.Get(),++g.value),"Signal");hr(g.compute->Wait(g.fence.Get(),g.value),"compute Wait");
     }else g.drain(on);
 }
 // One real frame on the swapchain; `w` is fed where the controller host feeds it.
-void frame(Gpu& g,Witness* w,Transition kind,Sync sync=Sync::cpu){
+ComPtr<ID3D12CommandQueue> frame(Gpu& g,Witness* w,Transition kind,Sync sync=Sync::cpu){
     ComPtr<ID3D12Resource> buffer;hr(g.chain->GetBuffer(g.chain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&buffer)),"GetBuffer");
     transition(g,buffer.Get(),g.present.Get(),kind);sync_after(g,g.present.Get(),sync);
-    if(w)w->present(g.chain.Get());
+    const auto permit=w?w->present(g.chain.Get()):ComPtr<ID3D12CommandQueue>{};
     const HRESULT presented=g.chain->Present(0,0);
     if(FAILED(presented))throw std::runtime_error("Present HRESULT="+std::to_string(static_cast<unsigned long>(presented))+
         " removed reason="+std::to_string(static_cast<unsigned long>(g.device->GetDeviceRemovedReason())));
-    g.idle();
+    g.idle();return permit;
 }
 // One stand-in frame: the current stand-in is transitioned on each queue in
 // `on` (in order), then the witness judges it; nothing is presented.
-void stand_in(Gpu& g,Witness& w,std::initializer_list<ID3D12CommandQueue*> on,Sync sync=Sync::cpu){
+ComPtr<ID3D12CommandQueue> stand_in(Gpu& g,Witness& w,std::initializer_list<ID3D12CommandQueue*> on,Sync sync=Sync::cpu){
     auto* buffer=g.stand_ins[g.stand_in_frame%3].Get();
     for(auto* q:on){transition(g,buffer,q,Transition::legacy);sync_after(g,q,sync);if(sync!=Sync::cpu)g.idle();}
-    w.present(g.stand_in_names());
-    g.idle();++g.stand_in_frame;
+    const auto permit=w.present(g.stand_in_names());
+    g.idle();++g.stand_in_frame;return permit;
 }
 std::uint64_t miss(const lab::json& s,const char* why){return s["misses"].value(why,0ULL);}
 }
@@ -156,6 +158,16 @@ int wmain(){
          need(w->decided().Get()==g.present.Get(),"Decided the queue that executed the transitions: "+w->status().dump());
          need(w->status()["marks"].value("legacy",0ULL)>=streak,"Legacy barriers were the evidence");
          need(w->contradictions()==0,"No contradiction on a consistent chain");
+         for(unsigned i=0;i<8;++i){
+             need(!frame(g,w,Transition::legacy,Sync::unrelated_direct_wait),"A foreign DIRECT wait denies this frame's draw permit");
+             need(!w->contradicted()&&w->decided().Get()==g.present.Get(),"An ambiguous wait is not proof of a queue change");
+             need(frame(g,w,Transition::legacy).Get()==g.present.Get(),"A clean current frame resumes without a restart");
+         }
+         need(w->status().value("redecisions",99ULL)==0,"Ambiguous waits do not consume the re-decision budget");
+         need(!frame(g,w,Transition::none),"A prior decision does not permit drawing without a current transition");
+         for(unsigned i=0;i<6;++i){Witness::OwnWork own_work;
+             need(!frame(g,w,Transition::legacy),"The panel's own transitions must not become game evidence");}
+         need(frame(g,w,Transition::legacy).Get()==g.present.Get(),"Game evidence resumes after own-work suppression");
          w->uninstall_for_test();}
 
         // 2. Async compute waiting on graphics between the transition and Present
@@ -193,6 +205,7 @@ int wmain(){
          stand_in(g,*w,{g.other.Get()});
          need(w->contradictions()==1,"A transition on another queue contradicts the decision: "+w->status().dump());
          need(w->decided().Get()==g.present.Get(),"The decision itself is not silently replaced");
+         need(!stand_in(g,*w,{g.present.Get()}),"A contradicted decision cannot grant permits until explicitly restarted");
          w->uninstall_for_test();}
 
         // 6. Transitioned on one DIRECT queue, another DIRECT queue made to wait for

@@ -51,7 +51,10 @@ void LatePanel::note(std::string text){
     if(evidence_.report)try{evidence_.report(text);}catch(...){}
 }
 void LatePanel::unbind(const char* why){
-    source_.clear();if(!attached_)return;
+    source_.clear();queue_.Reset();if(!attached_)return;
+    // Keep the user's open intent across a transient queue re-decision/take-over.
+    // A hidden panel stays hidden, and a failed detach still cannot reattach.
+    if(overlay_.visible())open_=true;
     attached_=false;++detaches_;
     if(!overlay_.detach()){++detach_failures_;withdrawn_=true;
         withdrawn_note_=std::string("withdrawn: the panel's own GPU work did not complete while detaching (")+why+"); control through overglazectl";note(withdrawn_note_);}
@@ -77,32 +80,36 @@ bool LatePanel::follow(IDXGISwapChain* chain)noexcept{
     }catch(const std::exception& e){try{note(std::string("follow: ")+e.what());}catch(...){}return false;}
     catch(...){return false;}
 }
-void LatePanel::bind(IDXGISwapChain* chain,bool may_attach,std::uint64_t now)noexcept{
+ComPtr<ID3D12CommandQueue> LatePanel::bind(IDXGISwapChain* chain,bool may_attach,std::uint64_t now,ID3D12CommandQueue* witnessed_queue)noexcept{
     std::lock_guard lock(mutex_);
     try{
-        if(!chain||chain!=chains_.followed()||withdrawn_)return;
+        if(!chain||chain!=chains_.followed()||withdrawn_)return {};
         // Judged before the overlay draws this present: a contradicted queue is
         // never drawn on again, attached or about to be.
         if(evidence_.contradicted&&evidence_.contradicted(source_)){
-            const bool was=attached_;unbind("contradicted");if(withdrawn_)return;
+            const bool was=attached_;unbind("contradicted");if(withdrawn_)return {};
             if(evidence_.restart&&evidence_.restart(now)){++redecisions_;
                 note(std::string(was?"detached":"not attached")+": the present-transition evidence contradicted the chosen queue; "
                      "re-deciding under the same rules (re-decision "+std::to_string(redecisions_)+")");}
             else{++refused_redecisions_;withdrawn_=true;
                 withdrawn_note_="withdrawn: the present-transition evidence was contradicted again after the re-decision bound was spent; control through overglazectl";
                 note(withdrawn_note_);}
-            return;
+            return {};
         }
-        if(attached_||!may_attach)return;
-        ComPtr<IDXGISwapChain3> c3;if(FAILED(chain->QueryInterface(IID_PPV_ARGS(&c3))))return;
+        if(attached_)return source_=="present-transition-witness"&&witnessed_queue!=queue_.Get()?ComPtr<ID3D12CommandQueue>{}:queue_;
+        if(!may_attach)return {};
+        ComPtr<IDXGISwapChain3> c3;if(FAILED(chain->QueryInterface(IID_PPV_ARGS(&c3))))return {};
         auto a=evidence_.resolve?evidence_.resolve(c3.Get()):Answer{};
-        if(!a.queue){note(a.note.empty()?"waiting-for-render-queue":a.note);return;}
+        if(!a.queue){note(a.note.empty()?"waiting-for-render-queue":a.note);return {};}
+        if(a.source=="present-transition-witness"&&witnessed_queue!=a.queue.Get())return {};
         overlay_.attach(c3.Get(),a.queue.Get());
-        if(!overlay_.bound()){note("the panel did not bind to this chain (it is bound to another live window)");return;}
-        attached_=true;source_=a.source;++attaches_;note("attached ("+a.source+")");
+        if(!overlay_.bound()){note("the panel did not bind to this chain (it is bound to another live window)");return {};}
+        attached_=true;queue_=a.queue;source_=a.source;++attaches_;note("attached ("+a.source+")");
         if(open_.exchange(false))overlay_.show();
+        return queue_;
     }catch(const std::exception& e){try{note(e.what());}catch(...){}}
     catch(...){}
+    return {};
 }
 bool LatePanel::attached()const{std::lock_guard lock(mutex_);return attached_;}
 std::string LatePanel::state()const{std::lock_guard lock(mutex_);

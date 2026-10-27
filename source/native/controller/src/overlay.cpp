@@ -128,6 +128,12 @@ struct GameOverlay::Impl {
     unsigned width=0,height=0,rtv_stride=0,srv_stride=0;DXGI_FORMAT format=DXGI_FORMAT_UNKNOWN;
     DXGI_COLOR_SPACE_TYPE space=DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     std::uint64_t sequence=0,draws=0,skipped=0,last_tick=0,last_settings=0,settings_revision=0;
+    std::uint64_t completed_before_release=0,proof_skipped=0,present_ok=0,present_other=0,last_reported=0;
+    HRESULT last_present=S_FALSE;UINT last_present_flags=0;json last_submission=nullptr;
+    std::uint64_t completed_draws()const noexcept{
+        const auto done=fence?fence->GetCompletedValue():0;
+        return completed_before_release+(done==UINT64_MAX?0:std::min(sequence,done));
+    }
     float tone=1,structure=1,exposure_stops=0,paper_white=203,skin=1,extrapolate_factor=2,compare_split_position=nr::Settings::default_compare_split_position;bool settings_dirty=false,settings_loaded=false,exposure_auto=false,compare_split=false,automask=false,extrapolate=false;
     int model_style=0,network=0;
     std::string error;json controls=json::object();
@@ -733,6 +739,7 @@ struct GameOverlay::Impl {
     bool wait(){if(!fence)return true;const auto done=fence->GetCompletedValue();if(done==UINT64_MAX)return false;if(done>=sequence)return true;
         if(!event||FAILED(fence->SetEventOnCompletion(sequence,event->value)))return false;return WaitForSingleObject(event->value,2000)==WAIT_OBJECT_0;}
     void release_gpu(){demand(wait(),"Overlay completion unknown; keep GPU resources alive");
+        completed_before_release+=sequence;
         if(context){ContextScope scope(context);if(renderer)ImGui_ImplDX12_Shutdown();renderer=false;}
         slots.clear();ui.Reset();scene.Reset();pipeline.Reset();root.Reset();rtv.Reset();srv.Reset();fence.Reset();event.reset();
         width=height=0;sequence=0;ready=false;descriptors.fill(false);
@@ -823,6 +830,8 @@ struct GameOverlay::Impl {
         c->RSSetViewports(1,&viewport);c->RSSetScissorRects(1,&rect);c->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);c->DrawInstanced(3,1,0,0);
         barrier(c,buffer,D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_PRESENT);hr(c->Close());ID3D12CommandList* commands[]{c};queue->ExecuteCommandLists(1,commands);
         ++sequence;slot.completed=sequence;hr(queue->Signal(fence.Get(),sequence));++draws;
+        last_submission={{"id",draws},{"buffer_index",index},{"width",width},{"height",height},{"format",unsigned(format)},
+            {"chain",reinterpret_cast<std::uint64_t>(chain)},{"queue",reinterpret_cast<std::uint64_t>(queue.Get())},{"time_ms",now}};
     }
 };
 GameOverlay::GameOverlay(Controller& c,std::filesystem::path path,std::filesystem::path data_root):p_(std::make_unique<Impl>(c,std::move(path),std::move(data_root))){}
@@ -874,27 +883,37 @@ bool GameOverlay::presentation_source(IDXGISwapChain* chain,ID3D12CommandQueue**
     if(!lock.owns_lock()||s.stopped||s.failed||chain!=s.chain_key||!s.queue)return false;
     *out=s.queue.Get();(*out)->AddRef();*color=s.space;return true;
 }
-void GameOverlay::present(IDXGISwapChain* chain)noexcept{auto& s=*p_;if(s.stopped)return;
+std::uint64_t GameOverlay::present(IDXGISwapChain* chain,bool permitted,ID3D12CommandQueue* expected_queue)noexcept{auto& s=*p_;if(s.stopped)return 0;
 #ifdef LAB_OVERLAY_RESEARCH
     try{s.poll_hotkey();}catch(...){}
     // A queued cancellation must still be delivered while the panel is hidden.
-    if(s.failed||(!s.visible&&!s.cancel_capture))return;
-    std::unique_lock lock(s.mutex,std::try_to_lock);if(!lock.owns_lock())return;
-    if(chain!=s.chain_key)return;
+    if(s.failed||(!s.visible&&!s.cancel_capture))return 0;
+    std::unique_lock lock(s.mutex,std::try_to_lock);if(!lock.owns_lock())return 0;
+    if(chain!=s.chain_key)return 0;
     if(s.cancel_capture.exchange(false))try{s.dispatch("CancelCapturePair",json::object());}catch(...){}
-    if(!s.visible)return;
+    if(!s.visible)return 0;
 #else
     try{s.poll_hotkey();}catch(...){}
-    if(s.failed||!s.visible)return;
-    std::unique_lock lock(s.mutex,std::try_to_lock);if(!lock.owns_lock())return;
-    if(chain!=s.chain_key)return;
+    if(s.failed||!s.visible)return 0;
+    std::unique_lock lock(s.mutex,std::try_to_lock);if(!lock.owns_lock())return 0;
+    if(chain!=s.chain_key)return 0;
 #endif
+    // The proof belongs to this invocation; a concurrent Present cannot replace
+    // it. Check the attached queue while holding the same mutex as render().
+    if(!permitted||(expected_queue&&s.queue.Get()!=expected_queue)){++s.proof_skipped;return 0;}
+    const auto before=s.draws;
     // A press after a failed draw: build the panel's resources again, unless our
     // own GPU work on them never completed (then they are kept, as at detach).
     if(s.retry_render.exchange(false)){
-        if(s.completion_unknown){s.failed=true;s.visibility(false);return;}
-        try{s.release_gpu();}catch(const std::exception& e){s.completion_unknown=true;s.error=e.what();s.failed=true;s.visibility(false);s.control.diagnostic(s.error);return;}}
-    try{ComPtr<IDXGISwapChain3> c;hr(chain->QueryInterface(IID_PPV_ARGS(&c)));s.render(c.Get());}catch(const std::exception& e){s.error=e.what();s.failed=true;s.visibility(false);s.control.diagnostic(s.error);}}
+        if(s.completion_unknown){s.failed=true;s.visibility(false);return 0;}
+        try{s.release_gpu();}catch(const std::exception& e){s.completion_unknown=true;s.error=e.what();s.failed=true;s.visibility(false);s.control.diagnostic(s.error);return 0;}}
+    try{ComPtr<IDXGISwapChain3> c;hr(chain->QueryInterface(IID_PPV_ARGS(&c)));s.render(c.Get());}catch(const std::exception& e){s.error=e.what();s.failed=true;s.visibility(false);s.control.diagnostic(s.error);}
+    return s.draws>before?s.draws:0;}
+void GameOverlay::presented(std::uint64_t submission,HRESULT result,UINT flags)noexcept{
+    if(!submission)return;auto& s=*p_;std::lock_guard lock(s.mutex);
+    if(result==S_OK&&!(flags&DXGI_PRESENT_TEST))++s.present_ok;else ++s.present_other;
+    if(submission>=s.last_reported){s.last_reported=submission;s.last_present=result;s.last_present_flags=flags;}
+}
 bool GameOverlay::before_resize(IDXGISwapChain* chain)noexcept{auto& s=*p_;std::lock_guard lock(s.mutex);if(chain!=s.chain_key)return true;
     try{s.release_gpu();s.failed=false;return true;}catch(const std::exception& e){s.error=e.what();s.failed=true;s.visibility(false);return false;}}
 void GameOverlay::resized_queues(IDXGISwapChain3* chain,std::span<ID3D12CommandQueue* const> queues)noexcept{
@@ -922,6 +941,7 @@ void GameOverlay::resized_default_queue(IDXGISwapChain3* chain)noexcept{
     queues.fill(s.creation_queue.Get());resized_queues(chain,{queues.data(),desc.BufferCount});
 }
 bool GameOverlay::bound()const noexcept{return p_->bound.load();}
+bool GameOverlay::visible()const noexcept{return p_->visible.load();}
 void GameOverlay::show()noexcept{auto& s=*p_;if(s.stopped||s.failed||!s.bound)return;try{s.visibility(true);}catch(...){}}
 void GameOverlay::stop()noexcept{auto& s=*p_;if(s.stopped.exchange(true))return;s.bound=false;s.visibility(false);s.preferences.close();s.hotkeys.close();std::lock_guard lock(s.mutex);
     if(s.window&&IsWindow(s.window)){
@@ -932,6 +952,11 @@ void GameOverlay::stop()noexcept{auto& s=*p_;if(s.stopped.exchange(true))return;
     try{s.release_gpu();}catch(...){s.completion_unknown=true;} // Preserve allocations if GPU completion is unknown.
 }
 json GameOverlay::snapshot()const{const auto& s=*p_;std::lock_guard lock(s.mutex);return {{"attached",s.chain_key!=nullptr},{"visible",s.visible.load()},{"draws",s.draws},{"skipped",s.skipped},
+    {"submission_evidence",{{"gpu_completed",s.completed_draws()},{"proof_skipped",s.proof_skipped},
+        {"present_returned_ok",s.present_ok},{"present_returned_other",s.present_other},{"last_reported_id",s.last_reported},
+        {"last_present_hr",static_cast<std::uint32_t>(s.last_present)},{"last_present_flags",s.last_present_flags},
+        {"last_submission",s.last_submission},{"display_visibility_verified",false},
+        {"scope","draws count signalled submissions; GPU completion and original Present results are independent, neither proves on-screen visibility"}}},
     {"input_block_installed",s.input_block_installed},{"input_block_active",input_block::active()},
     {"color_space",unsigned(s.space)},{"failed",s.failed.load()},{"error",s.error},{"controls",s.controls},{"hidden_draws",0},{"automatic_sampling",false},
     {"bound",s.bound.load()},{"attaches",s.attaches},{"detaches",s.detaches},{"rebinds",s.rebinds},{"reshapes",s.reshapes},

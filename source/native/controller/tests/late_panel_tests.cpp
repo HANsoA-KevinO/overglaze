@@ -101,7 +101,7 @@ struct Gpu {
         ComPtr<IDXGISwapChain1> one;const HRESULT r=factory->CreateSwapChainForHwnd(queue.Get(),window,&d,nullptr,nullptr,&one);
         if(SUCCEEDED(r))hr(one.As(&out),"IDXGISwapChain3");return r;}
 };
-struct Probe {ComPtr<ID3D12CommandQueue> queue;bool contradiction=false;unsigned restarts=0,allowed=2,rebinds=0,resolves=0;};
+struct Probe {ComPtr<ID3D12CommandQueue> queue;std::string source="fixture-creation-queue";bool contradiction=false;unsigned restarts=0,allowed=2,rebinds=0,resolves=0;};
 
 // One game frame on `chain`, in the order the host's Present detour runs:
 // follow, bind (followed chain only), the overlay's draw, the original Present.
@@ -114,9 +114,11 @@ void frame(Gpu& g,IDXGISwapChain3* chain,Late& late,lab::GameOverlay& overlay,st
     std::swap(b.Transition.StateBefore,b.Transition.StateAfter);g.list->ResourceBarrier(1,&b);hr(g.list->Close(),"Close");
     ID3D12CommandList* lists[]{g.list.Get()};g.queue->ExecuteCommandLists(1,lists);buffer.Reset();
     IDXGISwapChain* key=chain;
-    if(late.follow(key))late.bind(key,true,now);
-    overlay.present(key);
-    hr(chain->Present(0,0),"Present");g.idle();
+    ComPtr<ID3D12CommandQueue> permit;
+    if(late.follow(key))permit=late.bind(key,true,now,g.queue.Get());
+    const auto submitted=overlay.present(key,permit!=nullptr,permit.Get());
+    const auto result=chain->Present(0,0);overlay.presented(submitted,result,0);
+    hr(result,"Present");g.idle();
 }
 std::uint64_t draws(const lab::GameOverlay& o){return o.snapshot().value("draws",0ULL);}
 }
@@ -128,10 +130,10 @@ int wmain(){
         Gpu g;lab::json report={{"test","late-panel-binding"}};
         lab::Controller controller;controller.enable_nr_preparation(true);controller.enable_embedded_control();
         lab::GameOverlay overlay(controller);
-        Probe probe;probe.queue=g.queue;
+        Probe probe;probe.queue=g.queue;probe.source="present-transition-witness";
         Late::Evidence e;
         e.accept=[&](IDXGISwapChain3*,std::string&){return true;};
-        e.resolve=[&](IDXGISwapChain3*){++probe.resolves;return Late::Answer{probe.queue,"fixture-creation-queue",{}};};
+        e.resolve=[&](IDXGISwapChain3*){++probe.resolves;return Late::Answer{probe.queue,probe.source,{}};};
         e.contradicted=[&](const std::string&){return probe.contradiction;};
         e.restart=[&](std::uint64_t){probe.contradiction=false;return ++probe.restarts<=probe.allowed;};
         e.rebind=[&]{++probe.rebinds;};
@@ -147,6 +149,9 @@ int wmain(){
         need(late.attached()&&overlay.bound(),"The panel attached on the first followed present: "+late.status().dump());
         toggle(g.w1);for(unsigned i=0;i<3;++i)frame(g,a.Get(),late,overlay,++now);
         need(draws(overlay)==3,"The panel draws on A: "+overlay.snapshot().dump());
+        need(!late.bind(a.Get(),true,++now,nullptr),"A retained decision does not permit a frame without current proof");
+        need(late.attached()&&overlay.visible(),"A missing permit does not detach or hide the panel");
+        need(late.bind(a.Get(),true,++now,g.queue.Get()).Get()==g.queue.Get(),"A fresh matching frame resumes on the bound queue");
 
         // 2. A second chain (window 2) presenting alongside: A stays followed.
         ComPtr<IDXGISwapChain3> c;hr(g.make(g.w2,c),"chain C");
@@ -187,8 +192,8 @@ int wmain(){
             const auto s=late.status();
             need(s["chains"].value("adoptions",0ULL)==2&&probe.rebinds==1&&s.value("detaches",0ULL)==1&&s.value("attaches",0ULL)==2&&late.attached(),
                  "The silent chain is taken over and the panel rebinds on B: "+s.dump());
-            need(!overlay.snapshot().value("visible",true),"A rebind hides the panel");
-            toggle(g.w1);const auto shown=draws(overlay);for(unsigned i=0;i<3;++i)frame(g,b.Get(),late,overlay,++now);
+            need(overlay.visible(),"A rebind preserves the user's open intent");
+            const auto shown=draws(overlay);for(unsigned i=0;i<3;++i)frame(g,b.Get(),late,overlay,++now);
             need(draws(overlay)==shown+3,"The panel draws on B: "+overlay.snapshot().dump());
         }
         // 6. A take-over to a chain on ANOTHER window (C, window 2, still alive).
@@ -197,7 +202,7 @@ int wmain(){
         need(late.status()["chains"].value("adoptions",0ULL)==adoptions+1&&late.attached(),"C is followed: "+late.status().dump());
         need(GetWindowLongPtrW(g.w1,GWLP_WNDPROC)==reinterpret_cast<LONG_PTR>(&window_proc),"Window 1 has its own procedure back");
         need(GetWindowLongPtrW(g.w2,GWLP_WNDPROC)!=reinterpret_cast<LONG_PTR>(&window_proc),"Window 2 is subclassed by the panel");
-        toggle(g.w2);{const auto shown=draws(overlay);for(unsigned i=0;i<3;++i)frame(g,c.Get(),late,overlay,++now);
+        need(overlay.visible(),"The panel stays open across a take-over to another window");{const auto shown=draws(overlay);for(unsigned i=0;i<3;++i)frame(g,c.Get(),late,overlay,++now);
          need(draws(overlay)==shown+3,"The panel draws on C: "+overlay.snapshot().dump());}
 
         // 7. A contradiction: detached before this frame draws; re-decided; attached again.
@@ -205,10 +210,16 @@ int wmain(){
          need(draws(overlay)==shown&&!late.attached()&&!overlay.bound(),"A contradicted queue is not drawn on: "+late.status().dump());
          frame(g,c.Get(),late,overlay,++now);
          need(late.attached()&&late.status().value("redecisions",0ULL)==1,"Re-decided and attached again: "+late.status().dump());
-         toggle(g.w2);frame(g,c.Get(),late,overlay,++now);need(draws(overlay)==shown+1,"Drawing again after the re-decision");}
+         need(overlay.visible()&&draws(overlay)==shown+1,"Drawing resumes with the previous open intent after re-decision");
+         toggle(g.w2);need(!overlay.visible(),"The user can hide the recovered panel");}
         // 8. Past the bound: withdrawn, unbound, the hotkey goes to the game.
         probe.contradiction=true;frame(g,c.Get(),late,overlay,++now);frame(g,c.Get(),late,overlay,++now); // second re-decision
         need(late.attached()&&late.status().value("redecisions",0ULL)==2,"Second re-decision: "+late.status().dump());
+        need(!overlay.visible(),"A hidden panel stays hidden after re-decision");
+        toggle(g.w2);frame(g,c.Get(),late,overlay,++now);
+        {const auto s=overlay.snapshot();const auto& evidence=s["submission_evidence"];
+         need(evidence["gpu_completed"]==s["draws"]&&evidence["present_returned_ok"]==s["draws"],"Every fixture submission completed and its original Present returned S_OK: "+s.dump());
+         need(!evidence.value("display_visibility_verified",true),"Submission diagnostics do not claim display visibility");}
         probe.contradiction=true;frame(g,c.Get(),late,overlay,++now);
         need(!late.attached()&&late.state().rfind("withdrawn",0)==0&&late.status().value("refused_redecisions",0ULL)==1,"Past the bound the panel stays withdrawn: "+late.status().dump());
         {const auto shown=draws(overlay);const auto k=keys;toggle(g.w2);SendMessageW(g.w2,WM_KEYDOWN,'K',0);

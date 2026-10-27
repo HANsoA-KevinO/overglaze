@@ -6,6 +6,8 @@ All notable changes to Overglaze are listed here. The format follows [Keep a Cha
 
 ### Fixed
 
+- A late-loaded panel could permanently withdraw after unrelated DIRECT-queue waits repeatedly exhausted its re-decision budget. Such a wait now skips that frame's panel draw; a fresh, unambiguous frame can resume on the retained queue without a restart. Missing transitions also skip drawing, and the panel's own work is excluded from the evidence. Actual conflicting transitions or a changed transition queue still require a bounded fresh decision. The panel keeps its open/hidden intent through a transient rebind. **Update the game's plugin** after upgrading the desktop program. This fixes the withdrawal mechanism; games where a submitted panel never appeared still need an in-game visibility check. Status now separates signalled submissions, GPU completion and the original Present result; none alone certifies that the panel appeared on screen.
+
 - Adding a game by folder could preselect a crash reporter when it shared the game's DLSS directory. Auxiliary EXEs are now ranked after the game even beside those modules; selecting one directly offers the adjacent game EXEs first. Preflight names it as *不是游戏本体* and refuses to generate or install its package. An auxiliary EXE already packaged or installed by an older version shows the same explanation, with its identity-checked uninstall still available. Select the game's actual EXE so its own identity and anti-tamper risk determine the package and loading mode. This fixes selection and installation handling; it does not certify a game's NR output. The in-game plugin is unchanged.
 
 ## [0.2.0-preview.11] - 2026-10-24

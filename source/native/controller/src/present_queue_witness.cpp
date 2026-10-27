@@ -13,6 +13,10 @@ namespace {
 constexpr unsigned MaxBuffers=8,MaxMarks=32,MaxWaits=32;
 std::string hex(const void* p){char b[24];std::snprintf(b,sizeof(b),"0x%llx",static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(p)));return b;}
 }
+namespace {thread_local unsigned own_work_depth=0;}
+PresentQueueWitness::OwnWork::OwnWork()noexcept{++own_work_depth;}
+PresentQueueWitness::OwnWork::~OwnWork(){--own_work_depth;}
+
 struct PresentQueueWitness::Impl {
     inline static std::atomic<Impl*> active{nullptr};
     inline static std::array<void*,4> originals{};
@@ -71,7 +75,7 @@ struct PresentQueueWitness::Impl {
 
     static void STDMETHODCALLTYPE barrier(ID3D12GraphicsCommandList* list,UINT count,const D3D12_RESOURCE_BARRIER* b){
         auto* s=active.load(std::memory_order_acquire);
-        if(s&&s->armed.load(std::memory_order_relaxed)&&b)
+        if(s&&!own_work_depth&&s->armed.load(std::memory_order_relaxed)&&b)
             for(UINT i=0;i<count;++i)
                 if(b[i].Type==D3D12_RESOURCE_BARRIER_TYPE_TRANSITION&&b[i].Transition.StateAfter==D3D12_RESOURCE_STATE_PRESENT&&
                    s->back_buffer(b[i].Transition.pResource))s->mark(list,b[i].Transition.pResource,false);
@@ -79,7 +83,7 @@ struct PresentQueueWitness::Impl {
     }
     static void STDMETHODCALLTYPE enhanced(ID3D12GraphicsCommandList7* list,UINT32 groups,const D3D12_BARRIER_GROUP* g){
         auto* s=active.load(std::memory_order_acquire);
-        if(s&&s->armed.load(std::memory_order_relaxed)&&g)
+        if(s&&!own_work_depth&&s->armed.load(std::memory_order_relaxed)&&g)
             for(UINT32 i=0;i<groups;++i)if(g[i].Type==D3D12_BARRIER_TYPE_TEXTURE&&g[i].pTextureBarriers)
                 for(UINT32 j=0;j<g[i].NumBarriers;++j){const auto& t=g[i].pTextureBarriers[j];
                     if(t.LayoutAfter==D3D12_BARRIER_LAYOUT_PRESENT&&s->back_buffer(t.pResource))s->mark(list,t.pResource,true);}
@@ -87,14 +91,14 @@ struct PresentQueueWitness::Impl {
     }
     static void STDMETHODCALLTYPE execute(ID3D12CommandQueue* queue,UINT count,ID3D12CommandList* const* lists){
         auto* s=active.load(std::memory_order_acquire);
-        if(s&&s->pending.load(std::memory_order_relaxed)&&lists&&count<=256){std::lock_guard lock(s->mutex);
+        if(s&&!own_work_depth&&s->pending.load(std::memory_order_relaxed)&&lists&&count<=256){std::lock_guard lock(s->mutex);
             for(auto& m:s->marks)if(m.list)for(UINT i=0;i<count;++i)
                 if(static_cast<void*>(lists[i])==m.list){s->record(m.resource,queue);m={};s->pending.fetch_sub(1,std::memory_order_relaxed);break;}}
         reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D12CommandQueue*,UINT,ID3D12CommandList* const*)>(originals[2])(queue,count,lists);
     }
     static HRESULT STDMETHODCALLTYPE wait(ID3D12CommandQueue* queue,ID3D12Fence* fence,UINT64 value){
         auto* s=active.load(std::memory_order_acquire);
-        if(s&&s->armed.load(std::memory_order_relaxed)&&queue->GetDesc().Type==D3D12_COMMAND_LIST_TYPE_DIRECT){std::lock_guard lock(s->mutex);
+        if(s&&!own_work_depth&&s->armed.load(std::memory_order_relaxed)&&queue->GetDesc().Type==D3D12_COMMAND_LIST_TYPE_DIRECT){std::lock_guard lock(s->mutex);
             s->waits[s->waits_seen++%MaxWaits]={queue,++s->seq};}
         return reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(ID3D12CommandQueue*,ID3D12Fence*,UINT64)>(originals[3])(queue,fence,value);
     }
@@ -150,7 +154,7 @@ PresentQueueWitness::BackBuffers PresentQueueWitness::name(IDXGISwapChain3* chai
     return b;
 }
 
-void PresentQueueWitness::present(const BackBuffers& b)noexcept{
+ComPtr<ID3D12CommandQueue> PresentQueueWitness::present(const BackBuffers& b)noexcept{
     auto& s=*impl_;
     try{
         const bool named=b.named&&b.count>0&&b.count<=MaxBuffers;
@@ -158,9 +162,9 @@ void PresentQueueWitness::present(const BackBuffers& b)noexcept{
         // Until one present named the back buffers, no barrier could be matched.
         const bool first=named&&!s.armed.exchange(true);
         std::lock_guard lock(s.mutex);++s.presents;
-        if(!named){++s.buffer_failures;s.miss("back-buffers-not-nameable");return;}
-        if(first){s.miss("first-present-names-the-back-buffers");return;}
-        if(b.current>=b.count){s.miss("current-index-out-of-range");return;}
+        if(!named){++s.buffer_failures;s.miss("back-buffers-not-nameable");return {};}
+        if(first){s.miss("first-present-names-the-back-buffers");return {};}
+        if(b.current>=b.count){s.miss("current-index-out-of-range");return {};}
         Impl::Record* r=nullptr;for(auto& x:s.records)if(x.resource==b.identity[b.current]){r=&x;break;}
         const char* why=nullptr;bool contradicts=false;
         if(!r||!r->fresh)why="no-present-transition-for-current-buffer";
@@ -171,15 +175,16 @@ void PresentQueueWitness::present(const BackBuffers& b)noexcept{
                 why="transition-queue-not-direct-on-this-device";contradicts=true;}
             // The wait history only proves "no foreign wait" back to its oldest entry.
             else if(s.waits_seen>MaxWaits&&s.waits[s.waits_seen%MaxWaits].seq>r->seq)why="wait-history-overflow";
-            else for(const auto& w:s.waits)if(w.queue&&w.seq>r->seq&&w.queue!=r->queue.Get()){why="other-direct-queue-waited-before-present";contradicts=true;break;}
+            else for(const auto& w:s.waits)if(w.queue&&w.seq>r->seq&&w.queue!=r->queue.Get()){why="other-direct-queue-waited-before-present";break;}
         }
         ComPtr<ID3D12CommandQueue> queue;if(r){queue=r->queue;r->fresh=false;r->conflict=false;}
-        if(why){s.miss(why);if(s.decided&&contradicts)s.contradiction();return;}
+        if(why){s.miss(why);if(s.decided&&contradicts)s.contradiction();return {};}
         ++s.accepted;
-        if(s.decided){if(queue!=s.decided)s.contradiction();return;}
+        if(s.decided){if(queue!=s.decided)s.contradiction();return s.since_decision?ComPtr<ID3D12CommandQueue>{}:s.decided;}
         if(s.candidate==queue)++s.streak;else{if(s.candidate)++s.queue_changes;s.candidate=queue;s.streak=1;}
         if(s.streak>=s.policy.streak){s.decided=s.candidate;s.since_decision=0;++s.decisions;}
-    }catch(...){}
+        return s.decided;
+    }catch(...){return {};}
 }
 
 ComPtr<ID3D12CommandQueue> PresentQueueWitness::decided()const{std::lock_guard lock(impl_->mutex);return impl_->decided;}

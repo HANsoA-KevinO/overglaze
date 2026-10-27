@@ -292,22 +292,30 @@ struct Host final:SlAdmissionSink {
         if(scope.outer&&SUCCEEDED(r)&&out&&*out)h->offer(q,*out);return r;}
     template<unsigned Bank>static HRESULT STDMETHODCALLTYPE present(IDXGISwapChain* c,UINT i,UINT f){auto* h=current.load();
         const bool outer=present_depth++==0;
-        if(outer&&h->late)h->late_present(c);
+        ComPtr<ID3D12CommandQueue> permit;std::uint64_t panel_submission=0;
+        if(outer&&h->late&&!(f&DXGI_PRESENT_TEST))permit=h->late_present(c);
         // The panel has to reach the back buffer BEFORE it is presented. Drawing
         // after the original returns puts it in the buffer the game renders over
         // next, which counts a draw and shows nothing -- observed in Alan Wake 2.
         // The research host has always drawn here (before_present).
-        if(outer){h->adapter.present(reinterpret_cast<std::uint64_t>(c));if(h->overlay)h->overlay->present(c);}
+        if(outer&&!(f&DXGI_PRESENT_TEST)){h->adapter.present(reinterpret_cast<std::uint64_t>(c));if(h->overlay){
+            PresentQueueWitness::OwnWork own_work;
+            panel_submission=h->overlay->present(c,!h->late||permit!=nullptr,permit.Get());}}
         const auto r=h->present_hooks.original<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*,UINT,UINT)>(Bank,0)(c,i,f);
         --present_depth;
+        if(panel_submission&&h->overlay)h->overlay->presented(panel_submission,r,f);
         if(outer){++h->presents;if(r==S_OK&&!(f&DXGI_PRESENT_TEST))++h->successful_presents;}
         return r;}
     template<unsigned Bank>static HRESULT STDMETHODCALLTYPE present1(IDXGISwapChain1* c,UINT i,UINT f,const DXGI_PRESENT_PARAMETERS* p){auto* h=current.load();
         const bool outer=present_depth++==0;
-        if(outer&&h->late)h->late_present(c);
-        if(outer){h->adapter.present(reinterpret_cast<std::uint64_t>(c));if(h->overlay)h->overlay->present(c);} // see present(): before, not after
+        ComPtr<ID3D12CommandQueue> permit;std::uint64_t panel_submission=0;
+        if(outer&&h->late&&!(f&DXGI_PRESENT_TEST))permit=h->late_present(c);
+        if(outer&&!(f&DXGI_PRESENT_TEST)){h->adapter.present(reinterpret_cast<std::uint64_t>(c));if(h->overlay){
+            PresentQueueWitness::OwnWork own_work;
+            panel_submission=h->overlay->present(c,!h->late||permit!=nullptr,permit.Get());}} // see present(): before, not after
         const auto r=h->present_hooks.original<HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1*,UINT,UINT,const DXGI_PRESENT_PARAMETERS*)>(Bank,1)(c,i,f,p);
         --present_depth;
+        if(panel_submission&&h->overlay)h->overlay->presented(panel_submission,r,f);
         if(outer){++h->presents;if(r==S_OK&&!(f&DXGI_PRESENT_TEST))++h->successful_presents;}
         return r;}
     template<unsigned Bank>static HRESULT STDMETHODCALLTYPE resize(IDXGISwapChain* c,UINT n,UINT w,UINT h,DXGI_FORMAT f,UINT flags){auto* host=current.load();
@@ -407,19 +415,21 @@ struct Host final:SlAdmissionSink {
 
     // Every outer Present on the late path, before the panel draws. The chain is
     // touched here and only here, through the pointer this call was handed.
-    void late_present(IDXGISwapChain* c)noexcept{
-        if(!c)return;
+    ComPtr<ID3D12CommandQueue> late_present(IDXGISwapChain* c)noexcept{
+        if(!c)return {};
         if(!adopted.load())adopt(c);
-        if(!late_panel||!late_panel->follow(c))return;
+        if(!late_panel||!late_panel->follow(c))return {};
+        ComPtr<ID3D12CommandQueue> verified;
         // Only the followed chain's presents are evidence; the witness is fed
         // before the panel draws, so a frame's own game transition is judged.
         if(auto* w=present_witness.load(std::memory_order_acquire)){
-            ComPtr<IDXGISwapChain3> chain;if(SUCCEEDED(c->QueryInterface(IID_PPV_ARGS(&chain))))w->present(chain.Get());}
+            ComPtr<IDXGISwapChain3> chain;if(SUCCEEDED(c->QueryInterface(IID_PPV_ARGS(&chain)))){
+                const auto permit=w->present(chain.Get());if(permit)try{verified=native_queue(permit.Get());}catch(...){}}}
         if(late_open_panel.exchange(false))late_panel->open_when_attached();
         // The panel attaches only once NR has been prepared: before the bridge
         // exists there is no moment at which this process can name a queue that
         // is the game's own rather than one of ours.
-        late_panel->bind(c,live.load()!=nullptr&&!hook_fault&&!stopping,GetTickCount64());
+        return late_panel->bind(c,live.load()!=nullptr&&!hook_fault&&!stopping,GetTickCount64(),verified.Get());
     }
 
     // The queue the panel submits on. It draws into the back buffer right before

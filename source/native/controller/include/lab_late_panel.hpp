@@ -79,7 +79,9 @@ public:
     bool follow(IDXGISwapChain* chain)noexcept;
     // The followed chain's present, before the overlay draws: attach once the
     // evidence names a queue (only while `may_attach`), detach on contradiction.
-    void bind(IDXGISwapChain* chain,bool may_attach,std::uint64_t now_ms)noexcept;
+    // Return the permitted queue for this call, not a reusable draw permission.
+    // Witness-derived bindings require this present's freshly verified queue.
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> bind(IDXGISwapChain* chain,bool may_attach,std::uint64_t now_ms,ID3D12CommandQueue* witnessed_queue)noexcept;
     // Show the panel the next time it attaches (the player's Insert started us).
     void open_when_attached()noexcept{open_=true;}
     bool attached()const;
@@ -93,6 +95,7 @@ private:
     GameOverlay& overlay_;Evidence evidence_;ChainTracker chains_;
     mutable std::mutex mutex_;
     bool attached_=false,withdrawn_=false;std::atomic<bool> open_{false};
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue_;
     std::string source_,withdrawn_note_;std::deque<std::string> notes_;
     std::uint64_t attaches_=0,detaches_=0,redecisions_=0,refused_redecisions_=0,refused_take_overs_=0,detach_failures_=0;
 };

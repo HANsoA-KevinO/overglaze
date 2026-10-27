@@ -38,8 +38,11 @@ namespace lab {
 // the refusals above guard the case where it does not, and the fixture exercises
 // them on ordinary textures standing in for back buffers.
 //
-// After the decision the hooks keep counting, so a later contradiction is
-// visible (contradictions(), contradicted()) and the caller can stop drawing.
+// After the decision, every present still needs fresh unambiguous evidence.
+// A foreign DIRECT wait may be unrelated work: it denies this frame's permit,
+// but does not by itself prove a changed queue or consume a restart. A changed
+// transition queue or conflicting transitions do contradict the decision.
+// No permit is returned again until the decision is uncontradicted.
 //
 // A contradiction is not the end of the evidence (RE9: switching
 // DLSS frame generation on in game moved presents onto Streamline's queue, and
@@ -64,8 +67,12 @@ public:
     struct BackBuffers {std::array<const void*,8> identity{};unsigned count=0,current=0;bool named=false;};
     static BackBuffers name(IDXGISwapChain3* chain)noexcept;
     // At the top of the adopted chain's Present, before the original.
-    void present(const BackBuffers& buffers)noexcept;
-    void present(IDXGISwapChain3* chain)noexcept{present(name(chain));}
+    // A permit for THIS present only. A retained decision is not permission to
+    // draw a frame whose transition/wait evidence is missing or ambiguous.
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> present(const BackBuffers& buffers)noexcept;
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> present(IDXGISwapChain3* chain)noexcept{return present(name(chain));}
+    // The panel's own barriers/submissions must never become game evidence.
+    struct OwnWork final {OwnWork()noexcept;~OwnWork();OwnWork(const OwnWork&)=delete;OwnWork& operator=(const OwnWork&)=delete;};
     // The proven queue, or null while the evidence is still being gathered.
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> decided()const;
     std::uint64_t contradictions()const noexcept;
