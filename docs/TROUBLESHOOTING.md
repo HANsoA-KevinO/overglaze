@@ -22,6 +22,8 @@ Session records and logs are under `data\` in the Overglaze folder.
 
 If the panel alternates between visible and absent, compare it with frame generation off in the game's own settings. A smooth panel with FG off isolates a compatibility problem in the FG presentation path; it does not certify that all FG-enabled games have the same cause. Report `host.overlay.submission_evidence.proof_skipped` together with `host.present_queue_witness.misses`. An opaque background cannot compensate for whole frames where no panel was drawn. Keep the foreground/input issue separate: focus loss releases input while keeping the panel open; the game may still pause rendering when unfocused.
 
+`host.present_queue_witness.wait_provenance` records up to 64 fence identities and a 32-entry wait ring, with no image/resource readback. It reports the last foreign wait, its fence flags/value, the observed producer's signal point and GPU-completed value at the wait. An old completed private point can be excluded only under the full rule; CPU-written, shared, rewound, multiple-producer or untracked timelines still skip drawing. `ignored_old_completed_waits` counts excluded waits, not visible frames. If flicker remains, include these fields instead of relaxing the queue checks.
+
 ## "Waiting for a usable frame" and NR never starts
 
 - **Turn on DLSS** in the game's graphics settings. Overglaze runs after the game's upscaler: it uses Ray Reconstruction if the game has it (usually only with ray tracing or path tracing on), otherwise Super Resolution or DLAA. With DLSS off there is nothing to attach to.

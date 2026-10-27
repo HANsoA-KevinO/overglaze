@@ -16,11 +16,13 @@ std::array<std::size_t,5> swapchain_slots(){
     return {SLOT(Present),SLOT(Present1),SLOT(ResizeBuffers),SLOT(ResizeBuffers1),SLOT(SetColorSpace1)};
 #undef SLOT
 }
-// The present-queue witness's four hooks (lab_present_queue_witness.hpp).
-std::array<std::size_t,4> witness_slots(){
+// The present-queue witness hooks (lab_present_queue_witness.hpp).
+std::array<std::size_t,6> witness_slots(){
     return {offsetof(ID3D12GraphicsCommandListVtbl,ResourceBarrier)/sizeof(void*),
             offsetof(ID3D12GraphicsCommandList7Vtbl,Barrier)/sizeof(void*),
             offsetof(ID3D12CommandQueueVtbl,ExecuteCommandLists)/sizeof(void*),
-            offsetof(ID3D12CommandQueueVtbl,Wait)/sizeof(void*)};
+            offsetof(ID3D12CommandQueueVtbl,Wait)/sizeof(void*),
+            offsetof(ID3D12CommandQueueVtbl,Signal)/sizeof(void*),
+            offsetof(ID3D12FenceVtbl,Signal)/sizeof(void*)};
 }
 }

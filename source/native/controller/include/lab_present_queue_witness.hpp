@@ -25,9 +25,12 @@ namespace lab {
 //   - every present's current back buffer had a fresh such transition,
 //   - that transition was executed on the same DIRECT queue of this device,
 //   - no second queue executed a transition of the same buffer in between, and
-//   - no OTHER direct queue issued a GPU Wait between that submission and the
-//     Present. A transition on Q followed by a wait on P is exactly the shape of
-//     "transitioned on Q, presented on P", where work appended to Q would race.
+//   - no OTHER direct queue issued a potentially current-frame GPU Wait between
+//     that submission and Present. A wait can be excluded only when its private,
+//     single-producer monotonic fence was already complete at an observed point
+//     on Q accepted BEFORE this transition began. Shared/CPU-written/rewound or
+//     unknown fences never qualify. A signal after the transition followed by
+//     a wait on P remains the cross-queue shape where work appended to Q races.
 // A single miss restarts the run. Nothing is inferred from which thread calls
 // what, or from the order queues were first seen.
 //
@@ -39,7 +42,7 @@ namespace lab {
 // them on ordinary textures standing in for back buffers.
 //
 // After the decision, every present still needs fresh unambiguous evidence.
-// A foreign DIRECT wait may be unrelated work: it denies this frame's permit,
+// A foreign DIRECT wait without an old-completion exclusion denies this frame's permit,
 // but does not by itself prove a changed queue or consume a restart. A changed
 // transition queue or conflicting transitions do contradict the decision.
 // No permit is returned again until the decision is uncontradicted.
@@ -56,7 +59,7 @@ namespace lab {
 //
 // Hooks: ID3D12GraphicsCommandList::ResourceBarrier, ID3D12GraphicsCommandList7::
 // Barrier where the runtime has it, ID3D12CommandQueue::ExecuteCommandLists and
-// ::Wait, all read from private objects on the game's device. Process lifetime.
+// ::Wait/Signal and ID3D12Fence::Signal, read from our discovery objects on the game's device. Process lifetime.
 // When no present has been seen the hooks only load one atomic and forward.
 class PresentQueueWitness final {
 public:
@@ -92,7 +95,7 @@ private:
 };
 namespace latebind {
 // ResourceBarrier, ID3D12GraphicsCommandList7::Barrier, ExecuteCommandLists,
-// Wait. Defined in late_slots.cpp, which is compiled with CINTERFACE.
-std::array<std::size_t,4> witness_slots();
+// queue Wait/Signal, CPU fence Signal. Defined in late_slots.cpp (CINTERFACE).
+std::array<std::size_t,6> witness_slots();
 }
 }

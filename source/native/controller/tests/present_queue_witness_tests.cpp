@@ -23,6 +23,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 using Witness=lab::PresentQueueWitness;
@@ -130,6 +131,26 @@ ComPtr<ID3D12CommandQueue> stand_in(Gpu& g,Witness& w,std::initializer_list<ID3D
     for(auto* q:on){transition(g,buffer,q,Transition::legacy);sync_after(g,q,sync);if(sync!=Sync::cpu)g.idle();}
     const auto permit=w.present(g.stand_in_names());
     g.idle();++g.stand_in_frame;return permit;
+}
+// A separate private fence, never used by drain()/idle(). Model a client
+// waiting for an already completed stage before the final back-buffer write.
+enum class OldWaitCase {plain,cpu_before,cpu_after_wait,cpu_v1_after_wait,rewind,multiple_producers,current_transition,future_signal};
+ComPtr<ID3D12CommandQueue> old_wait_frame(Gpu& g,Witness& w,ID3D12Fence* fence,UINT64& value,OldWaitCase kind=OldWaitCase::plain){
+    value+=4;hr(g.present->Signal(fence,value),"old stage Signal");
+    if(kind==OldWaitCase::rewind){hr(g.present->Signal(fence,value-1),"rewind Signal");hr(g.present->Signal(fence,value+1),"newer Signal");++value;}
+    if(kind==OldWaitCase::multiple_producers){g.drain(g.present.Get());hr(g.other->Signal(fence,++value),"other producer Signal");g.drain(g.other.Get());hr(g.present->Signal(fence,++value),"first producer again");}
+    g.drain(g.present.Get());
+    if(kind==OldWaitCase::cpu_before)hr(fence->Signal(value),"CPU Signal before transition");
+    ComPtr<ID3D12Resource> buffer;hr(g.chain->GetBuffer(g.chain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&buffer)),"GetBuffer");
+    transition(g,buffer.Get(),g.present.Get(),Transition::legacy);
+    if(kind==OldWaitCase::current_transition){hr(g.present->Signal(fence,++value),"current transition Signal");g.drain(g.present.Get());}
+    if(kind==OldWaitCase::future_signal)++value;
+    hr(g.other->Wait(fence,value),"foreign DIRECT Wait");
+    if(kind==OldWaitCase::future_signal){hr(g.present->Signal(fence,value),"future Signal after Wait");g.drain(g.present.Get());}
+    if(kind==OldWaitCase::cpu_v1_after_wait){ComPtr<ID3D12Fence1> alias;hr(fence->QueryInterface(IID_PPV_ARGS(&alias)),"Fence1 alias");hr(alias->Signal(value),"CPU Signal through Fence1");}
+    if(kind==OldWaitCase::cpu_after_wait)hr(fence->Signal(value),"CPU Signal after Wait");
+    const auto permit=w.present(g.chain.Get());
+    hr(g.chain->Present(0,0),"Present with old-completion wait");g.idle();return permit;
 }
 std::uint64_t miss(const lab::json& s,const char* why){return s["misses"].value(why,0ULL);}
 }
@@ -269,7 +290,53 @@ int wmain(){
          need(w->decided().Get()==g.present.Get()&&s.value("rebinds",0ULL)==1&&s.value("decisions",0ULL)==3,"Decided again after the rebind: "+s.dump());
          w->uninstall_for_test();}
 
-        // 11. The GPU survived everything above.
+        // 11. A private monotonic single-producer point completed BEFORE the
+        // final transition cannot carry that transition onto the waiting queue.
+        {auto* w=Witness::install(g.device.Get(),{streak});ComPtr<ID3D12Fence> f;
+         hr(g.device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&f)),"old-completion fence");UINT64 value=0;
+         for(unsigned i=0;i<=streak;++i)old_wait_frame(g,*w,f.Get(),value);
+         need(w->decided().Get()==g.present.Get(),"Old completed points no longer prevent a queue decision: "+w->status().dump());
+         need(old_wait_frame(g,*w,f.Get(),value).Get()==g.present.Get(),"An old completed wait permits this actual present");
+         need(w->status()["wait_provenance"].value("ignored_old_completed_waits",0ULL)>=streak,"Excluded waits have bounded provenance diagnostics");
+         need(!w->contradicted(),"Excluding a proven old point is not a queue contradiction");w->uninstall_for_test();}
+        // 12. Never exempt a current-transition signal, a CPU-written fence
+        // (including one changed AFTER the Wait snapshot), a rewind or a fence
+        // with multiple producers. Even already-completed waits stay refused.
+        for(auto kind:{OldWaitCase::current_transition,OldWaitCase::future_signal,OldWaitCase::cpu_before,OldWaitCase::cpu_after_wait,OldWaitCase::cpu_v1_after_wait,OldWaitCase::rewind,OldWaitCase::multiple_producers}){
+         auto* w=Witness::install(g.device.Get(),{streak});ComPtr<ID3D12Fence> f;
+         hr(g.device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&f)),"ambiguous fence");UINT64 value=0;
+         for(unsigned i=0;i<3*streak;++i)need(!old_wait_frame(g,*w,f.Get(),value,kind),"Unsafe/unknown provenance grants no frame permit");
+         need(!w->decided()&&miss(w->status(),"other-direct-queue-waited-before-present")>=streak,"Unsafe/unknown provenance still prevents a decision: "+w->status().dump());
+         need(w->status()["wait_provenance"].value("ignored_old_completed_waits",99ULL)==0,"No unknown fence point is exempted");w->uninstall_for_test();}
+        // CPU enqueue order without GPU completion is never enough. Hold Q on
+        // a separate gate so its old signal is still incomplete when P waits.
+        {auto* w=Witness::install(g.device.Get(),{streak});ComPtr<ID3D12Fence> f;
+         hr(g.device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&f)),"pending old-point fence");UINT64 value=0;
+         for(unsigned i=0;i<3*streak;++i){ComPtr<ID3D12Fence> gate;
+             hr(g.device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&gate)),"GPU completion gate");
+             hr(g.present->Wait(gate.Get(),1),"hold Q before old Signal");hr(g.present->Signal(f.Get(),++value),"pending old Signal");
+             ComPtr<ID3D12Resource> buffer;hr(g.chain->GetBuffer(g.chain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&buffer)),"GetBuffer");
+             transition(g,buffer.Get(),g.present.Get(),Transition::legacy);hr(g.other->Wait(f.Get(),value),"P waits for pending old point");
+             const auto permit=w->present(g.chain.Get());
+             hr(gate->Signal(1),"release GPU gate");hr(g.chain->Present(0,0),"Present after pending-point check");g.idle();
+             need(!permit,"An earlier enqueue without observed GPU completion cannot exempt a foreign wait");}
+         need(!w->decided(),"CPU ordering alone never decides the queue");w->uninstall_for_test();}
+        // Shared fences may have writers outside these hooks; no exclusion.
+        {auto* w=Witness::install(g.device.Get(),{streak});ComPtr<ID3D12Fence> f;
+         hr(g.device->CreateFence(0,D3D12_FENCE_FLAG_SHARED,IID_PPV_ARGS(&f)),"shared fence");UINT64 value=0;
+         for(unsigned i=0;i<3*streak;++i)need(!old_wait_frame(g,*w,f.Get(),value),"Shared fence cannot grant an old-point exemption");
+         need(!w->decided(),"Shared-fence writers are not assumed observable");w->uninstall_for_test();}
+        // Reaching the fixed metadata cap never turns missing history into proof.
+        {auto* w=Witness::install(g.device.Get(),{streak});w->present(g.chain.Get());
+         std::vector<ComPtr<ID3D12Fence>> fences;
+         for(unsigned i=0;i<65;++i){ComPtr<ID3D12Fence> f;hr(g.device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&f)),"capacity fence");
+             hr(g.present->Signal(f.Get(),1),"capacity Signal");fences.push_back(f);}
+         UINT64 value=1;for(unsigned i=0;i<3*streak;++i)need(!old_wait_frame(g,*w,fences.back().Get(),value),"Fence metadata overflow defers drawing");
+         const auto p=w->status()["wait_provenance"];
+         need(p.value("tracked_fences",0u)==p.value("fence_capacity",999u)&&p.value("capacity_misses",0ULL)>0&&!w->decided(),"Fixed capacity remains conservative: "+p.dump());
+         w->uninstall_for_test();}
+
+        // 13. The GPU survived everything above.
         need(g.device->GetDeviceRemovedReason()==S_OK,"Device not removed");
         std::cout<<"PASS "<<checks<<" present-queue witness checks; decided a real swapchain's present queue from its own "
                    "back-buffer transitions; refused a GPU-ordered cross-queue shape, alternating queues, a doubly transitioned "
