@@ -18,6 +18,10 @@ Session records and logs are under `data\` in the Overglaze folder.
 - **Proxy-DLL games.** On the Games page, check that the game shows as installed and *healthy*. If it says *needs update* or *game changed*, update or re-adapt it first.
 - **Antivirus.** Proxy DLLs are a common target for antivirus heuristics. If `dxgi.dll` or files in Overglaze's subfolder were quarantined, the health check reports modified or missing files. Restore them, or uninstall and reinstall.
 
+## Panel flicker with frame generation
+
+If the panel alternates between visible and absent, compare it with frame generation off in the game's own settings. A smooth panel with FG off isolates a compatibility problem in the FG presentation path; it does not certify that all FG-enabled games have the same cause. Report `host.overlay.submission_evidence.proof_skipped` together with `host.present_queue_witness.misses`. An opaque background cannot compensate for whole frames where no panel was drawn. Keep the foreground/input issue separate: focus loss releases input while keeping the panel open; the game may still pause rendering when unfocused.
+
 ## "Waiting for a usable frame" and NR never starts
 
 - **Turn on DLSS** in the game's graphics settings. Overglaze runs after the game's upscaler: it uses Ray Reconstruction if the game has it (usually only with ray tracing or path tracing on), otherwise Super Resolution or DLAA. With DLSS off there is nothing to attach to.
@@ -42,6 +46,10 @@ NR's change is carried back to the game as a per-channel ratio. When the frame r
 ## Ghosting or smearing in motion
 
 Possible causes include motion vectors or depth that don't match what NR expects, and history that wasn't reset at a cut. Note the scene and settings and report it, together with the status output (`rejected_call`, `history_gaps`, skipped frames). Lowering Structure reduces how much NR changes the image.
+
+## Crash immediately after enabling NR
+
+Keep NR off until the affected installation has a candidate correction. Record whether the first NR evaluation was recorded, whether any GPU work retired, and whether binding preservation/restores were enabled. One recorded evaluation and zero retired frames is a failure to complete the first insertion, not successful execution or a specific crash diagnosis. The Windows Application Error event may identify the faulting module and exception. A package update can enable binding preservation for an exact affected executable/module set without changing its input facts; it still needs in-game validation. Do not replace a DLL in a running game or bypass its protection.
 
 ## Large frame-rate drop
 

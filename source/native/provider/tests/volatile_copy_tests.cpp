@@ -131,6 +131,9 @@ struct Gpu {
 struct Receiver:lab::SlAdmissionSink {
     Gpu* gpu=nullptr;unsigned entries=0,acks=0;std::string stage,reason;
     Resolution last{};std::vector<ComPtr<ID3D12Resource>> held;std::vector<Gpu::Read> reads;
+    void* checkpoint_command=nullptr;std::uint64_t checkpoint_call=0,exited_call=0;
+    void game_binding_enter(const Resolution& r,void* command)noexcept override{checkpoint_command=command;checkpoint_call=r.binding.call;}
+    void game_binding_exit(std::uint64_t call)noexcept override{exited_call=call;}
     void enter(const Resolution& r,const lab::rr::Packet&,void* command)noexcept override{
         ++entries;last=r;
         try{auto* l=static_cast<ID3D12GraphicsCommandList*>(command);
@@ -198,6 +201,7 @@ int main(){lab::WorkbenchAdapterHost* host=nullptr;try{
     // Settle: the first RR call selects the viewport, a few more settle it.
     for(unsigned i=0;i<8;++i){run({});retire();}
     need(receiver->entries>0,"Durable tags are admitted once the viewport settled: "+receiver->stage+" "+receiver->reason);
+    need(receiver->checkpoint_command==gpu.list.Get()&&receiver->checkpoint_call==receiver->exited_call,"Native lists retain their identity at the binding checkpoint and close the same call");
     const Frame volatile_guides{sl::eValidUntilEvaluate,sl::eOnlyValidNow};
     // ---- A. Not wanted: no copy, no allocation, named.
     host->service_tag_copies(false);
@@ -265,6 +269,7 @@ int main(){lab::WorkbenchAdapterHost* host=nullptr;try{
     {proxy_list.real=gpu.list.Get();const auto before=receiver->entries;const auto same=copies()["bound_same_list"].get<std::uint64_t>();
      Frame f=volatile_guides;f.tag_list=&proxy_list;f.eval_list=&proxy_list;run(f);
      need(receiver->entries==before+1&&receiver->reads[0].bytes()==depth_a,"A proxy list is unwrapped; the copy is still exact: "+receiver->reason);
+     need(receiver->checkpoint_command==gpu.list.Get()&&receiver->checkpoint_command!=static_cast<IUnknown*>(&proxy_list)&&receiver->checkpoint_call==receiver->last.binding.call&&receiver->exited_call==receiver->checkpoint_call,"The pre-Evaluate binding checkpoint uses the same native recording as admission, never the SL proxy identity");
      need(copies()["bound_same_list"].get<std::uint64_t>()==same+2,"Copy and Evaluate on one native list are counted as such, per role: "+copies().dump());retire();}
     // ---- H. The tag set on another list (executed first): counted, still exact.
     {const auto other=copies()["bound_other_list"].get<std::uint64_t>();Frame f=volatile_guides;f.second_list=true;run(f);

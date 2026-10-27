@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 HANsoA-KevinO
 // SPDX-License-Identifier: MIT
 #include "lab_game_manager.hpp"
+#include "lab_package_binding_workarounds.hpp"
 #include "lab_game_presentation.hpp"
 #include "lab_root_locator.hpp"
 #include "lab_windows_path.hpp"
@@ -23,6 +24,26 @@ void need(bool b,const std::string& what){++checks;if(!b)throw std::runtime_erro
 template<class F>void reject(F f,const char* what){bool bad=false;try{f();}catch(const std::exception&){bad=true;}need(bad,what);}
 void put(const fs::path& path,const std::string& value){std::ofstream f(path,std::ios::binary|std::ios::trunc);f<<value;if(!f)throw std::runtime_error("fixture write");}
 json read(const fs::path& path){std::ifstream f(path);return json::parse(f);}
+void binding_workaround(){
+    lab::profiles::Facts f;f.id="local-package-rr-v1";f.executable="OnimushaWotS.exe";
+    f.executable_sha256="69ffeadc34cf3c828d5713fb9e869aa6d187231a117c385ba6d434a711c99b26";
+    f.modules={{"sl.common.dll","3a479ce1652337245f427246f6b2e1436fb0b83a003a50bddda82e25e3764aff"},
+        {"sl.dlss_d.dll","ec7c01cf0529ef80ff17f64f51f117dfc4eb8fa9a1b01a285c948f924e524940"},
+        {"sl.interposer.dll","2c972ea8aa2edb9ea7a6cce638cf9937f3373cd6ee240187037bb79a6f514a85"}};
+    f.viewport=7;f.linear_depth=true;f.default_exposure_stops=2.f;f.settings_file="overlay-local-package.json";
+    const auto original=f;
+    need(lab::profiles::apply_package_binding_workaround(f)&&f.binding_preservation,"The exact affected executable and SL module set receives preservation");
+    need(f.id==original.id&&f.viewport==7&&f.linear_depth&&f.default_exposure_stops==2.f&&f.settings_file==original.settings_file&&f.modules==original.modules&&!f.reviewed,
+         "The correction retains pins, viewport/depth/exposure/preferences and never marks the game accepted");
+    need(!lab::profiles::apply_package_binding_workaround(f),"The correction is idempotent");
+    for(const char* name:{"sl.common.dll","sl.dlss_d.dll","sl.interposer.dll"}){
+        auto x=original;x.modules[name]=std::string(64,'b');need(!lab::profiles::apply_package_binding_workaround(x)&&!x.binding_preservation,"Another module build is not silently migrated");
+        x=original;x.modules.erase(name);need(!lab::profiles::apply_package_binding_workaround(x)&&!x.binding_preservation,"Missing module evidence is not migrated");}
+    auto x=original;x.executable_sha256=std::string(64,'a');need(!lab::profiles::apply_package_binding_workaround(x),"Another EXE build is not migrated");
+    x=original;x.executable="CrashReport.exe";need(!lab::profiles::apply_package_binding_workaround(x),"A shared module directory does not migrate a helper EXE");
+    x=original;x.native_evaluate_host_rebind=true;need(!lab::profiles::apply_package_binding_workaround(x),"An explicit host rebind contract is retained");
+    x=original;x.route="ngx-sr";need(!lab::profiles::apply_package_binding_workaround(x),"Another route is not migrated");
+}
 void put16(std::string& d,size_t o,unsigned v){d[o]=char(v&255);d[o+1]=char((v>>8)&255);}
 void put32(std::string& d,size_t o,unsigned v){for(unsigned i=0;i<4;++i)d[o+i]=char((v>>(8*i))&255);}
 // Minimal x64 PE image: never executed, only parsed. Section names are the
@@ -149,6 +170,7 @@ int refresh_timing(unsigned games,std::uint64_t model_mib){
     std::cout<<json{{"games",games},{"model_bytes",model_mib<<20},{"refresh_ms",times},{"note","refresh = new Manager, inspect every game, model_status, storage_usage"}}.dump()<<'\n';return 0;}
 }
 int wmain(int argc,wchar_t** argv){fs::path root;try{
+    binding_workaround();
     if(argc==2&&std::wstring(argv[1])==L"--model-backup")return model_backup_check();
     if(argc>=2&&argc<=4&&std::wstring(argv[1])==L"--refresh-timing")
         return refresh_timing(argc>2?unsigned(std::stoul(argv[2])):11u,argc>3?std::stoull(argv[3]):254ull);

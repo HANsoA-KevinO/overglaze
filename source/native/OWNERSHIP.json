@@ -649,6 +649,9 @@
   "controller/include/lab_game_manager.hpp": {
    "track": "controller"
   },
+  "controller/include/lab_package_binding_workarounds.hpp": {
+   "track": "controller"
+  },
   "controller/include/lab_game_manager_ui.hpp": {
    "track": "controller"
   },

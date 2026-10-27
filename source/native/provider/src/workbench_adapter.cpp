@@ -64,7 +64,10 @@ void WorkbenchAdapter::entering(const slboundary::Call& c) noexcept {
     active_resource_call_=c.id;
     lock.unlock();
     binding_boundary(c,diagnostic::BindingPoint::outer_entry);
-    if(live_)live_->game_binding_enter(bindings_.frozen_entry(c),c.command);
+    // Checkpoint the same native recording used for device/resource admission.
+    // SR can arrive on an SL proxy: its identity is not in the native binding
+    // tracker, so checkpointing c.command would reject every protected insertion.
+    if(live_)live_->game_binding_enter(bindings_.frozen_entry(c),native_list?static_cast<void*>(native_list.Get()):c.command);
     if(research_&&research_->wants_access_observation())research_->observe_entry(bindings_.frozen_entry(c),c.command);
 }
 void WorkbenchAdapter::aborted(const slboundary::Call& c) noexcept {

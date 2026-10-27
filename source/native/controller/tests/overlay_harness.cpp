@@ -33,9 +33,9 @@ struct Gpu {
     void wait(){hr(queue->Signal(fence.Get(),++value));hr(fence->SetEventOnCompletion(value,event.value));need(WaitForSingleObject(event.value,5000)==WAIT_OBJECT_0,"GPU timeout");}
     void begin(){wait();hr(allocator->Reset());hr(list->Reset(allocator.Get(),nullptr));}
     void submit(){hr(list->Close());ID3D12CommandList* a[]{list.Get()};queue->ExecuteCommandLists(1,a);}
-    void clear(IDXGISwapChain3* chain){ComPtr<ID3D12Resource> b;hr(chain->GetBuffer(chain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&b)));
+    void clear(IDXGISwapChain3* chain,float red=.14f,float green=.20f,float blue=.26f){ComPtr<ID3D12Resource> b;hr(chain->GetBuffer(chain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&b)));
         begin();auto h=rtv->GetCPUDescriptorHandleForHeapStart();device->CreateRenderTargetView(b.Get(),nullptr,h);barrier(list.Get(),b.Get(),D3D12_RESOURCE_STATE_PRESENT,D3D12_RESOURCE_STATE_RENDER_TARGET);
-        const float color[]{.14f,.20f,.26f,1};list->ClearRenderTargetView(h,color,0,nullptr);barrier(list.Get(),b.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_PRESENT);submit();}
+        const float color[]{red,green,blue,1};list->ClearRenderTargetView(h,color,0,nullptr);barrier(list.Get(),b.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_PRESENT);submit();}
     std::vector<std::uint8_t> read(IDXGISwapChain3* chain){ComPtr<ID3D12Resource> b;hr(chain->GetBuffer(chain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&b)));
         auto d=b->GetDesc();D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout{};UINT rows{};UINT64 bytes{},total{};device->GetCopyableFootprints(&d,0,1,0,&layout,&rows,&bytes,&total);
         D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_READBACK;D3D12_RESOURCE_DESC rd{};rd.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;rd.Width=total;rd.Height=1;rd.DepthOrArraySize=1;rd.MipLevels=1;rd.SampleDesc.Count=1;rd.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
@@ -97,7 +97,24 @@ int wmain(int argc,wchar_t** argv){
             const auto pixels=gpu.read(chain.Get());const unsigned stride=i==1?8:4;
             need(std::equal(pixels.end()-stride,pixels.end(),baseline.end()-stride),"Zero-alpha outside panel preserves original bits");
             need(pixels!=baseline,"Panel changed actual target");
-            if(i==0){RECT client{};need(GetClientRect(window,&client)!=FALSE,"Read client size");
+            if(i==0){
+                const auto bounds=status["controls"]["panel_bounds"];const float dpi=std::clamp(GetDpiForWindow(window)/96.f,1.f,2.5f);
+                const auto px=unsigned(bounds[0].get<float>()+6*dpi),py=unsigned(bounds[1].get<float>()+bounds[3].get<float>()*.5f);
+                const auto offset=4*(py*1280+px);need(offset+4<=pixels.size(),"Opaque background sample lies inside the target");
+                gpu.clear(chain.Get(),.9f,.1f,.8f);overlay.present(chain.Get());gpu.wait();const auto alternate=gpu.read(chain.Get());
+                need(std::equal(pixels.begin()+offset,pixels.begin()+offset+4,alternate.begin()+offset),"Panel background RGB is independent of the game underneath");
+                result["opaque_background_verified"]=true;
+                SendMessageW(window,WM_KILLFOCUS,0,0);
+                need(overlay.visible()&&overlay.snapshot()["input_suspended"]==true&&!overlay.snapshot()["input_block_active"].get<bool>(),"Focus loss keeps panel visible and releases input");
+                const auto before_focus_draws=overlay.snapshot().at("draws").get<unsigned>();gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();
+                need(overlay.snapshot().at("draws").get<unsigned>()==before_focus_draws+1,"An unfocused panel can still be rendered for screenshots");
+                const auto outside_keys=key_events;SendMessageW(window,WM_KEYDOWN,'K',0);need(key_events==outside_keys+1,"Unfocused panel does not consume keyboard input");key_events=outside_keys; // keep the later input-counter baseline independent of this check
+                SendMessageW(window,WM_ACTIVATEAPP,TRUE,0);SendMessageW(window,WM_SETFOCUS,0,0);
+                need(overlay.visible()&&!overlay.snapshot()["input_suspended"].get<bool>()&&overlay.snapshot()["input_block_active"].get<bool>(),"Returning focus restores input ownership with the panel still open");
+                SendMessageW(window,WM_MOUSEMOVE,0,MAKELPARAM(1279,799));gpu.clear(chain.Get());overlay.present(chain.Get());gpu.wait();
+                need(overlay.visible(),"Moving outside the panel within the game does not close it");
+                result["focus_preserves_open_panel_verified"]=true;
+                RECT client{};need(GetClientRect(window,&client)!=FALSE,"Read client size");
                 need(client.right!=1280&&client.bottom!=800,"Exercise stretched buffer, not 1:1 client coordinates");
                 auto point=[&](const lab::json& rect,float fraction){return POINT{LONG(std::lround((rect[0].get<float>()+rect[2].get<float>()*fraction)*client.right/1280.f)),LONG(std::lround((rect[1].get<float>()+rect[3].get<float>()*.5f)*client.bottom/800.f))};};
                 for(bool on:{true,false}){

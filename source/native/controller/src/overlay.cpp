@@ -83,7 +83,7 @@ const char* nr_failure_advice(const std::string& error){
 }
 struct GameOverlay::Impl {
     Controller& control;mutable std::recursive_mutex mutex;std::mutex input_mutex;
-    std::atomic<bool> visible{false},stopped{false},failed{false};
+    std::atomic<bool> visible{false},stopped{false},failed{false},input_suspended{false};
     // Rebinding from the panel (面板设置 → 修改): the window procedure gives the
     // next key to capture_key() while this is set; the refusal it found, if any.
     std::atomic<bool> capturing{false};std::atomic<unsigned> capture_refusal{0};
@@ -147,6 +147,12 @@ struct GameOverlay::Impl {
     D3D12_CPU_DESCRIPTOR_HANDLE cpu(unsigned i)const{auto h=srv->GetCPUDescriptorHandleForHeapStart();h.ptr+=static_cast<SIZE_T>(i)*srv_stride;return h;}
     D3D12_GPU_DESCRIPTOR_HANDLE gpu(unsigned i)const{auto h=srv->GetGPUDescriptorHandleForHeapStart();h.ptr+=static_cast<UINT64>(i)*srv_stride;return h;}
     D3D12_CPU_DESCRIPTOR_HANDLE target(unsigned i)const{auto h=rtv->GetCPUDescriptorHandleForHeapStart();h.ptr+=static_cast<SIZE_T>(i)*rtv_stride;return h;}
+    // Losing focus releases game input, without discarding the user's open
+    // panel. An unfocused game can still display it (and be screenshotted).
+    void focus(bool active){
+        std::lock_guard lock(input_mutex);input_suspended=!active;
+        input.clear();clear_input=true;capturing=false;held_vk=0;refresh_input_block();
+    }
     void visibility(bool value){
         std::lock_guard lock(input_mutex);visible=value;input.clear();clear_input=true;
         if(!value)capturing=false; // a rebinding never outlives the open panel
@@ -157,9 +163,9 @@ struct GameOverlay::Impl {
     // The game receives no mouse/keyboard while the panel is shown; a capture
     // that hides the panel hands input back until the hotkey reopens it.
 #ifdef LAB_OVERLAY_RESEARCH
-    void refresh_input_block(){input_block::activate(window,visible&&!stopped&&!(capture_hidden&&!capture_override));}
+    void refresh_input_block(){input_block::activate(window,visible&&!stopped&&!input_suspended&&!(capture_hidden&&!capture_override));}
 #else
-    void refresh_input_block(){input_block::activate(window,visible&&!stopped);}
+    void refresh_input_block(){input_block::activate(window,visible&&!stopped&&!input_suspended);}
 #endif
     // The next key, with the modifiers held, judged by the shared rules
     // (lab_panel_hotkey.hpp). Esc alone cancels; a refusal keeps waiting.
@@ -212,32 +218,34 @@ struct GameOverlay::Impl {
         const auto key=hotkeys.current();
         const bool pressed=hotkey_watch.poll(key,input_block::real_async_key_state);
         if(!(static_cast<unsigned short>(input_block::real_async_key_state(int(key.vk)))&0x8000u)){UINT held=key.vk;held_vk.compare_exchange_strong(held,0u);return;}
-        if(!pressed||capturing||!in_foreground())return;
+        if(!pressed||capturing||input_suspended||!in_foreground())return;
         UINT none=0;if(!held_vk.compare_exchange_strong(none,key.vk))return; // the window procedure took this press
         hotkey_pressed();
     }
-    static bool message_sink(HWND w,UINT m,WPARAM a,LPARAM b){auto* s=input_owner.load();if(!s||w!=s->window||!s->visible||s->stopped)return false;
+    static bool message_sink(HWND w,UINT m,WPARAM a,LPARAM b){auto* s=input_owner.load();if(!s||w!=s->window||!s->visible||s->stopped||s->input_suspended)return false;
         return procedure(w,m,a,b)==0;}
     static LRESULT CALLBACK procedure(HWND w,UINT m,WPARAM a,LPARAM b){
         auto* s=input_owner.load();if(!s||w!=s->window)return DefWindowProcW(w,m,a,b);
-        if(m==WM_KILLFOCUS||(m==WM_ACTIVATEAPP&&!a)||m==WM_DESTROY){s->visibility(false);s->held_vk=0;}
+        if(m==WM_DESTROY){s->visibility(false);s->held_vk=0;}
+        else if(m==WM_KILLFOCUS||(m==WM_ACTIVATEAPP&&!a))s->focus(false);
+        else if(m==WM_SETFOCUS||(m==WM_ACTIVATEAPP&&a))s->focus(true);
         const bool key_down=m==WM_KEYDOWN||m==WM_SYSKEYDOWN,key_up=m==WM_KEYUP||m==WM_SYSKEYUP,repeat=(b&(1LL<<30))!=0;
         // Rebinding: while the open panel waits for a key, every key and the
         // characters it makes belong to the capture (Alt+F4 still closes the game).
-        if(s->capturing&&s->visible&&!s->stopped&&!(m==WM_SYSKEYDOWN&&a==VK_F4)){
+        if(s->capturing&&s->visible&&!s->stopped&&!s->input_suspended&&!(m==WM_SYSKEYDOWN&&a==VK_F4)){
             if(key_down){if(!repeat)s->capture_key(UINT(a));return 0;}
             if(key_up||m==WM_CHAR||m==WM_SYSCHAR||m==WM_DEADCHAR||m==WM_SYSDEADCHAR)return 0;
         }
         // The hotkey: its key with exactly its Ctrl / Shift / Alt, read from the
         // real key state (the game's GetKeyState answers "up" while the panel is open).
         const auto key=s->hotkeys.current();
-        if(!s->stopped&&s->bound&&key_down&&a==key.vk&&(repeat?s->held_vk==key.vk:hotkey::modifiers_match(key,input_block::real_key_state))){
+        if(!s->stopped&&s->bound&&!s->input_suspended&&key_down&&a==key.vk&&(repeat?s->held_vk==key.vk:hotkey::modifiers_match(key,input_block::real_key_state))){
             // held_vk already this key: the present-time poll took this press.
             if(!repeat&&s->held_vk.exchange(key.vk)!=key.vk){const bool was=s->visible;s->hotkey_pressed();
                 if(!was&&s->visible)s->release_modifiers(w,key);}
             return 0;}
         if(key_up&&s->held_vk!=0&&a==s->held_vk){s->held_vk=0;return 0;}
-        if(s->visible&&!s->stopped){
+        if(s->visible&&!s->stopped&&!s->input_suspended){
             // Keep the user's normal window-close command; do not trap Alt+F4.
             if(m==WM_SYSKEYDOWN&&a==VK_F4)return CallWindowProcW(s->original_proc,w,m,a,b);
 #ifdef LAB_OVERLAY_RESEARCH
@@ -258,6 +266,7 @@ struct GameOverlay::Impl {
         if(!r.value("ok",false))error=r.value("error",json::object()).value("message","Control rejected");else error.clear();}
     void feed_input(){auto& io=ImGui::GetIO();std::deque<Message> messages;
         {std::lock_guard lock(input_mutex);messages.swap(input);if(clear_input){io.ClearInputKeys();io.ClearInputMouse();clear_input=false;}}
+        if(input_suspended){io.AddMousePosEvent(-FLT_MAX,-FLT_MAX);return;}
         // DXGI can stretch buffers independently of the HWND client size. ImGui
         // draws in buffer pixels, while both Win32 sources report client pixels.
         RECT client{};const bool positioned=GetClientRect(window,&client)&&client.right>0&&client.bottom>0;
@@ -284,7 +293,7 @@ struct GameOverlay::Impl {
     }
     void style(){ImGui::GetStyle()=ImGuiStyle();product::apply_theme();auto& s=ImGui::GetStyle();
         s.WindowPadding={22,20};s.FramePadding={10,6};s.ItemSpacing={10,8};s.WindowBorderSize=1;
-        s.Colors[ImGuiCol_WindowBg].w=.985f;}
+        s.Colors[ImGuiCol_WindowBg].w=1.f;}
     void mark(const char* name){const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();controls[name]={a.x,a.y,b.x-a.x,b.y-a.y};}
     // Before the first admitted frame the live context is not ready, so the
     // backend drops every rejection reason (LabNrLiveReject records only while
@@ -481,6 +490,7 @@ struct GameOverlay::Impl {
         ImGui::SetNextWindowSize({panel_width,0},ImGuiCond_Always);
         ImGui::SetNextWindowSizeConstraints({std::min(340.f,io.DisplaySize.x-32),0},{io.DisplaySize.x-16,io.DisplaySize.y-32});
         bool open=true;ImGui::Begin("Overglaze##panel",&open,ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoSavedSettings);
+        {const auto pos=ImGui::GetWindowPos(),size=ImGui::GetWindowSize();controls["panel_bounds"]={pos.x,pos.y,size.x,size.y};}
         product::wordmark(dpi);
         ImGui::SameLine(ImGui::GetWindowWidth()-ImGui::GetStyle().WindowPadding.x-44*dpi);
         if(ImGui::SmallButton("收起"))visibility(false);mark("close");
@@ -957,7 +967,7 @@ json GameOverlay::snapshot()const{const auto& s=*p_;std::lock_guard lock(s.mutex
         {"last_present_hr",static_cast<std::uint32_t>(s.last_present)},{"last_present_flags",s.last_present_flags},
         {"last_submission",s.last_submission},{"display_visibility_verified",false},
         {"scope","draws count signalled submissions; GPU completion and original Present results are independent, neither proves on-screen visibility"}}},
-    {"input_block_installed",s.input_block_installed},{"input_block_active",input_block::active()},
+    {"input_block_installed",s.input_block_installed},{"input_block_active",input_block::active()},{"input_suspended",s.input_suspended.load()},{"panel_background_alpha",1.f},
     {"color_space",unsigned(s.space)},{"failed",s.failed.load()},{"error",s.error},{"controls",s.controls},{"hidden_draws",0},{"automatic_sampling",false},
     {"bound",s.bound.load()},{"attaches",s.attaches},{"detaches",s.detaches},{"rebinds",s.rebinds},{"reshapes",s.reshapes},
     {"back_buffers","acquired per present, released after recording; none held between presents"},

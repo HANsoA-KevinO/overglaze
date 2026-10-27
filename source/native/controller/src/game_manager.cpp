@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 HANsoA-KevinO
 // SPDX-License-Identifier: MIT
 #include "lab_game_manager.hpp"
+#include "lab_package_binding_workarounds.hpp"
 #include "lab_game_presentation.hpp"
 #include "lab_module_search.hpp"
 #include "lab_package_identity.hpp"
@@ -1174,6 +1175,10 @@ Policy Manager::write_package(const fs::path& exe,const std::string& name,const 
     if(ngx_route){const char* model=pre.route=="ngx-rr"?"nvngx_dlssd.dll":"nvngx_dlss.dll";
         need(facts.modules.contains(model),std::string("预检未找到 ")+model+"；该 NGX 路线需要这个模型");}
     else need(facts.modules.contains("sl.interposer.dll")&&facts.modules.contains(sl_model),std::string("预检未找到 sl.interposer.dll + ")+sl_model);
+    // Applies on generation AND refresh/update: existing packages must receive
+    // the correction too. It does not alter their pins or loading strategy.
+    if(track=="controller"&&profiles::apply_package_binding_workaround(facts))
+        notes.push_back("exact-build binding-preservation candidate: preserve native game command bindings around NR; in-game acceptance pending");
     directory(root_/L"app"/L"adapters");if(replace){for(const auto& n:{L"dxgi.dll",L"overglaze_controller.dll",L"overglaze_reframework.dll",L"overglaze_nvngx.dll",L"overglaze_install_check.exe",L"overglaze.install.json",
         // a package rewritten from its pre-rename version drops its old files
         L"dlsslab_controller.dll",L"dlsslab_reframework.dll",L"dlsslab_nvngx.dll",L"dlsslab_install_check.exe",L"dlsslab.install.json"})if(fs::exists(pkg/n)){winpath::require_no_reparse(pkg/n);fs::remove(pkg/n);}}else directory(pkg);
