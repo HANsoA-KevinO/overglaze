@@ -17,10 +17,15 @@
 // handed a swapchain's, and every barrier, submission and wait is real.
 // Our own window, swapchain and queues; no game.
 #include "lab_present_queue_witness.hpp"
+#include "lab_overlay.hpp"
+#include <d3d12sdklayers.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <iostream>
+#include <future>
+#include <thread>
+#include <chrono>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -37,6 +42,7 @@ struct Gpu {
     ComPtr<ID3D12Device> device;ComPtr<ID3D12CommandQueue> present,other,compute;
     ComPtr<IDXGISwapChain3> chain;ComPtr<ID3D12CommandAllocator> allocator;ComPtr<ID3D12GraphicsCommandList> list;
     std::array<ComPtr<ID3D12Resource>,3> stand_ins;unsigned stand_in_frame=0;
+    ComPtr<ID3D12DescriptorHeap> rtv;
     ComPtr<ID3D12Fence> fence;UINT64 value=0;HANDLE event=nullptr;bool enhanced=false;
     Gpu(){
         WNDCLASSEXW c{sizeof(c)};c.lpfnWndProc=DefWindowProcW;c.hInstance=GetModuleHandleW(nullptr);c.lpszClassName=L"OverglazeWitnessFixture";
@@ -61,6 +67,7 @@ struct Gpu {
         hr(one.As(&chain),"IDXGISwapChain3");
         hr(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&allocator)),"allocator");
         hr(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(&list)),"list");hr(list->Close(),"Close");
+        D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;hd.NumDescriptors=1;hr(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&rtv)),"fixture RTV");
         // Ordinary render targets in COMMON (== PRESENT): legal on any queue.
         D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd{};rd.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;rd.Width=64;rd.Height=64;rd.DepthOrArraySize=1;rd.MipLevels=1;
@@ -83,13 +90,23 @@ enum class Transition{none,legacy,enhanced};
 enum class Sync{cpu,foreign_direct_wait,compute_wait,unrelated_direct_wait};
 
 // Record buffer -> RENDER_TARGET -> PRESENT on `on` and submit it there.
-void transition(Gpu& g,ID3D12Resource* buffer,ID3D12CommandQueue* on,Transition kind){
+void transition(Gpu& g,ID3D12Resource* buffer,ID3D12CommandQueue* on,Transition kind,bool clear=false,ID3D12Resource* implicit_readback=nullptr){
     hr(g.allocator->Reset(),"allocator Reset");hr(g.list->Reset(g.allocator.Get(),nullptr),"list Reset");
     if(kind==Transition::legacy){
         D3D12_RESOURCE_BARRIER b{};b.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;b.Transition.pResource=buffer;
         b.Transition.Subresource=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         b.Transition.StateBefore=D3D12_RESOURCE_STATE_PRESENT;b.Transition.StateAfter=D3D12_RESOURCE_STATE_RENDER_TARGET;g.list->ResourceBarrier(1,&b);
+        if(clear){auto view=g.rtv->GetCPUDescriptorHandleForHeapStart();g.device->CreateRenderTargetView(buffer,nullptr,view);
+            const float color[]{.2f,.3f,.4f,1};g.list->ClearRenderTargetView(view,color,0,nullptr);}
         std::swap(b.Transition.StateBefore,b.Transition.StateAfter);g.list->ResourceBarrier(1,&b);
+        if(implicit_readback){
+            // A read after the last explicit COMMON/PRESENT transition relies
+            // on decay at the ORIGINAL Execute boundary. Preserve that boundary.
+            D3D12_TEXTURE_COPY_LOCATION from{buffer,D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+            D3D12_TEXTURE_COPY_LOCATION to{implicit_readback,D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+            to.PlacedFootprint.Footprint={DXGI_FORMAT_R8G8B8A8_UNORM,1,1,1,256};const D3D12_BOX box{64,80,0,65,81,1};
+            g.list->CopyTextureRegion(&to,0,0,0,&from,&box);
+        }
     }else if(kind==Transition::enhanced){
         ComPtr<ID3D12GraphicsCommandList7> seven;hr(g.list.As(&seven),"ID3D12GraphicsCommandList7");
         D3D12_TEXTURE_BARRIER t{};t.pResource=buffer;t.Subresources.IndexOrFirstMipLevel=0xffffffff;
@@ -152,12 +169,28 @@ ComPtr<ID3D12CommandQueue> old_wait_frame(Gpu& g,Witness& w,ID3D12Fence* fence,U
     const auto permit=w.present(g.chain.Get());
     hr(g.chain->Present(0,0),"Present with old-completion wait");g.idle();return permit;
 }
+std::array<unsigned char,4> pixel(Gpu& g,ID3D12Resource* buffer,unsigned x,unsigned y){
+    Witness::OwnWork own;g.drain(g.present.Get());
+    D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_READBACK;D3D12_RESOURCE_DESC rd{};
+    rd.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;rd.Width=256;rd.Height=1;rd.DepthOrArraySize=1;rd.MipLevels=1;rd.SampleDesc.Count=1;rd.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    ComPtr<ID3D12Resource> out;hr(g.device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&rd,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&out)),"pixel readback");
+    hr(g.allocator->Reset(),"pixel allocator Reset");hr(g.list->Reset(g.allocator.Get(),nullptr),"pixel list Reset");
+    D3D12_RESOURCE_BARRIER barrier{};barrier.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;barrier.Transition={buffer,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_PRESENT,D3D12_RESOURCE_STATE_COPY_SOURCE};
+    g.list->ResourceBarrier(1,&barrier);
+    D3D12_TEXTURE_COPY_LOCATION from{buffer,D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};D3D12_TEXTURE_COPY_LOCATION to{out.Get(),D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    to.PlacedFootprint.Footprint={DXGI_FORMAT_R8G8B8A8_UNORM,1,1,1,256};const D3D12_BOX box{x,y,0,x+1,y+1,1};g.list->CopyTextureRegion(&to,0,0,0,&from,&box);
+    std::swap(barrier.Transition.StateBefore,barrier.Transition.StateAfter);g.list->ResourceBarrier(1,&barrier);hr(g.list->Close(),"pixel Close");
+    ID3D12CommandList* commands[]{g.list.Get()};g.present->ExecuteCommandLists(1,commands);g.drain(g.present.Get());
+    void* data=nullptr;D3D12_RANGE read{0,4};hr(out->Map(0,&read,&data),"pixel Map");std::array<unsigned char,4> result{};std::memcpy(result.data(),data,4);
+    D3D12_RANGE none{};out->Unmap(0,&none);return result;
+}
 std::uint64_t miss(const lab::json& s,const char* why){return s["misses"].value(why,0ULL);}
 }
 
 int wmain(){
     try{
-        Gpu g;
+        ComPtr<ID3D12Debug> debug;hr(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)),"debug layer");debug->EnableDebugLayer();
+        Gpu g;ComPtr<ID3D12InfoQueue> info;hr(g.device.As(&info),"debug messages");
         // The fact the witness exists for, recorded rather than assumed.
         ComPtr<ID3D12CommandQueue> reported;const HRESULT asked=g.chain->GetDevice(IID_PPV_ARGS(&reported));
         std::cout<<"GetDevice(ID3D12CommandQueue) on a real D3D12 swapchain: HRESULT=0x"<<std::hex<<static_cast<unsigned long>(asked)<<std::dec
@@ -336,7 +369,105 @@ int wmain(){
          need(p.value("tracked_fences",0u)==p.value("fence_capacity",999u)&&p.value("capacity_misses",0ULL)>0&&!w->decided(),"Fixed capacity remains conservative: "+p.dump());
          w->uninstall_for_test();}
 
-        // 13. The GPU survived everything above.
+        // 13. Same-batch panel rendering: a foreign DIRECT wait follows every
+        // original game submission. The legacy Present proof still refuses it,
+        // but that signal/wait now orders the panel already in the same batch.
+        hr(g.chain->ResizeBuffers(3,1280,800,DXGI_FORMAT_R8G8B8A8_UNORM,0),"batch fixture Resize");
+        {wchar_t self[32768]{};need(GetModuleFileNameW(nullptr,self,32768)>0,"fixture executable path");
+         const auto router_path=std::filesystem::path(self).parent_path()/L"lab_witness_router_fixture.dll";
+         const auto router=LoadLibraryExW(router_path.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+         need(router!=nullptr,"Load the test-only second hook DLL");
+         const auto start=reinterpret_cast<BOOL(*)(ID3D12CommandQueue*)>(GetProcAddress(router,"WitnessRouterStart"));
+         const auto observed=reinterpret_cast<BOOL(*)()>(GetProcAddress(router,"WitnessRouterObserved"));
+         const auto stop=reinterpret_cast<void(*)()>(GetProcAddress(router,"WitnessRouterStop"));
+         need(start&&observed&&stop&&start(g.present.Get()),"Real bridge-style binding/Reset/Execute hooks install first in a separate DLL");
+         auto* w=Witness::install(g.device.Get(),{streak});w->present(g.chain.Get());
+         lab::Controller controller;lab::GameOverlay panel(controller);panel.attach(g.chain.Get(),g.present.Get());panel.use_batch_submission(true);
+         ComPtr<ID3D12Fence> same_queue_point,other_queue_point;hr(g.device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&same_queue_point)),"same-queue marker");
+         hr(g.device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&other_queue_point)),"other-queue marker");
+         std::promise<void> same_entered,same_finished,other_finished;
+         auto entered=same_entered.get_future(),same_done=same_finished.get_future(),other_done=other_finished.get_future();
+         std::jthread same_thread,other_thread;bool checked_scope=false,same_blocked=false,other_progress=false;HRESULT same_hr=E_FAIL,other_hr=E_FAIL;
+         w->set_batch_draw([&](ID3D12CommandQueue* q,ID3D12Resource* r,const Witness::BatchSubmit& submit){
+             if(panel.visible()&&!checked_scope){checked_scope=true;
+                 same_thread=std::jthread([&]{same_entered.set_value();same_hr=g.present->Signal(same_queue_point.Get(),1);same_finished.set_value();});
+                 entered.wait();same_blocked=same_done.wait_for(std::chrono::milliseconds(8))==std::future_status::timeout;
+                 other_thread=std::jthread([&]{other_hr=g.other->Signal(other_queue_point.Get(),1);other_finished.set_value();});
+                 other_progress=other_done.wait_for(std::chrono::milliseconds(100))==std::future_status::ready;
+             }
+             panel.submit_batch(q,r,submit);
+         });
+         D3D12_HEAP_PROPERTIES read_heap{};read_heap.Type=D3D12_HEAP_TYPE_READBACK;D3D12_RESOURCE_DESC read_desc{};
+         read_desc.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;read_desc.Width=256;read_desc.Height=1;read_desc.DepthOrArraySize=1;read_desc.MipLevels=1;read_desc.SampleDesc.Count=1;read_desc.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+         ComPtr<ID3D12Resource> game_read;hr(g.device->CreateCommittedResource(&read_heap,D3D12_HEAP_FLAG_NONE,&read_desc,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&game_read)),"original-game implicit readback");
+         ComPtr<ID3D12Resource> buffer;hr(g.chain->GetBuffer(g.chain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&buffer)),"baseline buffer");
+         transition(g,buffer.Get(),g.present.Get(),Transition::legacy,true);const auto baseline=pixel(g,buffer.Get(),30,50);
+         (void)w->present(g.chain.Get());buffer.Reset();hr(g.chain->Present(0,0),"baseline Present");g.idle();panel.show();
+         for(unsigned i=0;i<22;++i){
+             hr(g.chain->GetBuffer(g.chain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&buffer)),"batch buffer");
+             const auto before=panel.snapshot().value("draws",0ULL);
+             transition(g,buffer.Get(),g.present.Get(),Transition::legacy,true,game_read.Get());
+             if(i==0){same_thread.join();other_thread.join();
+                 need(checked_scope&&same_blocked&&SUCCEEDED(same_hr),"A competing same-queue Signal cannot interleave with game/panel submission");
+                 need(other_progress&&SUCCEEDED(other_hr),"Another queue remains independently usable during panel preparation");}
+             need(panel.snapshot().value("draws",0ULL)==before+1,"The panel is drawn inside the original game batch");
+             sync_after(g,g.present.Get(),Sync::unrelated_direct_wait);
+             const auto candidate=w->batch_queue(Witness::name(g.chain.Get()));
+             need(candidate.Get()==g.present.Get(),"Fresh batch binding names the exact submitting queue, independently of Present");
+             need(!w->present(g.chain.Get()),"Foreign wait still refuses the old Present-time draw proof");
+             const auto at_present=panel.snapshot().value("draws",0ULL);panel.present(g.chain.Get(),false,nullptr);
+             need(panel.snapshot().value("draws",0ULL)==at_present,"Batch mode never duplicates the draw in Present");
+             const auto bounds=panel.snapshot()["controls"]["panel_bounds"];
+             const auto px=unsigned(bounds[0].get<float>()+6*std::clamp(GetDpiForWindow(g.window)/96.f,1.f,2.5f));
+             const auto py=unsigned(bounds[1].get<float>()+bounds[3].get<float>()*.5f);
+             need(px<1280&&py<800,"DPI-aware panel sample lies inside the fixture target");
+             // Dear ImGui's new auto-sized window needs its initial layout
+             // frames before it contributes draw data. Verify twenty real frames
+             // after that warm-up, rather than calling a submission visibility.
+             const auto actual=pixel(g,buffer.Get(),px,py);
+             need(i<2||actual!=baseline,"Actual batch panel pixels before Present at frame "+std::to_string(i)+" bounds="+bounds.dump()+" actual="+lab::json(actual).dump()+" baseline="+lab::json(baseline).dump());
+             need(pixel(g,buffer.Get(),1279,799)==baseline,"Pixels outside the panel retain the game clear colour");
+             void* original=nullptr;D3D12_RANGE read{0,4};hr(game_read->Map(0,&read,&original),"original-game Map");std::array<unsigned char,4> original_pixel{};std::memcpy(original_pixel.data(),original,4);D3D12_RANGE none{};game_read->Unmap(0,&none);
+             need(original_pixel==baseline,"The original game's implicit read finishes before the panel and decays at its original Execute boundary");
+             buffer.Reset();hr(g.chain->Present(0,0),"batch original Present");g.idle();
+         }
+         const auto state=w->status();need(state["batch_panel"].value("appended",0u)==22,"One appended panel list per game batch");
+         need(panel.snapshot()["submission_evidence"].value("gpu_completed",0u)==22,"All twenty-two batch panel submissions retire on the GPU");
+         need(state["wait_provenance"].value("ignored_old_completed_waits",99u)==0,"Same-batch rendering needs no old-wait exemption");
+         // Reset a recorded list before it is submitted: stale PRESENT metadata
+         // must neither append a panel nor qualify the subsequent empty batch.
+         const auto before=panel.snapshot().value("draws",0ULL);hr(g.chain->GetBuffer(g.chain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&buffer)),"reset buffer");
+         hr(g.allocator->Reset(),"discard allocator");hr(g.list->Reset(g.allocator.Get(),nullptr),"record discarded list");
+         D3D12_RESOURCE_BARRIER b{};b.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;b.Transition={buffer.Get(),D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_PRESENT,D3D12_RESOURCE_STATE_RENDER_TARGET};
+         g.list->ResourceBarrier(1,&b);std::swap(b.Transition.StateBefore,b.Transition.StateAfter);g.list->ResourceBarrier(1,&b);hr(g.list->Close(),"discard Close");
+         hr(g.list->Reset(g.allocator.Get(),nullptr),"discard by Reset");hr(g.list->Close(),"empty Close");ID3D12CommandList* lists[]{g.list.Get()};g.present->ExecuteCommandLists(1,lists);g.idle();
+         need(panel.snapshot().value("draws",0ULL)==before,"A Reset command list cannot append a stale buffer draw");
+         // Hidden panel does no work even though the valid transition is seen.
+         SendMessageW(g.window,WM_KEYDOWN,VK_ESCAPE,0);transition(g,buffer.Get(),g.present.Get(),Transition::legacy,true);g.idle();
+         need(panel.snapshot().value("draws",0ULL)==before,"Closing the panel stops batch rendering");
+         buffer.Reset();need(observed()!=FALSE,"The independent binding observer sees recordings and remains healthy with the panel hooks");
+         w->set_batch_draw({});panel.stop();w->uninstall_for_test();stop();FreeLibrary(router);}
+        // 14. Ineligible final state or more than one named buffer cannot cause
+        // an append. Ordinary stand-ins keep these negative cases off DXGI.
+        {auto* w=Witness::install(g.device.Get(),{1});w->present(g.stand_in_names());unsigned callbacks=0;
+         w->set_batch_draw([&](ID3D12CommandQueue*,ID3D12Resource*,const Witness::BatchSubmit&){++callbacks;});
+         hr(g.allocator->Reset(),"away allocator");hr(g.list->Reset(g.allocator.Get(),nullptr),"away list");
+         D3D12_RESOURCE_BARRIER b{};b.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;b.Transition={g.stand_ins[g.stand_in_frame%3].Get(),D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_COMMON,D3D12_RESOURCE_STATE_RENDER_TARGET};
+         g.list->ResourceBarrier(1,&b);std::swap(b.Transition.StateBefore,b.Transition.StateAfter);g.list->ResourceBarrier(1,&b);std::swap(b.Transition.StateBefore,b.Transition.StateAfter);g.list->ResourceBarrier(1,&b);
+         hr(g.list->Close(),"away Close");ID3D12CommandList* lists[]{g.list.Get()};g.present->ExecuteCommandLists(1,lists);g.idle();
+         need(callbacks==0&&w->status()["batch_panel"].value("last_refusal","")=="batch-not-finally-present","A later transition away from PRESENT refuses append");
+         need(!w->batch_queue(g.stand_in_names()),"A non-PRESENT final state cannot bind the batch renderer");
+         {Witness::OwnWork own;hr(g.allocator->Reset(),"restore allocator");hr(g.list->Reset(g.allocator.Get(),nullptr),"restore list");std::swap(b.Transition.StateBefore,b.Transition.StateAfter);g.list->ResourceBarrier(1,&b);hr(g.list->Close(),"restore Close");g.present->ExecuteCommandLists(1,lists);g.idle();}
+         hr(g.allocator->Reset(),"multi allocator");hr(g.list->Reset(g.allocator.Get(),nullptr),"multi list");
+         for(unsigned i=0;i<2;++i){b.Transition={g.stand_ins[i].Get(),D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,D3D12_RESOURCE_STATE_COMMON,D3D12_RESOURCE_STATE_RENDER_TARGET};g.list->ResourceBarrier(1,&b);std::swap(b.Transition.StateBefore,b.Transition.StateAfter);g.list->ResourceBarrier(1,&b);}
+         hr(g.list->Close(),"multi Close");g.present->ExecuteCommandLists(1,lists);g.idle();
+         need(callbacks==0&&w->status()["batch_panel"].value("last_refusal","")=="multiple-back-buffers-in-batch","An ambiguous multi-buffer batch never calls the renderer");
+         w->set_batch_draw({});w->uninstall_for_test();}
+        for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T bytes=0;info->GetMessage(i,nullptr,&bytes);std::vector<std::byte> data(bytes);
+            auto* message=reinterpret_cast<D3D12_MESSAGE*>(data.data());hr(info->GetMessage(i,message,&bytes),"debug message");
+            need(message->Severity!=D3D12_MESSAGE_SEVERITY_ERROR&&message->Severity!=D3D12_MESSAGE_SEVERITY_CORRUPTION,std::string("D3D12 debug error: ")+message->pDescription);}
+        // 15. The GPU survived everything above.
+
         need(g.device->GetDeviceRemovedReason()==S_OK,"Device not removed");
         std::cout<<"PASS "<<checks<<" present-queue witness checks; decided a real swapchain's present queue from its own "
                    "back-buffer transitions; refused a GPU-ordered cross-queue shape, alternating queues, a doubly transitioned "

@@ -413,8 +413,9 @@ struct Host final:SlAdmissionSink {
         catch(...){hook_fault=true;}
     }
 
-    // Every outer Present on the late path, before the panel draws. The chain is
-    // touched here and only here, through the pointer this call was handed.
+    // Every outer Present on the late path names the chain's buffers and binds
+    // the batch renderer. Drawing occurs on the next matching game submission;
+    // only this Present call touches the chain through the pointer it was handed.
     ComPtr<ID3D12CommandQueue> late_present(IDXGISwapChain* c)noexcept{
         if(!c)return {};
         if(!adopted.load())adopt(c);
@@ -424,7 +425,9 @@ struct Host final:SlAdmissionSink {
         // before the panel draws, so a frame's own game transition is judged.
         if(auto* w=present_witness.load(std::memory_order_acquire)){
             ComPtr<IDXGISwapChain3> chain;if(SUCCEEDED(c->QueryInterface(IID_PPV_ARGS(&chain)))){
-                const auto permit=w->present(chain.Get());if(permit)try{verified=native_queue(permit.Get());}catch(...){}}}
+                const auto names=PresentQueueWitness::name(chain.Get());const auto batch=w->batch_queue(names);
+                (void)w->present(names); // legacy Present proof remains diagnostic, never relaxed
+                if(batch)try{verified=native_queue(batch.Get());}catch(...){}}}
         if(late_open_panel.exchange(false))late_panel->open_when_attached();
         // The panel attaches only once NR has been prepared: before the bridge
         // exists there is no moment at which this process can name a queue that
@@ -432,14 +435,11 @@ struct Host final:SlAdmissionSink {
         return late_panel->bind(c,live.load()!=nullptr&&!hook_fault&&!stopping,GetTickCount64(),verified.Get());
     }
 
-    // The queue the panel submits on. It draws into the back buffer right before
-    // Present, so it must be the queue that PRESENTS -- not the queue that ran
-    // RR. That used to be the latter, an inference from "the game uses one
-    // graphics queue"; on Halo: Campaign Evolved (UE5, Streamline frame
-    // generation loaded) the first panel draw -- pressing Insert, NR still OFF --
-    // ended in a GPU crash. A D3D12 swapchain may report the queue
-    // it was created with through GetDevice; when it does not, the queue comes
-    // from evidence (the witness), never from inference.
+    // A publicly reported creation queue still supports the ordinary Present
+    // renderer. Otherwise bind only to a fresh current-buffer submission and
+    // submit the panel immediately after that exact game's Execute batch. Guessing RR's queue
+    // previously caused a GPU crash; a batch queue is never labelled as the
+    // Present queue, and cannot authorize a later separate Present-time draw.
     latebind::LatePanel::Answer resolve_present_queue(IDXGISwapChain3* chain){
         ComPtr<ID3D12CommandQueue> reported;std::string refused;
         {std::lock_guard lock(late_mutex);
@@ -468,16 +468,15 @@ struct Host final:SlAdmissionSink {
         latebind::LatePanel::Answer a;
         if(reported)a={native_queue(reported.Get()),"swapchain-reported",{}};
         else{
-            // The chain does not name its queue (RE9: E_NOINTERFACE, no
-            // Streamline proxy). Watch the game transition the current back buffer
-            // into PRESENT instead, and take the queue that executed it only once
-            // the evidence holds for a run of frames.
+            // No public queue answer. The batch renderer requires a fresh
+            // current-buffer submission ending in PRESENT, not a guess about
+            // the native Present queue or an exemption for foreign waits.
             if(present_witness_refused.load())return {nullptr,{},refused};
             auto* w=present_witness.load(std::memory_order_acquire);
             if(!w){witness_wanted=true;return {nullptr,{},"waiting-for-the-present-transition-witness (the swapchain does not report its present queue)"};}
-            const auto decided=w->decided();
-            if(!decided)return {nullptr,{},"waiting-for-present-transition-evidence (see present_queue_witness)"};
-            a={native_queue(decided.Get()),"present-transition-witness",{}};
+            const auto batch=w->batch_queue();
+            if(!batch)return {nullptr,{},"waiting-for-current-back-buffer-submission"};
+            a={native_queue(batch.Get()),"back-buffer-submission",{}};
         }
         // Recorded, not acted on: whether RR and Present share a queue is the
         // fact that explains (or rules out) the Halo crash above.
@@ -513,9 +512,13 @@ struct Host final:SlAdmissionSink {
             if(witness_wanted.load()&&!present_witness.load()&&!present_witness_refused.load()){
                 ComPtr<ID3D12Device> device;{std::lock_guard lock(late_mutex);device=late_device;}
                 if(device)try{
-                    present_witness.store(PresentQueueWitness::install(device.Get()),std::memory_order_release);
-                    controller.diagnostic("Late panel: the swapchain does not report its present queue; watching which queue "
-                                          "executes the game's transition of the current back buffer into PRESENT.");
+                    auto* witness=PresentQueueWitness::install(device.Get());
+                    if(overlay){overlay->use_batch_submission(true);
+                        witness->set_batch_draw([this](ID3D12CommandQueue* queue,ID3D12Resource* buffer,const PresentQueueWitness::BatchSubmit& submit){
+                            if(!stopping&&overlay)overlay->submit_batch(queue,buffer,submit);
+                        });}
+                    present_witness.store(witness,std::memory_order_release);
+                    controller.diagnostic("Late panel: watching the named back-buffer submission; panel commands follow the game's original Execute batch under a same-queue submission scope. Present-queue proof stays diagnostic.");
                 }catch(const std::exception& e){
                     const std::string note=std::string("swapchain-does-not-report-its-present-queue and the present-transition witness could not be installed (")+e.what()+"); panel disabled, control through overglazectl";
                     {std::lock_guard lock(late_mutex);witness_refused_note=note;}
@@ -693,7 +696,9 @@ struct Host final:SlAdmissionSink {
                 {"late_panel_probe",[&]{std::lock_guard lock(late_mutex);return late_panel_probe;}()},
                 {"late_panel_queue",[&]{if(!late||!late_panel||!late_panel->attached())return json(nullptr);
                     int match=-1;{std::lock_guard lock(late_mutex);match=late_panel_queue_match;}
-                    return json(match==1?"present-queue (RR ran on it too)":match==0?"present-queue (RR ran on a different queue)":"present-queue (RR queue not yet observed)");}()},
+                    const bool batch=late_panel->source()=="back-buffer-submission";
+                    return json(batch?(match==1?"back-buffer submission queue (RR ran on it too)":match==0?"back-buffer submission queue (RR ran on a different queue)":"back-buffer submission queue (RR queue not yet observed)"):
+                        match==1?"present-queue (RR ran on it too)":match==0?"present-queue (RR ran on a different queue)":"present-queue (RR queue not yet observed)");}()},
                 {"scope","controller host: control pipe, panel, public Streamline admission and the NR runtime bridge; no research observer, capture or probe is built into this binary"}});
             Sleep(16);
         }
@@ -718,6 +723,7 @@ struct Host final:SlAdmissionSink {
     // members with no lock, and the adapter snapshot is guarded by the worker mutex.
     void teardown() noexcept {
         if(teardown_done.exchange(true))return;
+        if(auto* w=present_witness.load())w->set_batch_draw({});
         if(overlay)overlay->stop();
         {std::lock_guard lock(adapter_worker_mutex);adapter.stop();}
         // Stop offering NGX calls before the receiver stops. A detour that has

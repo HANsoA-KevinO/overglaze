@@ -32,6 +32,11 @@ public:
     // Returns this submission's id, or zero if no work was submitted. The late
     // path requires a per-call permit and checks its queue under the draw lock.
     std::uint64_t present(IDXGISwapChain*,bool permitted=true,ID3D12CommandQueue* expected_queue=nullptr) noexcept;
+    // In late batch mode Present polls input only; drawing occurs atomically
+    // with the game's own named back-buffer submission, preserving its Execute boundary. No swapchain is touched
+    // from the Execute hook and no back-buffer reference survives the call.
+    void use_batch_submission(bool enabled)noexcept;
+    void submit_batch(ID3D12CommandQueue*,ID3D12Resource*,const std::function<void(ID3D12CommandList*)>&)noexcept;
     // Original Present's result for that submission. S_OK is not display proof.
     void presented(std::uint64_t submission,HRESULT result,UINT flags) noexcept;
     bool presentation_source(IDXGISwapChain*,ID3D12CommandQueue**,DXGI_COLOR_SPACE_TYPE*) noexcept;

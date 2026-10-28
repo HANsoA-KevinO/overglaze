@@ -124,6 +124,7 @@ struct GameOverlay::Impl {
     // slot of that frame, and the reference dropped once the draw is recorded.
     // Everything kept here is ours; nothing holds the game's chain alive.
     std::vector<Slot> slots;std::array<bool,64> descriptors{};
+    std::atomic<bool> batch_mode{false};unsigned batch_buffer_count=3;std::uint64_t batch_draws=0,batch_skipped=0;
     std::uint64_t attaches=0,detaches=0,rebinds=0,reshapes=0;
     unsigned width=0,height=0,rtv_stride=0,srv_stride=0;DXGI_FORMAT format=DXGI_FORMAT_UNKNOWN;
     DXGI_COLOR_SPACE_TYPE space=DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
@@ -754,9 +755,9 @@ struct GameOverlay::Impl {
         slots.clear();ui.Reset();scene.Reset();pipeline.Reset();root.Reset();rtv.Reset();srv.Reset();fence.Reset();event.reset();
         width=height=0;sequence=0;ready=false;descriptors.fill(false);
     }
-    void initialize(IDXGISwapChain3* chain){
+    void initialize(const DXGI_SWAP_CHAIN_DESC1& desc,ID3D12Resource* buffer){
         demand(queue!=nullptr,"Overlay queue unavailable after Resize");
-        DXGI_SWAP_CHAIN_DESC1 desc{};hr(chain->GetDesc1(&desc));demand(desc.BufferCount>=2&&desc.BufferCount<=8&&desc.Width&&desc.Height,"Unsupported overlay swapchain");
+        demand(desc.BufferCount>=2&&desc.BufferCount<=8&&desc.Width&&desc.Height,"Unsupported overlay swapchain");
         demand(desc.Width<=8192&&desc.Height<=8192&&static_cast<std::uint64_t>(desc.Width)*desc.Height<=24000000,"Overlay texture budget exceeded");
         demand(desc.Format==DXGI_FORMAT_R8G8B8A8_UNORM||desc.Format==DXGI_FORMAT_B8G8R8A8_UNORM||desc.Format==DXGI_FORMAT_R10G10B10A2_UNORM||desc.Format==DXGI_FORMAT_R16G16B16A16_FLOAT,"Unsupported overlay target format");
         width=desc.Width;height=desc.Height;format=desc.Format;hr(queue->GetDevice(IID_PPV_ARGS(&device)));
@@ -777,7 +778,7 @@ struct GameOverlay::Impl {
             hr(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,slots[i].allocator.Get(),nullptr,IID_PPV_ARGS(&slots[i].commands)));hr(slots[i].commands->Close());}
         // The scene copy and the panel layer take the back buffer's shape; the
         // buffer is borrowed for that one read.
-        D3D12_RESOURCE_DESC texture{};{ComPtr<ID3D12Resource> sample;hr(chain->GetBuffer(0,IID_PPV_ARGS(&sample)));texture=sample->GetDesc();}
+        D3D12_RESOURCE_DESC texture=buffer->GetDesc();
         D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
         texture.Flags=D3D12_RESOURCE_FLAG_NONE;hr(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&texture,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,nullptr,IID_PPV_ARGS(&scene)));
         texture.Format=DXGI_FORMAT_R16G16B16A16_FLOAT;texture.Flags=D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;D3D12_CLEAR_VALUE clear{};clear.Format=texture.Format;
@@ -804,7 +805,7 @@ struct GameOverlay::Impl {
         event=std::make_unique<Handle>(CreateEventW(nullptr,FALSE,FALSE,nullptr));demand(event->valid(),"Overlay event unavailable");
         ready=true;
     }
-    void render(IDXGISwapChain3* chain){
+    void render(IDXGISwapChain3* chain,ID3D12Resource* batch_buffer=nullptr,const std::function<void(ID3D12CommandList*)>* submit=nullptr){
 #ifdef LAB_OVERLAY_RESEARCH
         const auto status=control.status();const auto pair=status.value("frame_pair",json());
         bool busy=false;if(pair.is_object()){const auto phase=pair.value("state","");busy=!phase.empty()&&phase!="idle"&&phase!="complete"&&phase!="cancelled"&&phase!="failed";}
@@ -817,16 +818,20 @@ struct GameOverlay::Impl {
             throw std::runtime_error("Unknown swapchain color space; overlay not drawn");
         // The chain's shape, every present: a chain recreated at the old address,
         // or resized past our hook, is never drawn with the previous shape.
-        DXGI_SWAP_CHAIN_DESC1 shape{};hr(chain->GetDesc1(&shape));
+        DXGI_SWAP_CHAIN_DESC1 shape{};ComPtr<ID3D12Resource> back;ID3D12Resource* buffer=batch_buffer;UINT index=0;
+        if(buffer){const auto d=buffer->GetDesc();
+            demand(d.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D&&d.Width<=UINT_MAX&&d.SampleDesc.Count==1&&d.MipLevels==1&&d.DepthOrArraySize==1,"Unsupported batch back buffer");
+            shape.Width=UINT(d.Width);shape.Height=d.Height;shape.Format=d.Format;shape.BufferCount=batch_buffer_count;
+        }else{hr(chain->GetDesc1(&shape));index=chain->GetCurrentBackBufferIndex();demand(index<shape.BufferCount,"Overlay back buffer index out of range");
+            hr(chain->GetBuffer(index,IID_PPV_ARGS(&back)));buffer=back.Get();}
         if(ready&&(shape.Width!=width||shape.Height!=height||shape.Format!=format||shape.BufferCount!=slots.size())){release_gpu();++reshapes;}
-        if(!ready)initialize(chain);auto& slot=slots[sequence%slots.size()];const auto complete=fence->GetCompletedValue();
+        if(!ready)initialize(shape,buffer);auto& slot=slots[sequence%slots.size()];const auto complete=fence->GetCompletedValue();
         demand(complete!=UINT64_MAX,"Overlay device removed");if(complete<slot.completed){++skipped;return;}
         ContextScope scope(context);auto& io=ImGui::GetIO();io.DisplaySize={float(width),float(height)};const auto now=GetTickCount64();io.DeltaTime=last_tick?std::clamp((now-last_tick)/1000.f,.001f,.1f):1.f/60;last_tick=now;
         feed_input();ImGui_ImplDX12_NewFrame();ImGui::NewFrame();controls=json::object();draw_panel(status);ImGui::Render();
-        hr(slot.allocator->Reset());hr(slot.commands->Reset(slot.allocator.Get(),nullptr));auto* c=slot.commands.Get();const auto index=chain->GetCurrentBackBufferIndex();demand(index<shape.BufferCount,"Overlay back buffer index out of range");
+        hr(slot.allocator->Reset());hr(slot.commands->Reset(slot.allocator.Get(),nullptr));auto* c=slot.commands.Get();
         // Borrowed for this present only; released when render() returns. The
         // view goes into this frame's ring slot (an RTV is read when it is bound).
-        ComPtr<ID3D12Resource> back;hr(chain->GetBuffer(index,IID_PPV_ARGS(&back)));auto* buffer=back.Get();
         const unsigned ring=unsigned(sequence%slots.size());device->CreateRenderTargetView(buffer,nullptr,target(ring));
         barrier(c,buffer,D3D12_RESOURCE_STATE_PRESENT,D3D12_RESOURCE_STATE_COPY_SOURCE);barrier(c,scene.Get(),D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
         c->CopyResource(scene.Get(),buffer);barrier(c,scene.Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -838,9 +843,10 @@ struct GameOverlay::Impl {
         struct Constants{unsigned transfer;float white;float pad[2];}constants{space==DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709?1u:space==DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020?2u:0u,paper_white,{0,0}};
         c->SetGraphicsRoot32BitConstants(1,4,&constants,0);D3D12_VIEWPORT viewport{0,0,float(width),float(height),0,1};D3D12_RECT rect{0,0,LONG(width),LONG(height)};
         c->RSSetViewports(1,&viewport);c->RSSetScissorRects(1,&rect);c->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);c->DrawInstanced(3,1,0,0);
-        barrier(c,buffer,D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_PRESENT);hr(c->Close());ID3D12CommandList* commands[]{c};queue->ExecuteCommandLists(1,commands);
-        ++sequence;slot.completed=sequence;hr(queue->Signal(fence.Get(),sequence));++draws;
-        last_submission={{"id",draws},{"buffer_index",index},{"width",width},{"height",height},{"format",unsigned(format)},
+        barrier(c,buffer,D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_PRESENT);hr(c->Close());
+        if(submit)(*submit)(c);else{ID3D12CommandList* commands[]{c};queue->ExecuteCommandLists(1,commands);}
+        ++sequence;slot.completed=sequence;const auto signalled=queue->Signal(fence.Get(),sequence);if(FAILED(signalled))completion_unknown=true;hr(signalled);++draws;if(submit)++batch_draws;
+        last_submission={{"id",draws},{"buffer_index",submit?json(nullptr):json(index)},{"source",submit?"game-execute-batch":"before-present"},{"resource",reinterpret_cast<std::uint64_t>(buffer)},{"width",width},{"height",height},{"format",unsigned(format)},
             {"chain",reinterpret_cast<std::uint64_t>(chain)},{"queue",reinterpret_cast<std::uint64_t>(queue.Get())},{"time_ms",now}};
     }
 };
@@ -871,7 +877,7 @@ void GameOverlay::attach(IDXGISwapChain3* chain,ID3D12CommandQueue* queue){auto&
         s.window=nullptr;s.original_proc=nullptr;
     }
     auto* expected=static_cast<Impl*>(nullptr);demand(Impl::input_owner.compare_exchange_strong(expected,&s)||expected==&s,"Another overlay owns the input hook");
-    const bool install_proc=s.window!=d.OutputWindow;s.chain_key=chain;s.window=d.OutputWindow;s.queue=s.creation_queue=queue;s.failed=false;
+    const bool install_proc=s.window!=d.OutputWindow;s.batch_buffer_count=d.BufferCount;s.chain_key=chain;s.window=d.OutputWindow;s.queue=s.creation_queue=queue;s.failed=false;
     s.space=d.BufferDesc.Format==DXGI_FORMAT_R16G16B16A16_FLOAT?DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709:DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
     s.input_block_installed=input_block::install(&Impl::message_sink);
     if(install_proc){s.original_proc=reinterpret_cast<WNDPROC>(GetWindowLongPtrW(s.window,GWLP_WNDPROC));SetLastError(0);
@@ -897,14 +903,14 @@ std::uint64_t GameOverlay::present(IDXGISwapChain* chain,bool permitted,ID3D12Co
 #ifdef LAB_OVERLAY_RESEARCH
     try{s.poll_hotkey();}catch(...){}
     // A queued cancellation must still be delivered while the panel is hidden.
-    if(s.failed||(!s.visible&&!s.cancel_capture))return 0;
+    if(s.batch_mode||s.failed||(!s.visible&&!s.cancel_capture))return 0;
     std::unique_lock lock(s.mutex,std::try_to_lock);if(!lock.owns_lock())return 0;
     if(chain!=s.chain_key)return 0;
     if(s.cancel_capture.exchange(false))try{s.dispatch("CancelCapturePair",json::object());}catch(...){}
     if(!s.visible)return 0;
 #else
     try{s.poll_hotkey();}catch(...){}
-    if(s.failed||!s.visible)return 0;
+    if(s.batch_mode||s.failed||!s.visible)return 0;
     std::unique_lock lock(s.mutex,std::try_to_lock);if(!lock.owns_lock())return 0;
     if(chain!=s.chain_key)return 0;
 #endif
@@ -919,6 +925,16 @@ std::uint64_t GameOverlay::present(IDXGISwapChain* chain,bool permitted,ID3D12Co
         try{s.release_gpu();}catch(const std::exception& e){s.completion_unknown=true;s.error=e.what();s.failed=true;s.visibility(false);s.control.diagnostic(s.error);return 0;}}
     try{ComPtr<IDXGISwapChain3> c;hr(chain->QueryInterface(IID_PPV_ARGS(&c)));s.render(c.Get());}catch(const std::exception& e){s.error=e.what();s.failed=true;s.visibility(false);s.control.diagnostic(s.error);}
     return s.draws>before?s.draws:0;}
+void GameOverlay::use_batch_submission(bool enabled)noexcept{p_->batch_mode=enabled;}
+void GameOverlay::submit_batch(ID3D12CommandQueue* queue,ID3D12Resource* buffer,const std::function<void(ID3D12CommandList*)>& submit)noexcept{
+    auto& s=*p_;if(s.stopped||!s.batch_mode||!s.bound||!s.visible||s.failed||!buffer||!submit)return;
+    std::unique_lock lock(s.mutex,std::try_to_lock);if(!lock.owns_lock())return;
+    if(s.stopped||!s.batch_mode||!s.bound||!s.visible||s.failed||s.queue.Get()!=queue){++s.batch_skipped;return;}
+    if(s.retry_render.exchange(false)){
+        if(s.completion_unknown){s.failed=true;s.visibility(false);return;}
+        try{s.release_gpu();}catch(const std::exception& e){s.completion_unknown=true;s.error=e.what();s.failed=true;s.visibility(false);return;}}
+    try{s.render(nullptr,buffer,&submit);}catch(const std::exception& e){s.error=e.what();s.failed=true;s.visibility(false);}
+}
 void GameOverlay::presented(std::uint64_t submission,HRESULT result,UINT flags)noexcept{
     if(!submission)return;auto& s=*p_;std::lock_guard lock(s.mutex);
     if(result==S_OK&&!(flags&DXGI_PRESENT_TEST))++s.present_ok;else ++s.present_other;
@@ -939,7 +955,7 @@ void GameOverlay::resized_queues(IDXGISwapChain3* chain,std::span<ID3D12CommandQ
             demand(device.Get()==chain_device.Get(),"Overlay resize queue device mismatch");
             if(first)demand(first.Get()==identity.Get(),"Rotating Present queues are not supported by this overlay");else first=identity;
         }
-        s.queue=queues.front();s.failed=false;s.error.clear();
+        s.batch_buffer_count=desc.BufferCount;s.queue=queues.front();s.failed=false;s.error.clear();
     }catch(const std::exception& e){s.queue.Reset();s.error=e.what();s.failed=true;s.visibility(false);s.control.diagnostic(s.error);}
 }
 void GameOverlay::resized_default_queue(IDXGISwapChain3* chain)noexcept{
@@ -962,15 +978,16 @@ void GameOverlay::stop()noexcept{auto& s=*p_;if(s.stopped.exchange(true))return;
     try{s.release_gpu();}catch(...){s.completion_unknown=true;} // Preserve allocations if GPU completion is unknown.
 }
 json GameOverlay::snapshot()const{const auto& s=*p_;std::lock_guard lock(s.mutex);return {{"attached",s.chain_key!=nullptr},{"visible",s.visible.load()},{"draws",s.draws},{"skipped",s.skipped},
+    {"batch_submission",{{"enabled",s.batch_mode.load()},{"draws",s.batch_draws},{"skipped",s.batch_skipped}}},
     {"submission_evidence",{{"gpu_completed",s.completed_draws()},{"proof_skipped",s.proof_skipped},
         {"present_returned_ok",s.present_ok},{"present_returned_other",s.present_other},{"last_reported_id",s.last_reported},
         {"last_present_hr",static_cast<std::uint32_t>(s.last_present)},{"last_present_flags",s.last_present_flags},
         {"last_submission",s.last_submission},{"display_visibility_verified",false},
-        {"scope","draws count signalled submissions; GPU completion and original Present results are independent, neither proves on-screen visibility"}}},
+        {"scope",s.batch_mode?"batch draws count signalled submissions; GPU completion is separate; no per-draw original Present association and no on-screen visibility claim":"draws count signalled submissions; GPU completion and original Present results are independent, neither proves on-screen visibility"}}},
     {"input_block_installed",s.input_block_installed},{"input_block_active",input_block::active()},{"input_suspended",s.input_suspended.load()},{"panel_background_alpha",1.f},
     {"color_space",unsigned(s.space)},{"failed",s.failed.load()},{"error",s.error},{"controls",s.controls},{"hidden_draws",0},{"automatic_sampling",false},
     {"bound",s.bound.load()},{"attaches",s.attaches},{"detaches",s.detaches},{"rebinds",s.rebinds},{"reshapes",s.reshapes},
-    {"back_buffers","acquired per present, released after recording; none held between presents"},
+    {"back_buffers",s.batch_mode?"borrowed from this game's command-list submission; no back-buffer references retained":"acquired per present, released after recording; none held between presents"},
     {"hotkey",s.hotkeys.current_name()},{"hotkey_source",hotkey::source_name(s.hotkeys.source())},{"hotkey_revision",s.hotkeys.revision()},
     {"hotkey_capturing",s.capturing.load()},{"hotkey_refusal",hotkey::refusal_text(hotkey::Refusal(s.capture_refusal.load()))},{"hotkey_error",s.hotkeys.error()},
 #ifdef LAB_OVERLAY_RESEARCH

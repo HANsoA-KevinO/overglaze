@@ -86,7 +86,8 @@ ComPtr<ID3D12CommandQueue> LatePanel::bind(IDXGISwapChain* chain,bool may_attach
         if(!chain||chain!=chains_.followed()||withdrawn_)return {};
         // Judged before the overlay draws this present: a contradicted queue is
         // never drawn on again, attached or about to be.
-        if(evidence_.contradicted&&evidence_.contradicted(source_)){
+        const bool batch_queue_changed=attached_&&source_=="back-buffer-submission"&&witnessed_queue&&witnessed_queue!=queue_.Get();
+        if(batch_queue_changed||(evidence_.contradicted&&evidence_.contradicted(source_))){
             const bool was=attached_;unbind("contradicted");if(withdrawn_)return {};
             if(evidence_.restart&&evidence_.restart(now)){++redecisions_;
                 note(std::string(was?"detached":"not attached")+": the present-transition evidence contradicted the chosen queue; "
@@ -96,12 +97,12 @@ ComPtr<ID3D12CommandQueue> LatePanel::bind(IDXGISwapChain* chain,bool may_attach
                 note(withdrawn_note_);}
             return {};
         }
-        if(attached_)return source_=="present-transition-witness"&&witnessed_queue!=queue_.Get()?ComPtr<ID3D12CommandQueue>{}:queue_;
+        if(attached_)return (source_=="present-transition-witness"||source_=="back-buffer-submission")&&witnessed_queue!=queue_.Get()?ComPtr<ID3D12CommandQueue>{}:queue_;
         if(!may_attach)return {};
         ComPtr<IDXGISwapChain3> c3;if(FAILED(chain->QueryInterface(IID_PPV_ARGS(&c3))))return {};
         auto a=evidence_.resolve?evidence_.resolve(c3.Get()):Answer{};
         if(!a.queue){note(a.note.empty()?"waiting-for-render-queue":a.note);return {};}
-        if(a.source=="present-transition-witness"&&witnessed_queue!=a.queue.Get())return {};
+        if((a.source=="present-transition-witness"||a.source=="back-buffer-submission")&&witnessed_queue!=a.queue.Get())return {};
         overlay_.attach(c3.Get(),a.queue.Get());
         if(!overlay_.bound()){note("the panel did not bind to this chain (it is bound to another live window)");return {};}
         attached_=true;queue_=a.queue;source_=a.source;++attaches_;note("attached ("+a.source+")");

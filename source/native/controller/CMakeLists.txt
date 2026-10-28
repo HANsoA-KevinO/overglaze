@@ -223,7 +223,12 @@ set_tests_properties(native_late_discovery PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE
 # The late panel's present queue, from evidence: a real swapchain, a second
 # DIRECT queue and a compute queue; every refusal and the decision, executed.
 add_executable(lab_present_queue_witness_tests tests/present_queue_witness_tests.cpp src/present_queue_witness.cpp src/late_slots.cpp)
-target_link_libraries(lab_present_queue_witness_tests PRIVATE lab_controller_includes lab_core minhook d3d12 dxgi)
+target_link_libraries(lab_present_queue_witness_tests PRIVATE lab_overlay lab_controller_includes lab_core minhook d3d12 dxgi)
+# Separate process-pinned DLL reproduces the bridge's independent MinHook
+# instance. It is test-only and never part of the portable allowlist.
+add_library(lab_witness_router_fixture SHARED tests/witness_router_fixture.cpp)
+target_link_libraries(lab_witness_router_fixture PRIVATE lab_native_resume)
+add_dependencies(lab_present_queue_witness_tests lab_witness_router_fixture)
 add_test(NAME native_present_queue_witness COMMAND lab_present_queue_witness_tests)
 set_tests_properties(native_present_queue_witness PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE LABELS gpu)
 
@@ -235,6 +240,8 @@ add_executable(lab_late_panel_tests tests/late_panel_tests.cpp src/late_panel.cp
 target_link_libraries(lab_late_panel_tests PRIVATE lab_overlay d3d12 dxgi)
 add_test(NAME native_late_panel COMMAND lab_late_panel_tests)
 set_tests_properties(native_late_panel PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+add_test(NAME native_late_panel_batch COMMAND lab_late_panel_tests --batch)
+set_tests_properties(native_late_panel_batch PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
 
 # The late-loading controller: injected into a running game, its payload lives in
 # a subdirectory of the game rather than replacing dxgi.dll. Deliberately NOT

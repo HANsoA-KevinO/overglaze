@@ -10,7 +10,7 @@
 namespace lab {
 using Microsoft::WRL::ComPtr;
 namespace {
-constexpr unsigned MaxBuffers=8,MaxMarks=32,MaxWaits=32,MaxFences=64;
+constexpr unsigned MaxBuffers=8,MaxMarks=32,MaxWaits=32,MaxFences=64,MaxQueues=16;
 std::string hex(const void* p){char b[24];std::snprintf(b,sizeof(b),"0x%llx",static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(p)));return b;}
 }
 namespace {thread_local unsigned own_work_depth=0;}
@@ -19,8 +19,8 @@ PresentQueueWitness::OwnWork::~OwnWork(){--own_work_depth;}
 
 struct PresentQueueWitness::Impl {
     inline static std::atomic<Impl*> active{nullptr};
-    inline static std::array<void*,6> originals{};
-    std::array<void*,6> targets{};std::size_t fence_signal_slot=0;
+    inline static std::array<void*,7> originals{};
+    std::array<void*,7> targets{};std::size_t fence_signal_slot=0;std::array<std::size_t,3> queue_slots{};
     ComPtr<ID3D12Device> device;Policy policy;
     // Raw identities of the adopted chain's back buffers, refreshed every
     // present. Compared, never dereferenced, and never AddRef'd: a held
@@ -28,12 +28,50 @@ struct PresentQueueWitness::Impl {
     std::array<std::atomic<void*>,MaxBuffers> buffers{};
     std::atomic<bool> armed{false};std::atomic<unsigned> pending{0};
     mutable std::mutex mutex;
+    // Serialize public queue calls only on the SAME queue. This preserves the
+    // game's original Execute boundary (and implicit decay), while preventing
+    // another CPU thread from placing a Signal/Wait between game and panel.
+    // No GPU wait or global queue gate is introduced. OwnWork is recursive work
+    // inside the held queue scope; CPU fence Signal is deliberately not gated.
+    struct QueueScope {ComPtr<ID3D12CommandQueue> queue;std::recursive_mutex mutex;};
+    std::array<QueueScope,MaxQueues> queue_scopes{};unsigned queue_count=0;bool queue_overflow=false;
+    bool queue_methods(ID3D12CommandQueue* q)const noexcept{
+        if(!q)return false;auto** v=*reinterpret_cast<void***>(q);
+        return v[queue_slots[0]]==targets[2]&&v[queue_slots[1]]==targets[3]&&v[queue_slots[2]]==targets[4];
+    }
+    std::unique_lock<std::recursive_mutex> queue_scope(ID3D12CommandQueue* q){
+        QueueScope* entry=nullptr;
+        {std::lock_guard lock(mutex);
+            for(unsigned i=0;i<queue_count;++i)if(queue_scopes[i].queue.Get()==q){entry=&queue_scopes[i];break;}
+            if(!entry&&q&&q->GetDesc().Type==D3D12_COMMAND_LIST_TYPE_DIRECT){ComPtr<ID3D12Device> d;
+                if(SUCCEEDED(q->GetDevice(IID_PPV_ARGS(&d)))&&d.Get()==device.Get()){
+                    if(queue_count<MaxQueues){entry=&queue_scopes[queue_count++];entry->queue=q;}else queue_overflow=true;
+                }
+            }
+        }
+        return entry?std::unique_lock(entry->mutex):std::unique_lock<std::recursive_mutex>{};
+    }
+
     // A recorded, not yet executed, transition of a back buffer into PRESENT.
     struct Mark{void* list=nullptr;void* resource=nullptr;};
     std::array<Mark,MaxMarks> marks{};
+    struct BatchMark {void* list=nullptr;ID3D12Resource* resource=nullptr;bool present=false;};
+    std::array<BatchMark,MaxMarks> batch_marks{};BatchDraw batch_draw;
+    bool batch_overflow=false;std::uint64_t batch_appended=0,batch_resets=0,batch_refused=0;
+    std::string batch_last_refusal;ComPtr<ID3D12CommandQueue> current_batch_queue;
+    void batch_mark(void* list,ID3D12Resource* resource,bool present){
+        std::lock_guard lock(mutex);
+        for(auto& m:batch_marks)if(m.list==list&&m.resource==resource){m.present=present;return;}
+        for(auto& m:batch_marks)if(!m.list){m={list,resource,present};return;}batch_overflow=true;
+    }
+    void reset_marks(void* list){std::lock_guard lock(mutex);++batch_resets;
+        for(auto& m:marks)if(m.list==list){m={};pending.fetch_sub(1,std::memory_order_relaxed);}
+        for(auto& m:batch_marks)if(m.list==list)m={};
+    }
+
     // The last execution of such a transition, per back buffer. Consumed by the
     // present of that buffer.
-    struct Record{void* resource=nullptr;ComPtr<ID3D12CommandQueue> queue;std::uint64_t seq=0;bool fresh=false,conflict=false;};
+    struct Record{void* resource=nullptr;ComPtr<ID3D12CommandQueue> queue;std::uint64_t seq=0;bool fresh=false,conflict=false,batch_eligible=false;};
     std::array<Record,MaxBuffers> records{};
     // A bounded set of fence identities. Retaining fences/queues cannot retain a
     // swapchain or a back buffer. New identities past the cap stay unknown.
@@ -117,7 +155,7 @@ struct PresentQueueWitness::Impl {
         // Two queues executing a transition of one buffer before its present:
         // which one presents is exactly what cannot be told apart.
         if(slot->resource==resource&&slot->fresh&&slot->queue.Get()!=queue)slot->conflict=true;
-        slot->resource=resource;slot->queue=queue;slot->seq=++seq;slot->fresh=true;
+        slot->resource=resource;slot->queue=queue;slot->seq=++seq;slot->fresh=true;slot->batch_eligible=false;
     }
     void miss(const char* why){++misses[why];last_miss=why;streak=0;}
     void contradiction(){++contradictions;++since_decision;}
@@ -129,8 +167,13 @@ struct PresentQueueWitness::Impl {
         auto* s=active.load(std::memory_order_acquire);
         if(s&&!own_work_depth&&s->armed.load(std::memory_order_relaxed)&&b)
             for(UINT i=0;i<count;++i)
-                if(b[i].Type==D3D12_RESOURCE_BARRIER_TYPE_TRANSITION&&b[i].Transition.StateAfter==D3D12_RESOURCE_STATE_PRESENT&&
-                   s->back_buffer(b[i].Transition.pResource))s->mark(list,b[i].Transition.pResource,false);
+                if(b[i].Type==D3D12_RESOURCE_BARRIER_TYPE_TRANSITION&&s->back_buffer(b[i].Transition.pResource)){
+                    const auto& t=b[i].Transition;
+                    const bool complete=b[i].Flags!=D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY&&
+                        (t.Subresource==0||t.Subresource==D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES)&&t.StateAfter==D3D12_RESOURCE_STATE_PRESENT;
+                    s->batch_mark(list,t.pResource,complete);
+                    if(complete)s->mark(list,t.pResource,false);
+                }
         reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*,UINT,const D3D12_RESOURCE_BARRIER*)>(originals[0])(list,count,b);
     }
     static void STDMETHODCALLTYPE enhanced(ID3D12GraphicsCommandList7* list,UINT32 groups,const D3D12_BARRIER_GROUP* g){
@@ -138,20 +181,59 @@ struct PresentQueueWitness::Impl {
         if(s&&!own_work_depth&&s->armed.load(std::memory_order_relaxed)&&g)
             for(UINT32 i=0;i<groups;++i)if(g[i].Type==D3D12_BARRIER_TYPE_TEXTURE&&g[i].pTextureBarriers)
                 for(UINT32 j=0;j<g[i].NumBarriers;++j){const auto& t=g[i].pTextureBarriers[j];
-                    if(t.LayoutAfter==D3D12_BARRIER_LAYOUT_PRESENT&&s->back_buffer(t.pResource))s->mark(list,t.pResource,true);}
+                    if(s->back_buffer(t.pResource)){
+                        const bool all=t.Subresources.IndexOrFirstMipLevel==0xffffffff||
+                            (t.Subresources.IndexOrFirstMipLevel==0&&t.Subresources.NumMipLevels==1&&t.Subresources.NumArraySlices==1&&t.Subresources.NumPlanes==1);
+                        const bool complete=all&&t.LayoutAfter==D3D12_BARRIER_LAYOUT_PRESENT&&t.SyncAfter!=D3D12_BARRIER_SYNC_SPLIT;
+                        s->batch_mark(list,t.pResource,complete);if(complete)s->mark(list,t.pResource,true);
+                    }}
         reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList7*,UINT32,const D3D12_BARRIER_GROUP*)>(originals[1])(list,groups,g);
     }
     static void STDMETHODCALLTYPE execute(ID3D12CommandQueue* queue,UINT count,ID3D12CommandList* const* lists){
-        auto* s=active.load(std::memory_order_acquire);bool observed=false;
-        if(s&&!own_work_depth&&s->pending.load(std::memory_order_relaxed)&&lists&&count<=256){std::lock_guard lock(s->mutex);
+        auto* s=active.load(std::memory_order_acquire);bool observed=false,submitted=false;
+        auto scope=s&&!own_work_depth?s->queue_scope(queue):std::unique_lock<std::recursive_mutex>{};
+        BatchDraw draw;ID3D12Resource* target=nullptr;
+        if(s&&!own_work_depth&&lists&&count&&count<=256){std::lock_guard lock(s->mutex);
             for(auto& m:s->marks)if(m.list)for(UINT i=0;i<count;++i)
                 if(static_cast<void*>(lists[i])==m.list){s->record(m.resource,queue);observed=true;m={};s->pending.fetch_sub(1,std::memory_order_relaxed);break;}
-            if(observed)++s->submissions_in_progress;}
-        reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D12CommandQueue*,UINT,ID3D12CommandList* const*)>(originals[2])(queue,count,lists);
-        if(observed){std::lock_guard lock(s->mutex);--s->submissions_in_progress;}
+            bool multiple=false,final_present=false;
+            // Command-list order, then each list's last observed state. A final
+            // transition away from PRESENT or multiple buffers never qualifies.
+            for(UINT i=0;i<count;++i)for(auto& m:s->batch_marks)if(m.list==static_cast<void*>(lists[i])){
+                if(target&&target!=m.resource)multiple=true;target=m.resource;final_present=m.present;m={};
+            }
+            if(observed){++s->submissions_in_progress;
+                for(auto& r:s->records)if(r.resource==target)r.batch_eligible=!multiple&&final_present&&!s->batch_overflow&&!s->queue_overflow&&scope.owns_lock()&&s->queue_methods(queue);}
+            if(s->batch_draw&&target){ComPtr<ID3D12Device> device;
+                const char* refused=s->batch_overflow?"barrier-history-overflow":s->queue_overflow||!scope.owns_lock()?"queue-scope-unavailable":!s->queue_methods(queue)?"queue-method-implementation-unobserved":multiple?"multiple-back-buffers-in-batch":!final_present?"batch-not-finally-present":
+                    queue->GetDesc().Type!=D3D12_COMMAND_LIST_TYPE_DIRECT||FAILED(queue->GetDevice(IID_PPV_ARGS(&device)))||device.Get()!=s->device.Get()?"batch-queue-device-or-type-mismatch":nullptr;
+                if(refused){++s->batch_refused;s->batch_last_refusal=refused;}else draw=s->batch_draw;
+            }
+        }
+        const auto original=reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D12CommandQueue*,UINT,ID3D12CommandList* const*)>(originals[2]);
+        if(draw){
+            OwnWork own;
+            // Keep the original batch intact. Separate Execute calls retain
+            // implicit state decay and guarantee game work precedes the panel;
+            // the queue scope keeps every following public signal behind both.
+            const BatchSubmit submit=[&](ID3D12CommandList* panel){
+                if(submitted||!panel)return;
+                submitted=true;original(queue,count,lists);
+                ID3D12CommandList* commands[]{panel};original(queue,1,commands);
+            };
+            try{draw(queue,target,submit);}catch(...){} // failed preparation leaves the game batch intact
+        }
+        if(!submitted)original(queue,count,lists);
+        if(s&&(observed||submitted)){std::lock_guard lock(s->mutex);
+            if(observed)--s->submissions_in_progress;if(submitted)++s->batch_appended;}
+    }
+    static HRESULT STDMETHODCALLTYPE reset(ID3D12GraphicsCommandList* list,ID3D12CommandAllocator* allocator,ID3D12PipelineState* state){
+        auto* s=active.load(std::memory_order_acquire);if(s&&!own_work_depth)s->reset_marks(list);
+        return reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*,ID3D12CommandAllocator*,ID3D12PipelineState*)>(originals[6])(list,allocator,state);
     }
     static HRESULT STDMETHODCALLTYPE wait(ID3D12CommandQueue* queue,ID3D12Fence* fence,UINT64 value){
         auto* s=active.load(std::memory_order_acquire);
+        auto scope=s&&!own_work_depth?s->queue_scope(queue):std::unique_lock<std::recursive_mutex>{};
         if(s&&!own_work_depth&&fence&&s->armed.load(std::memory_order_relaxed)&&queue->GetDesc().Type==D3D12_COMMAND_LIST_TYPE_DIRECT){
             const auto completed=fence->GetCompletedValue();std::lock_guard lock(s->mutex);
             Waited w;w.queue=queue;w.fence=fence;w.seq=++s->seq;w.value=value;w.completed=completed;
@@ -164,8 +246,9 @@ struct PresentQueueWitness::Impl {
     static HRESULT STDMETHODCALLTYPE signal(ID3D12CommandQueue* queue,ID3D12Fence* fence,UINT64 value){
         // Publish only AFTER the original accepted the Signal. A signal that
         // overlaps a transition submission cannot be mistaken for an earlier one.
-        const auto result=reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(ID3D12CommandQueue*,ID3D12Fence*,UINT64)>(originals[4])(queue,fence,value);
         auto* s=active.load(std::memory_order_acquire);
+        auto scope=s&&!own_work_depth?s->queue_scope(queue):std::unique_lock<std::recursive_mutex>{};
+        const auto result=reinterpret_cast<HRESULT(STDMETHODCALLTYPE*)(ID3D12CommandQueue*,ID3D12Fence*,UINT64)>(originals[4])(queue,fence,value);
         if(SUCCEEDED(result)&&s&&!own_work_depth&&fence&&s->armed.load(std::memory_order_relaxed)){
             std::lock_guard lock(s->mutex);++s->gpu_signals;const auto seq=++s->seq;
             if(auto* point=s->fence_point(fence)){
@@ -199,7 +282,7 @@ PresentQueueWitness* PresentQueueWitness::install(ID3D12Device* device,Policy po
     ComPtr<ID3D12Fence> fence;
     if(FAILED(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence))))throw std::runtime_error("Present-queue witness fence discovery");
     auto** fv=*reinterpret_cast<void***>(fence.Get());
-    s->targets={cv[slots[0]],nullptr,qv[slots[2]],qv[slots[3]],qv[slots[4]],fv[slots[5]]};s->fence_signal_slot=slots[5];
+    s->targets={cv[slots[0]],nullptr,qv[slots[2]],qv[slots[3]],qv[slots[4]],fv[slots[5]],cv[slots[6]]};s->fence_signal_slot=slots[5];s->queue_slots={slots[2],slots[3],slots[4]};
     // Enhanced barriers are hooked only where the list's version-7 interface is
     // the same object pointer ExecuteCommandLists will be handed; otherwise a
     // mark could never be matched and would only look like missing evidence.
@@ -213,9 +296,9 @@ PresentQueueWitness* PresentQueueWitness::install(ID3D12Device* device,Policy po
         HMODULE pin{};if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,reinterpret_cast<LPCWSTR>(&Impl::execute),&pin))
             throw std::runtime_error("Pin present-queue witness code");
         const auto init=MH_Initialize();if(init!=MH_OK&&init!=MH_ERROR_ALREADY_INITIALIZED)throw std::runtime_error("MinHook unavailable");
-        const std::array<void*,6> callbacks{reinterpret_cast<void*>(&Impl::barrier),reinterpret_cast<void*>(&Impl::enhanced),
+        const std::array<void*,7> callbacks{reinterpret_cast<void*>(&Impl::barrier),reinterpret_cast<void*>(&Impl::enhanced),
             reinterpret_cast<void*>(&Impl::execute),reinterpret_cast<void*>(&Impl::wait),
-            reinterpret_cast<void*>(&Impl::signal),reinterpret_cast<void*>(&Impl::cpu_signal)};
+            reinterpret_cast<void*>(&Impl::signal),reinterpret_cast<void*>(&Impl::cpu_signal),reinterpret_cast<void*>(&Impl::reset)};
         for(unsigned i=0;i<s->targets.size();++i){if(!s->targets[i])continue;
             const auto r=MH_CreateHook(s->targets[i],callbacks[i],&Impl::originals[i]);
             s->hooks.push_back({{"slot",i},{"vtable_slot",slots[i]},{"address",reinterpret_cast<std::uint64_t>(s->targets[i])},{"create",static_cast<int>(r)}});
@@ -223,7 +306,7 @@ PresentQueueWitness* PresentQueueWitness::install(ID3D12Device* device,Policy po
         }
         // Enable submissions, waits and both signal observers before barriers,
         // so no transition mark starts with only part of its evidence observed.
-        for(unsigned i:{2u,3u,4u,5u,0u,1u}){if(!s->targets[i])continue;const auto r=MH_EnableHook(s->targets[i]);
+        for(unsigned i:{2u,3u,4u,5u,6u,0u,1u}){if(!s->targets[i])continue;const auto r=MH_EnableHook(s->targets[i]);
             for(auto& h:s->hooks)if(h["slot"]==i)h["enable"]=static_cast<int>(r);
             if(r!=MH_OK)throw std::runtime_error("Present-queue witness partial enable retained");}
         s->enhanced_hooked=s->targets[1]!=nullptr;
@@ -290,9 +373,21 @@ bool PresentQueueWitness::restart(std::uint64_t now)noexcept{
     if(s.restarts_at.size()>=s.policy.restarts){++s.refused_redecisions;return false;}
     s.restarts_at.push_back(now);++s.redecisions;s.clear_decision();return true;
 }
+ComPtr<ID3D12CommandQueue> PresentQueueWitness::batch_queue(const BackBuffers& b)noexcept{
+    auto& s=*impl_;std::lock_guard lock(s.mutex);s.current_batch_queue.Reset();
+    if(!b.named||!b.count||b.count>MaxBuffers||b.current>=b.count||s.submissions_in_progress)return {};
+    for(const auto& r:s.records)if(r.resource==b.identity[b.current]&&r.fresh&&!r.conflict&&r.batch_eligible){
+        ComPtr<ID3D12Device> d;
+        if(r.queue&&r.queue->GetDesc().Type==D3D12_COMMAND_LIST_TYPE_DIRECT&&SUCCEEDED(r.queue->GetDevice(IID_PPV_ARGS(&d)))&&d.Get()==s.device.Get())s.current_batch_queue=r.queue;
+        break;
+    }
+    return s.current_batch_queue;
+}
+ComPtr<ID3D12CommandQueue> PresentQueueWitness::batch_queue()const{std::lock_guard lock(impl_->mutex);return impl_->current_batch_queue;}
+void PresentQueueWitness::set_batch_draw(BatchDraw draw){std::lock_guard lock(impl_->mutex);impl_->batch_draw=std::move(draw);}
 void PresentQueueWitness::rebind()noexcept{
     auto& s=*impl_;std::lock_guard lock(s.mutex);
-    s.clear_decision();for(auto& r:s.records)r=Impl::Record{};for(auto& m:s.marks)m={};s.pending.store(0,std::memory_order_relaxed);
+    s.clear_decision();for(auto& r:s.records)r=Impl::Record{};for(auto& m:s.marks)m={};s.pending.store(0,std::memory_order_relaxed);for(auto& m:s.batch_marks)m={};s.batch_overflow=false;s.current_batch_queue.Reset();
     // The next present names the new chain's buffers and arms the hooks again;
     // until then no barrier can be matched (first-present-names-the-back-buffers).
     for(auto& b:s.buffers)b.store(nullptr,std::memory_order_relaxed);s.armed.store(false,std::memory_order_relaxed);++s.rebinds;
@@ -303,6 +398,9 @@ json PresentQueueWitness::status()const{
     return {{"state",s.decided?"decided":"watching"},{"required_streak",s.policy.streak},{"streak",s.streak},
         {"presents",s.presents},{"accepted_frames",s.accepted},{"misses",misses},{"last_miss",s.last_miss},
         {"back_buffer_submissions_in_progress",s.submissions_in_progress},
+        {"batch_panel",{{"enabled",bool(s.batch_draw)},{"binding_queue",s.current_batch_queue?json(hex(s.current_batch_queue.Get())):json(nullptr)},{"appended",s.batch_appended},{"resets",s.batch_resets},{"refused",s.batch_refused},
+            {"history_overflow",s.batch_overflow},{"queue_capacity",MaxQueues},{"tracked_queues",s.queue_count},{"queue_overflow",s.queue_overflow},{"last_refusal",s.batch_last_refusal},
+            {"scope","original game Execute boundary preserved; panel submitted immediately after on the same queue, with public queue calls serialized through its completion Signal; no GPU drain or Present-queue inference"}}},
         {"queue_changes",s.queue_changes},{"contradictions",s.contradictions},{"contradictions_since_decision",s.since_decision},
         {"decisions",s.decisions},{"redecisions",s.redecisions},{"refused_redecisions",s.refused_redecisions},{"rebinds",s.rebinds},
         {"redecision_bound",{{"restarts",s.policy.restarts},{"window_ms",s.policy.restart_window_ms}}},

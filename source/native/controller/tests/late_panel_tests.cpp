@@ -123,14 +123,14 @@ void frame(Gpu& g,IDXGISwapChain3* chain,Late& late,lab::GameOverlay& overlay,st
 std::uint64_t draws(const lab::GameOverlay& o){return o.snapshot().value("draws",0ULL);}
 }
 
-int wmain(){
+int wmain(int argc,wchar_t** argv){
     try{
         tracker();
         ComPtr<ID3D12Debug> debug;if(SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))))debug->EnableDebugLayer();
         Gpu g;lab::json report={{"test","late-panel-binding"}};
         lab::Controller controller;controller.enable_nr_preparation(true);controller.enable_embedded_control();
         lab::GameOverlay overlay(controller);
-        Probe probe;probe.queue=g.queue;probe.source="present-transition-witness";
+        Probe probe;probe.queue=g.queue;probe.source=argc==2&&std::wstring(argv[1])==L"--batch"?"back-buffer-submission":"present-transition-witness";
         Late::Evidence e;
         e.accept=[&](IDXGISwapChain3*,std::string&){return true;};
         e.resolve=[&](IDXGISwapChain3*){++probe.resolves;return Late::Answer{probe.queue,probe.source,{}};};
@@ -206,7 +206,11 @@ int wmain(){
          need(draws(overlay)==shown+3,"The panel draws on C: "+overlay.snapshot().dump());}
 
         // 7. A contradiction: detached before this frame draws; re-decided; attached again.
-        {const auto shown=draws(overlay);probe.contradiction=true;frame(g,c.Get(),late,overlay,++now);
+        {const auto shown=draws(overlay);
+         if(probe.source=="back-buffer-submission"){ComPtr<ID3D12CommandQueue> other;D3D12_COMMAND_QUEUE_DESC d{};d.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
+             hr(g.device->CreateCommandQueue(&d,IID_PPV_ARGS(&other)),"changed batch queue");
+             need(!late.bind(c.Get(),true,++now,other.Get()),"A different fresh batch queue detaches before drawing without an inferred contradiction");
+         }else{probe.contradiction=true;frame(g,c.Get(),late,overlay,++now);}
          need(draws(overlay)==shown&&!late.attached()&&!overlay.bound(),"A contradicted queue is not drawn on: "+late.status().dump());
          frame(g,c.Get(),late,overlay,++now);
          need(late.attached()&&late.status().value("redecisions",0ULL)==1,"Re-decided and attached again: "+late.status().dump());

@@ -808,6 +808,9 @@
   "controller/tests/present_queue_witness_tests.cpp": {
    "track": "controller"
   },
+  "controller/tests/witness_router_fixture.cpp": {
+   "track": "controller"
+  },
   "controller/src/controller_loader.cpp": {
    "track": "controller"
   },

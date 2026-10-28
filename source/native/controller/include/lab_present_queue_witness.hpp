@@ -3,11 +3,14 @@
 #pragma once
 #include "lab_platform.hpp"
 #include <array>
+#include <functional>
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 namespace lab {
-// Which queue does a late-adopted swapchain present with?
+// Retained diagnostic: which queue does a late-adopted swapchain present with?
+// The late panel's BatchDraw route below needs only an exact named-buffer
+// submission; it does not turn that submission queue into a Present queue.
 //
 // The panel has to submit on that queue, right before the original Present. A
 // host that saw the swapchain created was handed the queue; a late-loaded one
@@ -60,7 +63,8 @@ namespace lab {
 // Hooks: ID3D12GraphicsCommandList::ResourceBarrier, ID3D12GraphicsCommandList7::
 // Barrier where the runtime has it, ID3D12CommandQueue::ExecuteCommandLists and
 // ::Wait/Signal and ID3D12Fence::Signal, read from our discovery objects on the game's device. Process lifetime.
-// When no present has been seen the hooks only load one atomic and forward.
+// Before the buffers are named no back-buffer barrier can qualify. Reset
+// clears bounded recording metadata; no game resource is kept referenced.
 class PresentQueueWitness final {
 public:
     struct Policy {unsigned streak=60,restarts=3;std::uint64_t restart_window_ms=60000;};
@@ -74,6 +78,17 @@ public:
     // draw a frame whose transition/wait evidence is missing or ambiguous.
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> present(const BackBuffers& buffers)noexcept;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> present(IDXGISwapChain3* chain)noexcept{return present(name(chain));}
+    // Submit the panel immediately after the original ExecuteCommandLists call for the
+    // game's final back-buffer transition, under a same-queue CPU scope. The submit closure is synchronous,
+    // accepts one closed panel list, and must not escape the callback. This route
+    // does not infer a Present queue or waive any Present-permit refusal.
+    using BatchSubmit=std::function<void(ID3D12CommandList*)>;
+    using BatchDraw=std::function<void(ID3D12CommandQueue*,ID3D12Resource*,const BatchSubmit&)>;
+    void set_batch_draw(BatchDraw);
+    // Fresh current-buffer submission proof for batch-only binding. This says
+    // which queue submitted that buffer, NOT which queue presents it.
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> batch_queue(const BackBuffers&)noexcept;
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> batch_queue()const;
     // The panel's own barriers/submissions must never become game evidence.
     struct OwnWork final {OwnWork()noexcept;~OwnWork();OwnWork(const OwnWork&)=delete;OwnWork& operator=(const OwnWork&)=delete;};
     // The proven queue, or null while the evidence is still being gathered.
@@ -96,6 +111,6 @@ private:
 namespace latebind {
 // ResourceBarrier, ID3D12GraphicsCommandList7::Barrier, ExecuteCommandLists,
 // queue Wait/Signal, CPU fence Signal. Defined in late_slots.cpp (CINTERFACE).
-std::array<std::size_t,6> witness_slots();
+std::array<std::size_t,7> witness_slots();
 }
 }
