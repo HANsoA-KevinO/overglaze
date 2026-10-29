@@ -169,14 +169,27 @@ InsertionBindings* LiveSubmission::enable_binding_preservation(){
     checked(reset_method->Close());checked(reset_method->Reset(reset_allocator.Get(),nullptr));
     auto* b=InsertionBindings::install(method.Get(),reset_method.Get());s.bindings=b;checked(reset_method->Close());return b;
 }
-bool LiveSubmission::enroll(List* list,bool probe){
-    if(!list||impl_->stopped||impl_->fault)return false;
+LiveSubmission::Enrollment LiveSubmission::try_enroll(List* list,bool probe){
+    if(!list)return Enrollment::invalid_list;
+    if(impl_->stopped)return Enrollment::stopped;
+    if(impl_->fault)return Enrollment::observer_fault;
     auto resolved=resolve(list);ComPtr<ID3D12Device> device;
-    if(resolved.Get()!=list||list->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT||FAILED(list->GetDevice(IID_PPV_ARGS(&device)))||device.Get()!=impl_->device.Get())return false;
-    ComPtr<List> old;
-    std::unique_lock lock(impl_->mutex,std::try_to_lock);if(!lock.owns_lock()||impl_->stopped||impl_->fault||impl_->list||(!probe&&!impl_->queue))return false;
-    auto& s=*impl_;old=std::move(s.list);s.list=std::move(resolved);s.probe=probe;s.closed=s.submitting=s.submitted=s.armed=s.discarded=false;
-    s.thread=GetCurrentThreadId();++s.enrollments;s.watched=list;return true;
+    if(resolved.Get()!=list||list->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT||FAILED(list->GetDevice(IID_PPV_ARGS(&device)))||device.Get()!=impl_->device.Get())return Enrollment::invalid_list;
+    std::unique_lock lock(impl_->mutex,std::try_to_lock);
+    if(!lock.owns_lock())return Enrollment::busy;
+    if(impl_->stopped)return Enrollment::stopped;
+    if(impl_->fault)return Enrollment::observer_fault;
+    if(impl_->list)return Enrollment::pending_recording;
+    if(!probe&&!impl_->queue)return Enrollment::queue_unknown;
+    auto& s=*impl_;s.list=std::move(resolved);s.probe=probe;s.closed=s.submitting=s.submitted=s.armed=s.discarded=false;
+    s.thread=GetCurrentThreadId();++s.enrollments;s.watched=list;return Enrollment::enrolled;
+}
+const char* LiveSubmission::enrollment_name(Enrollment e) noexcept{
+    switch(e){case Enrollment::enrolled:return "enrolled";case Enrollment::busy:return "metadata-lock-busy";
+        case Enrollment::stopped:return "router-stopped";case Enrollment::observer_fault:return "submission-observer-fault";
+        case Enrollment::invalid_list:return "native-list-device-type-or-method-mismatch";
+        case Enrollment::pending_recording:return "previous-recording-still-owned";case Enrollment::queue_unknown:return "render-queue-not-observed";}
+    return "unknown-enrollment-result";
 }
 ComPtr<ID3D12CommandQueue> LiveSubmission::observed_queue()const{
     std::lock_guard lock(impl_->mutex);return !impl_->stopped&&!impl_->fault?impl_->queue:ComPtr<ID3D12CommandQueue>{};

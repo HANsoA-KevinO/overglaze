@@ -623,7 +623,19 @@ struct Live {
         boundary_settings_reset=source.history_reset_requested;
         const auto target_state=static_cast<D3D12_RESOURCE_STATES>(f.color_state);
         pipeline->validate_on_frame(source,target_state,true,colors);Borrowed held(f);
-        demand(submission->enroll(f.command,false),"Live render enrollment failed");
+        const auto enrollment=submission->try_enroll(f.command,false);
+        if(enrollment==lab::LiveSubmission::Enrollment::busy){
+            // This is before retirement->record_owned and before ANY injected
+            // GPU command. A status/queue metadata reader must not permanently
+            // stop NR: bypass this call, reset history on the next admitted one.
+            skip_admitted_frame(f,"render-enrollment-metadata-lock-busy");
+            strcpy_s(status.rejection.stage,"live-submission");return;
+        }
+        if(enrollment!=lab::LiveSubmission::Enrollment::enrolled){
+            const auto* why=submission->first_failure();
+            throw std::runtime_error(std::string("Live render enrollment failed: ")+lab::LiveSubmission::enrollment_name(enrollment)+
+                "; submission="+(why?why:"no-observer-fault"));
+        }
         lab::nr::Selection selected;
         auto record=[&]{selected=retirement->record_owned(sequence,std::move(held),[&]{
             guide_transitions(f,false);

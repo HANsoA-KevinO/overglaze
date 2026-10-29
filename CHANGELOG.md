@@ -4,19 +4,26 @@ All notable changes to Overglaze are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
-## [0.2.0-preview.13] - 2026-10-28
+## [0.2.0-preview.14] - 2026-10-28
 
 ### Fixed
 
+- **NR enrollment contention.** A busy submission-metadata lock before any injected command is recorded now bypasses only that frame, resets history for the next admitted frame and keeps the user's ON intent. It no longer turns this transient enrollment refusal into a permanent *Live render enrollment failed*. Pending ownership, unknown queues, invalid native lists and actual observer faults still stop; terminal messages now name the enrollment result and the observer's first failure. No GPU completion, resource-lifetime or native identity check is relaxed.
 - **PBZ / Phantom Blade Zero initialization.** The Game Library selects the existing normal DXGI proxy for the exact executable and three graphics-module identities validated in PBZ. This loads the observer before the game's NGX feature creation, so a fresh launch can enable NR without changing a DLSS quality setting. An old late-loading package for that same build is offered a configuration update even when its plugin DLLs match; refreshing/updating it selects the tested loading strategy. The update checks for a foreign root `dxgi.dll` before uninstalling anything. Other builds/games retain their previous loading choice and all identity, creation-metadata and frame-admission checks. Remove the old Overglaze Steam launch option after PBZ's update; NR remains off by default.
 - Steam late-loading launch options now carry the registered game id (`--game-id "{id}" -- %command%`). Steam's original bootstrap command and arguments are forwarded unchanged, while only the selected game's real executable and installed package can authorize attachment. This supports separate bootstrap/game paths with the same basename without guessing by name or folder. Invalid or unknown ids never fall back to a different target; legacy direct-EXE options remain supported. After upgrading, copy the per-game option from the Game Library again.
 - Game discovery and package checks now classify standalone 7-Zip/8-Zip tools (including numeric `_v` suffixes such as `8za_v2.exe`) and `CheckEnv.exe` as auxiliary programs. A split-platform Unreal layout can keep these tools in the project Binaries folder while the game runs elsewhere; their folder no longer makes them a preferred game candidate. Ordinary game names sharing a tool prefix remain eligible. Existing wrong-target installations retain identity-checked removal. This corrects target selection, not in-game panel rendering.
 
 ### Validation and upgrade
 
-- PBZ's existing shared host passed two distinct fresh-process checks without changing DLSS, FG or resolution: 422 NR evaluations / 422 GPU completions, then 322 / 321 with one in flight. Both snapshots had zero admission skips or execution errors; each also recorded two history gaps and one initialization resource rebuild. The tester reported temporarily normal NR+FG operation. These are brief functional checks, not quantitative image-quality, performance or long-duration validation.
-- Upgrade the application, then close the affected game and use **Update plugin** (or **Refresh adapter package** if not installed). PBZ's tested build then starts normally without Overglaze's Steam option. Other late-loading games should copy their new complete per-game Steam option from the Game Library. Earlier Preview 12 panel and binding fixes carry forward.
-- [Chinese announcement](https://github.com/HANsoA-KevinO/overglaze/blob/v0.2.0-preview.13/docs/releases/v0.2.0-preview.13.zh-CN.md).
+- The enrollment regression stresses concurrent metadata readers and distinguishes busy, accepted and already-owned results; exactly one recording takes the lease. Ten hardware-GPU submission/panel tests passed, including wrong queue, duplicate submission, Reset/discard and list reuse, plus two synthetic real-NR host variants. Native non-GPU tests: 102/102; Python: 89 (one skip).
+- PBZ's candidate passed a fresh session with user menu/scene transitions: NR evaluations grew from 2,928 to 5,344; 5,343 GPU completions and one in-flight evaluation at the final read. Runtime/admission skips, history gaps and errors were zero, and the tester reported normal operation. The busy-skip path did not trigger in this real-game check; the older untyped error does not establish its unique cause. One initialization network rebuild was recorded. These are brief functional checks, not image-quality, performance or long-duration certification.
+- PBZ's normal-loading recipe had also passed two fresh-process no-DLSS-quality-toggle checks. Preview 14 includes all changes prepared for the withdrawn Preview 13, and carries forward Preview 12's panel/binding fixes.
+- Upgrade the application, close the affected game and use **Update plugin** (or **Refresh adapter package** if not installed). PBZ's tested build starts normally after removing the old Overglaze Steam option. Other late-loading games should copy their complete new per-game option. **This version changes the NR bridge and in-game host; updating the desktop application alone does not update installed game plugins.**
+- [Chinese announcement](https://github.com/HANsoA-KevinO/overglaze/blob/v0.2.0-preview.14/docs/releases/v0.2.0-preview.14.zh-CN.md).
+
+## [0.2.0-preview.13] - 2026-10-28
+
+Withdrawn after PBZ stopped NR during menu/scene transitions following the initial no-quality-toggle checks. Its source/tag are retained; those short checks did not validate sustained operation. Its target-discovery, Steam-launch and exact-build PBZ loading changes are included in Preview 14 above.
 
 ## [0.2.0-preview.12] - 2026-10-28
 

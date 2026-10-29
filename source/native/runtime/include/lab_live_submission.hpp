@@ -18,7 +18,12 @@ public:
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> resolve(IUnknown*) const;
     // Probe one real submission without Signal or injected GPU work. Subsequent
     // enrollments may use different lists, pinned only through their last use.
-    bool enroll(ID3D12GraphicsCommandList*,bool probe);
+    enum class Enrollment { enrolled, busy, stopped, observer_fault, invalid_list, pending_recording, queue_unknown };
+    // A busy metadata lock is not failed GPU work: no ownership was acquired
+    // and no commands were recorded. The caller may bypass just that frame.
+    Enrollment try_enroll(ID3D12GraphicsCommandList*,bool probe);
+    static const char* enrollment_name(Enrollment) noexcept;
+    bool enroll(ID3D12GraphicsCommandList* list,bool probe){return try_enroll(list,probe)==Enrollment::enrolled;}
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> observed_queue() const;
     bool arm(CompletionTimeline&,CompletionTimeline::Ticket);
     bool release_completed();

@@ -5,6 +5,8 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <atomic>
+#include <chrono>
 using Microsoft::WRL::ComPtr;
 namespace {
 unsigned checks=0;
@@ -60,7 +62,25 @@ int main(int argc,char** argv){auto w=std::make_unique<World>();try{
     need(r.snapshot()["signals"]==0&&r.release_completed(),"OFF probe does not Signal or inject work");
     w->timeline=std::make_unique<lab::CompletionTimeline>(w->queue.Get());auto& t=*w->timeline;
     need(r.resolve(w->lists[1].Get()).Get()==w->lists[1].Get(),"Native command identity resolved");
-    need(r.enroll(w->lists[1].Get(),false),"Different next-frame list accepted");
+    if(mode=="enrollment-contention"){
+        // Read-only metadata polling races enrollment, never the GPU. Keep the
+        // first accepted list owned throughout: busy and pending are distinct,
+        // and neither may replace it or poison the observer.
+        std::atomic<bool> go=false,stop=false;std::atomic<unsigned> readers_ready=0;
+        std::vector<std::thread> readers;for(unsigned i=0;i<8;++i)readers.emplace_back([&]{++readers_ready;while(!go.load())YieldProcessor();while(!stop.load()){(void)r.snapshot();(void)r.observed_queue();}});
+        while(readers_ready.load()!=8)YieldProcessor();go=true;
+        unsigned busy=0,accepted=0,pending=0;
+        const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+        do{const auto result=r.try_enroll(w->lists[1].Get(),false);
+            if(result==lab::LiveSubmission::Enrollment::busy)++busy;
+            else if(result==lab::LiveSubmission::Enrollment::enrolled)++accepted;
+            else if(result==lab::LiveSubmission::Enrollment::pending_recording)++pending;
+            else{stop=true;for(auto& thread:readers)thread.join();throw std::runtime_error("Unexpected enrollment result during read-only contention");}
+        }while(std::chrono::steady_clock::now()<until&&(!busy||!accepted||!pending));
+        stop=true;for(auto& thread:readers)thread.join();
+        need(busy&&accepted==1&&pending,"Read-only contention is observable and exactly one list acquires the lease");
+        need(!r.snapshot()["terminal_fault"].get<bool>()&&r.snapshot()["enrollments"]==2,"Busy/pending enrollments neither poison nor replace the owned list");
+    }else need(r.enroll(w->lists[1].Get(),false),"Different next-frame list accepted");
     need(!r.enroll(w->lists[2].Get(),false),"Pending recording cannot be replaced");
     auto ticket=t.reserve(1);need(ticket.generation&&t.recording(ticket),"Reserve/record actual frame");
     // "reset" leaves the recording UNARMED: nothing proves what that list held,
@@ -98,7 +118,7 @@ int main(int argc,char** argv){auto w=std::make_unique<World>();try{
             w->submit(1);need(r.snapshot()["terminal_fault"]==true&&t.snapshot().signals==1,"Repeated submission cannot Signal twice");
             need(r.snapshot()["failure_reason"]=="repeated-recording-submission","Exact duplicate rejection");
         }else{
-            need(mode=="normal"||mode=="reuse"||mode=="cross-thread"||mode=="probe-discard","Known fixture mode");
+            need(mode=="normal"||mode=="reuse"||mode=="cross-thread"||mode=="probe-discard"||mode=="enrollment-contention","Known fixture mode");
             if(mode=="reuse"){
                 hr(w->lists[5]->Close());hr(w->lists[1]->Reset(w->alloc[5].Get(),nullptr));hr(w->lists[1]->Close());w->submit(1);
                 need(!r.release_completed()&&!r.enroll(w->lists[2].Get(),false),"Recycled list still holds original in-flight lease");

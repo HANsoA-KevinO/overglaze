@@ -42,7 +42,7 @@ $labRoot=Join-Path $labTree 'data'
 if(-not (Test-Path -LiteralPath $labRoot)){New-Item -ItemType Directory -Path $labRoot | Out-Null}
 if(-not $BuildDirectory){$BuildDirectory=Join-Path $labRoot '_build_controller'}
 $labBuild=[IO.Path]::GetFullPath($BuildDirectory)
-if(@(Get-Process 007FirstLight,AlanWake2,CONTROLResonant,Cyberpunk2077,DOOMTheDarkAges,FlightSimulator2024,HaloCampaignEvolved,Hellblade2-WinGDK-Shipping,LEGOBatmanLotDK-Win64-Shipping,OnimushaWotS,PRAGMATA,Resonance,SandFall-WinGDK-Shipping,TheGreatCircle,re9 -ErrorAction SilentlyContinue).Count){throw 'Exit the game normally; no concurrent GPU test'}
+if(@(Get-Process 007FirstLight,AlanWake2,CONTROLResonant,Cyberpunk2077,DOOMTheDarkAges,FlightSimulator2024,HaloCampaignEvolved,Hellblade2-WinGDK-Shipping,LEGOBatmanLotDK-Win64-Shipping,OnimushaWotS,PRAGMATA,PBZ,Resonance,SandFall-WinGDK-Shipping,TheGreatCircle,re9 -ErrorAction SilentlyContinue).Count){throw 'Exit the game normally; no concurrent GPU test'}
 if(@(Get-Process lab_controller_harness,lab_standalone_harness -ErrorAction SilentlyContinue).Count){throw 'An earlier fixture is still running; inspect it first'}
 if([IO.DriveInfo]::new([IO.Path]::GetPathRoot($labRoot)).AvailableFreeSpace -lt 30GB){throw '30 GiB reserve required'}
 $labSmi=Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'

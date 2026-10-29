@@ -6,13 +6,13 @@ Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Ren
 
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
-## 0.2.0-preview.13
+## 0.2.0-preview.14
 
-Fixes real-game discovery and Steam bootstrap launches, and selects normal start-up loading for the exact Phantom Blade Zero (PBZ) build validated in-game. Two fresh processes enabled NR without changing DLSS quality. NR+FG operation was reported temporarily normal; image quality, performance and long-duration stability remain unvalidated.
+Includes the real-game discovery, Steam bootstrap and exact-build PBZ start-up loading changes from withdrawn Preview 13. A transient submission-metadata lock miss before NR records any commands now bypasses that frame and resets history for the next one, keeping ON intent. Real submission faults still stop with their specific reason.
 
-Standalone 7-Zip/8-Zip tools and CheckEnv are no longer game targets. Other late-loading games get a per-game Steam option carrying their registered ID, supporting different bootstrap/game paths without guessing by basename.
+PBZ's candidate passed one user menu/scene-transition check: 5,344 NR evaluations, 5,343 GPU completions and one in flight; no skips, history gaps or errors. No busy skip occurred in that game check, so it does not establish the unique cause of the old untyped failure. Image quality, performance and long-duration stability remain unvalidated.
 
-**After upgrading, close the affected game and choose Update plugin. For PBZ's validated build, remove the old Overglaze Steam option and start normally; other late-loading games should copy their new complete option.** Preview 12's shared panel and Onimusha fixes carry forward. See [CHANGELOG.md](CHANGELOG.md) and the [Chinese announcement](https://github.com/HANsoA-KevinO/overglaze/blob/v0.2.0-preview.13/docs/releases/v0.2.0-preview.13.zh-CN.md).
+**After upgrading, close the affected game and choose Update plugin. PBZ's validated build then starts normally without its old Overglaze Steam option or a DLSS quality change; other late-loading games should copy their complete new per-game option.** Preview 12's panel and Onimusha fixes carry forward. See [CHANGELOG.md](CHANGELOG.md) and the [Chinese announcement](https://github.com/HANsoA-KevinO/overglaze/blob/v0.2.0-preview.14/docs/releases/v0.2.0-preview.14.zh-CN.md).
 
 ## What it does
 
