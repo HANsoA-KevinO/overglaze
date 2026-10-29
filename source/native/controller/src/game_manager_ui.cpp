@@ -103,9 +103,9 @@ void GameManagerPage::refresh(bool known){if(busy())return;error_.clear();
 // What the install / update dialog's button means, recorded in the receipt: the
 // dialog showed what the checks found and the risk paragraph, and the user went on.
 constexpr const char* kRiskConsent="acknowledged in the viewer's confirmation dialog: online, anti-cheat and anti-tamper risks are the user's own; Overglaze bypasses no protection";
-void GameManagerPage::act(const std::string& action,const std::string& id,bool late_package){if(busy())return;error_.clear();notice_.clear();const auto root=root_;const auto live=live_;const auto opening=opening_;
+void GameManagerPage::act(const std::string& action,const std::string& id){if(busy())return;error_.clear();notice_.clear();const auto root=root_;const auto live=live_;const auto opening=opening_;
     {std::lock_guard guard(live->lock);live->text.clear();live->index=live->count=0;}
-    job_=std::async(std::launch::async,[root,action,id,live,opening,late_package]{games::Manager m(root,std::nullopt,opening.model_sha256,opening.run_checker);m.allow_unrecognized_model(opening.allow_unrecognized_model);Result r;
+    job_=std::async(std::launch::async,[root,action,id,live,opening]{games::Manager m(root,std::nullopt,opening.model_sha256,opening.run_checker);m.allow_unrecognized_model(opening.allow_unrecognized_model);Result r;
     // Progress: the stage now running, in the table's words.
     const games::Progress progress=[live](const games::ProgressEvent& ev){if(ev.status!="start")return;
         std::string t=words("operation."+ev.operation)+" › "+words("stage."+ev.operation+"."+ev.stage);if(!ev.parent.empty())t=words("operation."+ev.parent)+" › "+t;
@@ -121,9 +121,10 @@ void GameManagerPage::act(const std::string& action,const std::string& id,bool l
     else if(action=="update"){m.update(id,true,kRiskConsent,progress);r.message=started(games::render("update-done"));}
     else if(action=="repin"){const auto retired=m.repin(id,true,kRiskConsent,false,progress);
         r.message=started(games::render("repin-done",json{{"retired",text(retired)}}));}
-    // The controller's root proxy, never the research root layout (see
-    // PackageOptions); late loading for a game whose EXE carries Denuvo.
-    else if(action=="make-package"){auto options=games::PackageOptions::for_viewer(late_package);options.allow_unsigned_modules=opening.allow_unsigned_modules;
+    // Use the selected executable's fresh preflight and measured loading recipe.
+    else if(action=="make-package"){std::optional<games::Entry> selected;for(const auto& e:m.list())if(e.id==id)selected=e;
+        if(!selected)throw std::runtime_error("游戏条目已移除；请刷新游戏库");
+        auto options=games::PackageOptions::for_viewer(m.preflight(*selected));options.allow_unsigned_modules=opening.allow_unsigned_modules;
         const auto p=m.make_package(id,options);r.message=games::render("package-made-controller",json{{"package",p.name},{"route",p.route}});}
     else if(action=="refresh-package"){const auto p=m.refresh_package(id);r.message=games::render("package-refreshed",json{{"package",p.name}});}
     else if(action=="uninstall"){const auto before=after();m.uninstall(id,true,progress);r.message=games::render("uninstall-done");
@@ -169,7 +170,7 @@ void GameManagerPage::draw(HWND window,float dpi){
         }else if(action.name=="make-package"||action.name=="refresh-package"){
             // Writes only Overglaze's own folder: no dialog. A Denuvo game's
             // package loads late (nothing in the game's root).
-            act(action.name,action.name=="refresh-package"?status.package:status.entry.id,has_risk(status,"anti-tamper"));
+            act(action.name,action.name=="refresh-package"?status.package:status.entry.id);
         }else{
             pending_=status.entry.id;pending_title_=status.entry.title;pending_path_=text(status.entry.exe);pending_status_=status;
             operation_=action.name;approved_=false;ImGui::OpenPopup("确认插件操作");

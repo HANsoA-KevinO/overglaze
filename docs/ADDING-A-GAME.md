@@ -30,7 +30,7 @@ You also need the model in place (see [MODEL.md](MODEL.md)).
    | Route | `sl-rr`, `sl-sr` or NGX direct; Ray Reconstruction is preferred over Super Resolution |
 
    Another DLSS 5 / NR add-on blocks the install, because two NR passes would stack. So does a `dxgi.dll` that isn't Overglaze's beside the EXE when the package loads Overglaze through the proxy DLL, because Overglaze would have to put its own file there and never overwrites one. Other injectors, Denuvo and anti-cheat findings don't block: they are shown as risks, with what was found, on the game's page and again in the install confirmation, and the transaction records them. Another injector may still conflict with Overglaze; if the game crashes or NR doesn't work, remove it and try again. Unknown results don't block either, but they mean Overglaze couldn't check that item, so you have to know the answer yourself.
-3. **Generate the adapter package.** The package pins the game version (the EXE hash, or the package identity for Xbox app games) and the hashes of its NVIDIA modules, and bundles the current in-game files. The loading method is shown before you generate it: the proxy DLL, or late loading for a game whose EXE carries Denuvo.
+3. **Generate the adapter package.** The package pins the game version (the EXE hash, or the package identity for Xbox app games) and the hashes of its NVIDIA modules, and bundles the current in-game files. The loading method is shown before you generate it: the proxy DLL, or conservative late loading when anti-tamper is detected and no measured loading recipe applies. PBZ's exact validated executable/module set uses the normal proxy to observe NGX creation; other builds keep their prior choice.
 4. **Install.** Close the game first. The confirmation lists what the check found and the risks of online and protected games; choosing *Install* there is your acknowledgement. Overglaze then:
    - stages and checks the files;
    - writes them, the proxy DLL last;
@@ -71,7 +71,7 @@ Useful `make-package` options:
 
 | Option | When to use it |
 |---|---|
-| `--late` | The game refuses a proxy DLL in its folder: it crashes at start with only Overglaze's `dxgi.dll` present. Overglaze then loads after the game starts. The Games page uses this for every game whose EXE carries Denuvo. |
+| `--late` | The game refuses a proxy DLL in its folder: it crashes at start with only Overglaze's `dxgi.dll` present. Overglaze then loads after the game starts. The Games page uses this as its conservative default when anti-tamper is detected and no validated loading recipe applies; the tested PBZ build uses the normal proxy. |
 | `--root-proxy-on-insert` | The proxy DLL only forwards until the first press of the panel hotkey (Insert by default), and then loads Overglaze. |
 | `--binding-preservation` | The game crashes in the graphics driver right after NR first runs. This usually means the game keeps recording commands after the upscaler without setting its state again. With this option, Overglaze restores the game's bindings after inserting NR. |
 | `--exposure <stops>` | Default input exposure for the panel. Automatic metering usually makes this unnecessary. |
@@ -80,7 +80,7 @@ On the Streamline route, the viewport and depth type are read from the game's ow
 
 ## Late-load games
 
-1. On the Games page, a game whose EXE carries Denuvo gets a late-loading package automatically. From the command line, generate the package with `--late`. Install it as usual. Only Overglaze's own subfolder is written; nothing goes into the game folder's root.
+1. On the Games page, a game with detected anti-tamper gets a late-loading package by default, except for an exact build with a validated normal-loading recipe (currently PBZ). From the command line, generate the package with `--late`. Install it as usual. Only Overglaze's own subfolder is written; nothing goes into the game folder's root.
 2. Load Overglaze into the running game in one of these ways. After the install, the Games page shows the exact text to use, with a copy button, and keeps it in the game's details:
    - **Steam:** set the launch option (Library → right-click the game → Properties → General → Launch Options)
 

@@ -304,11 +304,13 @@ struct PackageOptions {
     // controller arrives after the game has started (Steam launch option or watch).
     static PackageOptions controller_late(){
         PackageOptions o;o.loader.strategy="late_d3d12";o.loader.basename="overglaze_controller.dll";o.loader.subdir="overglaze";return o;}
-    // What the viewer makes for one game: the root proxy, except for a game
-    // whose EXE carries Denuvo, which loads late. RE9 crashes at start with ANY
-    // dxgi.dll in its root, even a pure forwarder, so the viewer never gives
-    // such a game one. The command line still chooses freely.
+    // Conservative default for games without a measured loading recipe: late
+    // when preflight detects anti-tamper. RE9 refuses the root proxy, whereas
+    // the verified PBZ build accepts it. A DRM label alone is not a recipe.
+    // The command line can still choose a strategy explicitly.
     static PackageOptions for_viewer(bool denuvo){return denuvo?controller_late():controller_root_proxy();}
+    // A measured exact-build loading recipe may override that conservative default.
+    static PackageOptions for_viewer(const Preflight&);
 };
 // How the player starts a late-loading game, built from this program's own
 // root. Text to paste; nothing is written anywhere.

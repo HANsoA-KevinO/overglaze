@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 #include "lab_game_manager.hpp"
 #include "lab_package_binding_workarounds.hpp"
+#include "lab_package_loading.hpp"
 #include "lab_game_presentation.hpp"
 #include "lab_root_locator.hpp"
 #include "lab_windows_path.hpp"
@@ -43,6 +44,28 @@ void binding_workaround(){
     x=original;x.executable="CrashReport.exe";need(!lab::profiles::apply_package_binding_workaround(x),"A shared module directory does not migrate a helper EXE");
     x=original;x.native_evaluate_host_rebind=true;need(!lab::profiles::apply_package_binding_workaround(x),"An explicit host rebind contract is retained");
     x=original;x.route="ngx-sr";need(!lab::profiles::apply_package_binding_workaround(x),"Another route is not migrated");
+}
+void early_ngx_loading(){
+    lab::profiles::Facts f;f.executable="PBZ.exe";f.route="ngx-rr";
+    f.executable_sha256="7b4fcd286a350780faf0824d73aa150b21cbf1bccde883e6a96386cbe09973b4";
+    f.modules={{"nvngx_dlss.dll","3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983"},
+        {"nvngx_dlssd.dll","caa023181e613e114e0ee037ff022d73c25464f7a79cf720853759417ad3bf50"},
+        {"sl.interposer.dll","8c87c9499461da561edd529aa9bf7831d67d7b94ebb1c1a5ed54ef4934e1ea4c"}};
+    const auto choice=[&](const lab::profiles::Facts& x){lab::games::Preflight pre;pre.executable=x.executable;pre.executable_sha256=x.executable_sha256;pre.route=x.route;pre.denuvo_suspected=true;
+        for(const auto& [n,h]:x.modules)pre.modules[n]={{"sha256",h}};return lab::games::PackageOptions::for_viewer(pre);};
+    need(choice(f).loader.strategy=="root_proxy_d3d12","The verified PBZ build captures NGX creation through the ordinary proxy despite the DRM risk label");
+    const auto late=lab::games::PackageOptions::controller_late().loader;
+    need(lab::games::needs_early_ngx_loading(late,f),"An old late package receives a loading correction even with identical DLLs");
+    need(!lab::games::needs_early_ngx_loading(choice(f).loader,f),"The correction is idempotent");
+    for(const char* n:{"nvngx_dlss.dll","nvngx_dlssd.dll","sl.interposer.dll"}){
+        auto x=f;x.modules[n]=std::string(64,'a');need(choice(x).loader.late_host()&&!lab::games::needs_early_ngx_loading(late,x),"A changed graphics module never receives the PBZ loading correction");
+        x=f;x.modules.erase(n);need(choice(x).loader.late_host(),"Missing graphics-module evidence keeps conservative late loading");}
+    auto x=f;x.executable_sha256=std::string(64,'a');need(choice(x).loader.late_host(),"Another game build is not inferred from its name");
+    x=f;x.executable="8za_v2.exe";need(choice(x).loader.late_host(),"A helper sharing the module directory is not the game");
+    x=f;x.route="ngx-sr";need(choice(x).loader.late_host(),"An untested route keeps the previous loading choice");
+    lab::games::Preflight pre;pre.executable=f.executable;pre.executable_sha256=f.executable_sha256;pre.route=f.route;pre.denuvo_suspected=true;
+    for(const auto& [n,h]:f.modules)pre.modules[n]={{"sha256",h}};
+    pre.anticheat_markers={"start_protected_game.exe"};need(lab::games::PackageOptions::for_viewer(pre).loader.late_host(),"The tested offline layout does not authorize an anti-cheat layout");
 }
 void put16(std::string& d,size_t o,unsigned v){d[o]=char(v&255);d[o+1]=char((v>>8)&255);}
 void put32(std::string& d,size_t o,unsigned v){for(unsigned i=0;i<4;++i)d[o+i]=char((v>>(8*i))&255);}
@@ -170,7 +193,7 @@ int refresh_timing(unsigned games,std::uint64_t model_mib){
     std::cout<<json{{"games",games},{"model_bytes",model_mib<<20},{"refresh_ms",times},{"note","refresh = new Manager, inspect every game, model_status, storage_usage"}}.dump()<<'\n';return 0;}
 }
 int wmain(int argc,wchar_t** argv){fs::path root;try{
-    binding_workaround();
+    binding_workaround();early_ngx_loading();
     if(argc==2&&std::wstring(argv[1])==L"--model-backup")return model_backup_check();
     if(argc>=2&&argc<=4&&std::wstring(argv[1])==L"--refresh-timing")
         return refresh_timing(argc>2?unsigned(std::stoul(argv[2])):11u,argc>3?std::stoull(argv[3]):254ull);

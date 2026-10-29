@@ -3,6 +3,7 @@
 #include "lab_game_manager.hpp"
 #include "lab_launch_command.hpp"
 #include "lab_package_binding_workarounds.hpp"
+#include "lab_package_loading.hpp"
 #include "lab_game_presentation.hpp"
 #include "lab_module_search.hpp"
 #include "lab_package_identity.hpp"
@@ -761,6 +762,13 @@ Preflight preflight(const fs::path& input){
     else add("route",Outcome::pass,r.route);
     return r;}
 // ---------------------------------------------------------------- manager
+PackageOptions PackageOptions::for_viewer(const Preflight& pre){
+    profiles::Facts facts;facts.executable=pre.executable;facts.executable_sha256=pre.executable_sha256;facts.route=pre.route;
+    for(const auto& [name,module]:pre.modules.items())
+        if(module.is_object()&&module.contains("sha256")&&module.at("sha256").is_string())facts.modules[name]=module.at("sha256").get<std::string>();
+    if(pre.anticheat.empty()&&pre.anticheat_markers.empty()&&verified_early_ngx(facts))return controller_root_proxy();
+    return for_viewer(pre.denuvo_suspected);
+}
 Manager::Manager(fs::path root,std::optional<std::vector<Policy>> policies,std::string model_sha256,bool run_checker):root_(local(root)),store_(root_/L"data"/L"settings"/L"plugin-manager"),model_sha256_(std::move(model_sha256)),run_checker_(run_checker){
     directory(root_/L"data");directory(root_/L"data"/L"settings");directory(store_);
     policies_=policies?std::move(*policies):load_packages(root_,&package_notes_);}
@@ -824,6 +832,8 @@ std::vector<std::string> behind_published(const Policy& p,const std::map<std::st
     // so a newer published proxy is an update too.
     const auto proxy=p.loader.proxy_basename();
     if(!proxy.empty()&&p.payload.contains(proxy)&&published.contains(proxy)&&p.payload.at(proxy)!=published.at(proxy))parts.push_back("proxy");
+    // A verified loading correction is an update even when the DLL bytes match.
+    if(p.track=="controller"&&p.anticheat.empty()&&needs_early_ngx_loading(p.loader,p.facts))parts.push_back("config");
     return parts;}
 bool conflict_code(const std::string& c){return c=="loader-conflict"||c=="foreign-loader"||c=="model-mismatch"||c=="package-payload-mismatch"||c=="package-config-mismatch"||c=="published-host-missing"||
     c=="model-missing"||c=="model-unknown-version";}
@@ -840,6 +850,10 @@ Reason Manager::refresh_refusal(const Policy& p,const Preflight& pre)const{
     if(!admitting_verdict(pre.verdict))return {"update-refresh-refused",{{"verdict",pre.verdict}}};
     if(pre.executable_sha256!=p.pins.at(p.executable))return {"update-refresh-refused",{{"verdict","identity"}}};
     for(const auto& [n,pin]:p.facts.modules)if(!pre.modules.contains(n)||pre.modules.at(n).value("sha256","")!=pin)return {"update-refresh-refused",{{"verdict","module "+n}}};
+    // The late-to-proxy correction will write dxgi.dll. Refuse another tool's
+    // file BEFORE uninstalling the working late installation, not at install.
+    if(p.track=="controller"&&p.anticheat.empty()&&needs_early_ngx_loading(p.loader,p.facts)&&fs::exists(p.game_root/L"dxgi.dll"))
+        return {"loader-conflict",{{"files",json::array({"dxgi.dll"})},{"cause","overwrite"}}};
     return {};}
 Reason Manager::repin_refusal(const Policy& p,const fs::path& exe,bool allow_unsigned,Preflight* pre)const{
     // Only the controller track is re-adapted here; a research package needs the
@@ -1312,9 +1326,15 @@ Policy Manager::refresh_package(const std::string& name,const std::string& strat
         throw Refusal(why.code,"游戏预检失败或 EXE 身份与适配包不同；刷新只更新 Lab 载荷",why.params);}
     auto facts=p->facts;json notes=json::array();std::string consent=p->consent;try{auto m=read(p->directory/L"package.json");if(m.contains("notes")&&m.at("notes").is_array())notes=m.at("notes");}catch(...){}
     const auto track=p->track;
+    if(strategy.empty()&&track=="controller"&&p->anticheat.empty()&&pre.anticheat.empty()&&pre.anticheat_markers.empty()&&needs_early_ngx_loading(loader,facts)){
+        loader=PackageOptions::controller_root_proxy().loader;
+        json current=json::array();
+        for(const auto& n:notes)if(!n.is_string()||n.get<std::string>().rfind("晚加载：",0)!=0)current.push_back(n);
+        notes=std::move(current);notes.push_back("已验证的本构建随游戏启动加载：记录实际 DLSS 创建信息，正常进场景后可直接开启 NR，无需切换 DLSS 档位；移除旧的釉光 Steam 启动项。NR 默认关闭。");
+    }
     const auto published=published_host(track);notes.push_back("refreshed "+now_utc()+" ("+track+" track) to published host "+published.at("dxgi.dll").substr(0,16)+"… / bridge "+published.at("overglaze_nvngx.dll").substr(0,16)+"…");
-    // Refreshing never changes how a game is loaded: the package keeps its own
-    // strategy, and only its payload is re-copied.
+    // Keep the existing strategy except for the exact-build correction above
+    // or a strategy the caller explicitly supplied. Identity gates stay intact.
     return write_package(exe,name,facts,p->title,pre,std::move(notes),true,consent,track,loader);}
 const std::vector<std::string>& operation_stages(std::string_view operation){
     if(operation=="install")return kInstallStages;if(operation=="uninstall")return kUninstallStages;

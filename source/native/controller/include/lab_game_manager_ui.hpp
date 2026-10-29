@@ -48,8 +48,7 @@ private:
     std::string pending_,pending_title_,pending_path_,operation_;
     void mark(const char*);
     void refresh(bool import_known=false);
-    // late_package: make-package for a game whose EXE carries Denuvo (late loading).
-    void act(const std::string& action,const std::string& id,bool late_package=false);
+    void act(const std::string& action,const std::string& id);
     void poll();
 };
 }
