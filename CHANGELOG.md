@@ -4,6 +4,10 @@ All notable changes to Overglaze are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- Game discovery and package checks now classify standalone 7-Zip/8-Zip tools (including numeric `_v` suffixes such as `8za_v2.exe`) and `CheckEnv.exe` as auxiliary programs. A split-platform Unreal layout can keep these tools in the project Binaries folder while the game runs elsewhere; their folder no longer makes them a preferred game candidate. Ordinary game names sharing a tool prefix remain eligible. Existing wrong-target installations retain identity-checked removal. This corrects target selection, not in-game panel rendering.
+
 ## [0.2.0-preview.12] - 2026-10-28
 
 ### Fixed

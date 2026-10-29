@@ -454,6 +454,18 @@ bool shipping_name(const fs::path& exe){return ends_with(lower_ascii(text(exe.fi
 // EXEs a game ships that are not the game: crash reporters, launch helpers and
 // anti-cheat launchers, installers and uninstallers (names lower-cased).
 bool helper_name(const std::string& name){
+    // Standalone archivers can live in the project's Binaries directory while
+    // the game itself lives under a platform folder. Match tool basenames,
+    // with an optional numeric _v suffix, rather than a game's "7z..." prefix.
+    if(name=="checkenv.exe")return true;
+    for(const auto* tool:{"7z","7za","7zr","7zg","7zfm","8za"}){
+        const std::string base=tool;if(name==base+".exe")return true;
+        const auto prefix=base+"_v";
+        if(name.rfind(prefix,0)==0&&ends_with(name,".exe")){
+            const auto version=name.substr(prefix.size(),name.size()-prefix.size()-4);
+            if(!version.empty()&&std::all_of(version.begin(),version.end(),[](char c){return c>='0'&&c<='9';}))return true;
+        }
+    }
     for(const auto* helper:{"crashreport","crashpad","crashhandler","cefsubprocess","redist","dxsetup","unins","uninstall","setup",
                             "launchhelper","start_protected_game","easyanticheat","eac_","battleye","beservice"})if(name.find(helper)!=std::string::npos)return true;
     return false;}

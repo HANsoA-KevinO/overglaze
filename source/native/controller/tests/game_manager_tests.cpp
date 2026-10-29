@@ -558,6 +558,33 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
           "the game's sections, not its adjacent helper's, decide the anti-tamper risk");
      need(lab::games::PackageOptions::for_viewer(correct.denuvo_suspected).loader.strategy=="late_d3d12","the viewer chooses late loading from the correct game's preflight");
      fs::remove_all(dir);}
+    // A split-platform layout: the project Binaries directory contains tools,
+    // while the real game and a small bootstrap have the same basename.
+    {const auto split=root/L"split-tools";const auto tools=split/L"Project/Binaries/Win64";
+     fs::create_directories(tools);fs::create_directories(split/L"platform/steam");fs::create_directories(split/L"steam");
+     fs::create_directories(split/L"Engine/Plugins/DLSS/Binaries/ThirdParty/Win64");
+     const auto game=split/L"platform/steam/Game.exe",boot=split/L"steam/Game.exe";
+     put(game,pe64({".text",".xcode",".rdata"},"split-platform game"));put(boot,pe64(standard,"bootstrap"));
+     put(split/L"Engine/Plugins/DLSS/Binaries/ThirdParty/Win64/nvngx_dlssd.dll","dlss");
+     const std::vector<fs::path> helpers{L"8za_v2.exe",L"8za.exe",L"7z.exe",L"7za.exe",L"7zr.exe",L"7zG.exe",L"7zFM.exe",L"7za_v25.exe",L"CheckEnv.exe",L"crashpad_handler.exe"};
+     for(const auto& name:helpers)put(tools/name,pe64(standard,"utility"));
+     const auto found=lab::games::discover(split);const auto& x=found.executables;
+     const auto at=[&](const fs::path& p){return std::size_t(std::find(x.begin(),x.end(),fs::canonical(p))-x.begin());};
+     need(found.complete&&x.size()==helpers.size()+2&&x.front()==fs::canonical(game),"split platform: project tools never preselect ahead of the game");
+     for(const auto& name:helpers){
+         need(at(tools/name)>at(game)&&at(tools/name)>at(boot),"standalone archive and environment tools rank after both game candidates");
+         need(lab::games::preflight(tools/name).verdict=="helper-executable","archive and environment tools cannot be adaptation targets");
+     }
+     const auto utility=m.add(tools/L"8za_v2.exe");const auto status=st(m,utility);
+     need(status.state=="helper-executable"&&!status.can_make_package&&!status.can_install,"registered versioned archiver is explicitly unsupported");
+     auto options=lab::games::PackageOptions::for_viewer(false);options.name="archive-refused";options.allow_unsigned_modules=true;
+     reject([&]{m.make_package(utility.id,options);},"versioned archiver refuses package creation");
+     need(!fs::exists(root/L"app/adapters/archive-refused"),"refused archiver leaves no package");m.forget(utility.id);
+     for(const auto* name:{L"7zGame.exe",L"8za_v2Game.exe",L"CheckEnvironmentGame.exe"}){
+         put(split/L"platform/steam"/name,pe64(standard,"game-like name"));
+         need(lab::games::preflight(split/L"platform/steam"/name).verdict!="helper-executable","a game merely sharing a tool prefix is not refused");
+     }
+     fs::remove_all(split);}
     reject([&]{lab::games::discover(root/L"game2/../game");},"noncanonical input rejected");reject([&]{lab::games::discover(root.root_path());},"whole drive rejected");
     m.forget(plain.id);need(m.list().size()==4&&fs::exists(root/L"game5/Plain.exe"),"forget registry only");
     // ---- hardlinks can alias a protected file even without a reparse point
