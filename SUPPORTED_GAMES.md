@@ -28,7 +28,7 @@ When a game offers both, Overglaze inserts NR after Ray Reconstruction; otherwis
 
 ## Experimental
 
-Each of these has a recipe (or a known DLSS path), but nobody has confirmed NR with this release in the game yet. Reports are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Each of these has a recipe or a known DLSS path. Validation is incomplete; any partial real-game results are stated explicitly below. Reports are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 | Game | DLSS path | Loading | Notes |
 |---|---|---|---|
@@ -38,7 +38,7 @@ Each of these has a recipe (or a known DLSS path), but nobody has confirmed NR w
 | Clair Obscur: Expedition 33 | NGX direct · Ray Reconstruction | Proxy DLL | Xbox app version. Recipe only, never launched. |
 | Indiana Jones and the Great Circle | Streamline · Ray Reconstruction | Proxy DLL | Xbox app version. Recipe only, never launched. |
 | LEGO Batman: Legacy of the Dark Knight | NGX direct · Ray Reconstruction | Late load | Carries Denuvo Anti-Tamper: passive coexistence; the Game Library loads it late and the install confirmation names the risk. Late load on NGX direct misses the game's start-up DLSS creation: switch the DLSS mode once after loading. Never launched. |
-| Onimusha: Way of the Sword | Streamline · Ray Reconstruction | Late load | Carries Denuvo Anti-Tamper: passive coexistence; the install confirmation names the risk. Never launched. |
+| Onimusha: Way of the Sword | Streamline · Ray Reconstruction | Late load | Partial Preview 12 validation: current-scene FG-on / NR-off panel stability confirmed (370 Presents/draws/GPU completions, no skips/errors). Separate FG-off NR execution and binding restoration passed; tester reported normal switch effects. Image quality, performance, long-duration stability and combined NR+FG remain unvalidated. Exact affected-build binding preservation; Denuvo passive coexistence. |
 | PRAGMATA | Streamline · Ray Reconstruction | Late load | Carries Denuvo Anti-Tamper: passive coexistence; the install confirmation names the risk. Never launched. |
 
 ## Not supported
@@ -52,7 +52,7 @@ Overglaze is best suited to offline single-player games. Online games and games 
 
 ## Frame generation
 
-NR runs on rendered frames only, after the upscaler and before frame generation. Running NR together with DLSS Frame Generation has not been checked systematically. If NR stops or the panel disappears after you turn frame generation on, please report it.
+Overglaze inserts NR at the game's rendered-frame upscaler return. Running NR together with DLSS Frame Generation has not been checked systematically. Preview 12 changes the shared DX12 late-panel submission path; Onimusha's current-scene panel passed with FG on and NR off. That panel result does not validate NR+FG image quality or certify other games. If NR stops or the panel disappears after you turn frame generation on, please report it.
 
 ## Your game isn't listed?
 

@@ -6,11 +6,13 @@ Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Ren
 
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
-## 0.2.0-preview.11
+## 0.2.0-preview.12
 
-Fixes for the most common "installed but nothing happens" reports. The data disk no longer needs 30 GiB free (a game launch needs 256 MiB, an install 1 GiB), which stopped the plugin on fuller drives, including the default location on C:. Cyberpunk 2077, Resident Evil Requiem and Alan Wake 2 install and re-adapt again on every build, including 2077 after its 2026-10-23 update. A launcher in the game folder no longer shows a startup error. The panel takes clicks and its hotkey in games that send their window no input messages, comes back after a failed draw on the next press, and explains a failed NR start in plain words with NVIDIA's result code. A game without DLSS where Overglaze looks now says whether DLSS files exist elsewhere in its folder.
+Fixes the shared DX12 late-loaded panel path for missing or intermittent panel draws, including FG-related flicker. The panel now follows the game's actual back-buffer submission on the same queue. This applies to games using that path, without an Onimusha-name exception. The background is opaque, focus changes retain the open panel while releasing input, and the Game Library ranks the real game ahead of auxiliary EXEs and refuses wrong-target installations.
 
-After updating the application, choose *Update plugin* for each installed game: the in-game host and the NR bridge changed. For a game shown as *游戏已更新 · 需适配* (2077 after its update), choose *重新适配*. The model is still supplied by you. This preview does not add game certifications or new image-quality, performance or stability results. See [CHANGELOG.md](CHANGELOG.md).
+Onimusha's current tested scene passed with FG on and NR verified off: 370 successful Presents, 370 panel draws and 370 GPU completions, no skips or errors, plus tester-confirmed visible stability. Its affected package now preserves native bindings, and Streamline proxy checkpoints use the native command list. A separate FG-off NR check completed and restored 13,477 evaluations; the tester later reported normal switch effects. Other games, long-duration stability and combined NR+FG remain unvalidated.
+
+**Close the game and choose Update plugin in the Game Library after updating the application, then start a fresh game process.** Earlier features carry forward. See [CHANGELOG.md](CHANGELOG.md) and the [complete Chinese announcement](https://github.com/HANsoA-KevinO/overglaze/blob/v0.2.0-preview.12/docs/releases/v0.2.0-preview.12.zh-CN.md).
 
 ## What it does
 
