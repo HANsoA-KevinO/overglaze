@@ -312,7 +312,8 @@ struct PackageOptions {
 };
 // How the player starts a late-loading game, built from this program's own
 // root. Text to paste; nothing is written anywhere.
-std::string steam_launch_option(const std::filesystem::path& lab_root); // "<root>\app\overglaze_launch.exe" %command%
+// A game id selects its installed real EXE independently of Steam's bootstrap.
+std::string steam_launch_option(const std::filesystem::path& lab_root,const std::string& game_id={});
 std::string watch_command(const std::filesystem::path& lab_root);       // "<root>\app\overglaze_games.exe" watch
 // Progress of a write operation. Stage names are the
 // transaction's real steps, listed by operation_stages(); a nested operation

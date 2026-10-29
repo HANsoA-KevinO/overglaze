@@ -31,6 +31,24 @@ int wmain(){
         need(program_of(L"").empty(),"empty command, no program");
         // An unterminated quote in our own name consumes the line rather than guessing.
         need(rest_of_command_line(L"\"C:\\l.exe game.exe").empty(),"unterminated quote in our own name");
+        // A split-platform bootstrap is forwarded unchanged while the selected
+        // registered id, not either process's basename, chooses the target.
+        const std::wstring id=L"{01234567-89AB-CDEF-0123-456789ABCDEF}";
+        const std::wstring wrapper=LR"("D:\Game Root\steam\Game.exe" -dx12 --opt="a b" --game-id "game argument")";
+        const auto selected=lab::launch::steam_command(L"--game-id \""+id+L"\" -- "+wrapper);
+        need(selected.explicit_target&&selected.game_id==id&&selected.error.empty()&&selected.command==wrapper,"selector removed, original Steam command preserved verbatim");
+        need(lab::launch::target_matches(selected,id,LR"(D:\Game Root\platform\steam\Game.exe)"),"a selected real EXE may differ from Steam's bootstrap");
+        need(!lab::launch::target_matches(selected,L"{11234567-89AB-CDEF-0123-456789ABCDEF}",LR"(D:\Game Root\steam\Game.exe)"),"same basename and even exact bootstrap path cannot replace a different selected game id");
+        auto legacy=lab::launch::steam_command(wrapper);
+        need(!legacy.explicit_target&&legacy.command==wrapper&&lab::launch::target_matches(legacy,id,LR"(d:\game root\STEAM\Game.exe)"),"legacy direct-path command remains supported");
+        need(!lab::launch::target_matches(legacy,id,LR"(D:\Other\Game.exe)"),"legacy lookup is a complete path, not a basename");
+        const auto invalid=lab::launch::steam_command(L"--game-id bad -- "+wrapper);
+        need(invalid.explicit_target&&!invalid.error.empty()&&invalid.command==wrapper&&!lab::launch::target_matches(invalid,id,LR"(D:\Game Root\steam\Game.exe)"),"invalid explicit selector retains game launch but never falls back to another target");
+        const auto no_separator=lab::launch::steam_command(L"--game-id "+id+L" "+wrapper);
+        need(no_separator.command.empty()&&!no_separator.error.empty(),"missing delimiter refuses to guess the Steam command");
+        const auto no_game=lab::launch::steam_command(L"--game-id "+id+L" --");
+        need(no_game.command.empty()&&!no_game.error.empty(),"missing game command is explicit");
+        need(lab::launch::valid_game_id(id)&&!lab::launch::valid_game_id(L"{01234567-89AB-CDEF-0123-456789ABCDEG}")&&!lab::launch::valid_game_id(L"01234567-89AB-CDEF-0123-456789ABCDEF"),"selector is a complete GUID, not arbitrary text or a path");
         // The panel-request event is per PID and session-local.
         need(lab::launch::open_panel_event_name(1234)==L"Local\\Overglaze-OpenPanelOnAttach-1234","event name");
         need(lab::launch::open_panel_event_name(1)!=lab::launch::open_panel_event_name(2),"distinct per process");

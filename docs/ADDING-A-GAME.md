@@ -85,12 +85,14 @@ On the Streamline route, the viewport and depth type are read from the game's ow
    - **Steam:** set the launch option (Library → right-click the game → Properties → General → Launch Options)
 
      ```
-     "<Overglaze root>\app\overglaze_launch.exe" %command%
+     "<Overglaze root>\app\overglaze_launch.exe" --game-id "{game-id}" -- %command%
      ```
+
+     Copy the exact per-game value from the Game Library; the id binds the installed real EXE while Steam's own command is passed through unchanged. Older direct-EXE options without a selector still work.
 
      The launcher starts the game unchanged. The first time you press the panel hotkey (Insert by default) with the game in front, Overglaze loads and the panel opens. For a game without a late-load package, the launcher just starts it.
    - **Other launchers:** `overglaze_games watch` waits for late-load games to start and loads Overglaze into each one once. Or, with the game running, use `overglaze_games attach <id> --pid <PID>`.
-3. The panel appears after Overglaze has seen which queue presents the game's frames, which takes about 60 frames. Until then the panel stays hidden.
+3. The panel opens once the host has bound to the game's live rendering path. With NGX late loading, NR preparation may separately need one DLSS quality-setting change because the game's feature was created before attachment; read the reported reason. Panel visibility and NR readiness are separate checks.
 
 ## When the game updates
 

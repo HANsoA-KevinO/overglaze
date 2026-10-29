@@ -194,7 +194,7 @@ int main(){
             {const auto tx=read(lab_root/L"data/settings/plugin-manager"/lab::wide(denuvo_id)/L"transaction.json");
              need(tx["risk_acknowledged"]==true&&tx["risks"]==lab::json::array({"anti-tamper"}),"the transaction records the acknowledgement");}
             // The launch card: the exact Steam launch option, from this Lab's own root.
-            frame(page);frame(page);const auto option="\""+lab::utf8((fs::canonical(lab_root)/L"app"/L"overglaze_launch.exe").wstring())+"\" %command%";
+            frame(page);frame(page);const auto option="\""+lab::utf8((fs::canonical(lab_root)/L"app"/L"overglaze_launch.exe").wstring())+"\" --game-id \""+denuvo_id+"\" -- %command%";
             visible(page,"games.launch-copy");
             need(lab::GameManagerPageTestAccess::launch(page).via=="steam"&&lab::GameManagerPageTestAccess::launch(page).command==option,"the launch option is built from the real root: "+lab::GameManagerPageTestAccess::launch(page).command);
             clipboard.clear();click(page,"games.launch-copy");need(clipboard==option,"复制 puts the exact option on the clipboard");

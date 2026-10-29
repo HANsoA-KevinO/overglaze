@@ -63,10 +63,10 @@ Overglaze verifies only the original model: it checks the file's SHA-256 against
 
 Some games refuse a proxy DLL in their folder. For those, Overglaze loads into the game after it has started, and nothing is placed in the game folder's root. The Game Library uses late loading for every game whose EXE carries Denuvo Anti-Tamper; other games can be switched to it from the command line (see [docs/ADDING-A-GAME.md](docs/ADDING-A-GAME.md)).
 
-After such an install, the Game Library shows the exact Steam launch option to paste, with a copy button; it stays in the game's details. It has this form:
+After such an install, the Game Library shows the exact Steam launch option to paste, with a copy button; it stays in the game's details. Copy the complete per-game option: its registered game id selects the real EXE even when Steam starts a separate bootstrap. It has this form:
 
 ```
-"<Overglaze folder>\app\overglaze_launch.exe" %command%
+"<Overglaze folder>\app\overglaze_launch.exe" --game-id "{game-id}" -- %command%
 ```
 
 Set it in Steam under Library → right-click the game → Properties → General → Launch Options. The game starts as usual; the first time you press the panel hotkey (Insert by default) in the game, Overglaze loads and opens the panel. For games not started from Steam, the Game Library shows the `overglaze_games watch` command instead.

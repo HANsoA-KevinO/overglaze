@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 HANsoA-KevinO
 // SPDX-License-Identifier: MIT
 #include "lab_game_manager.hpp"
+#include "lab_launch_command.hpp"
 #include "lab_package_binding_workarounds.hpp"
 #include "lab_game_presentation.hpp"
 #include "lab_module_search.hpp"
@@ -236,11 +237,11 @@ void gate(Status& s,const char* name,bool ok,const char* code,const std::string&
 // message and the "how to use" text follow the load mode). A root-layout
 // install (the original layout) has no subdirectory. A late-loading Steam game
 // is started through the launch option; any other store through watch.
-Reason launch_reason(const std::string& strategy,const std::string& subdir,const fs::path& root,const std::string& store){
+Reason launch_reason(const std::string& strategy,const std::string& subdir,const fs::path& root,const std::string& store,const std::string& game_id){
     if(subdir.empty())return {"launch-root-layout"};
     if(strategy=="root_proxy_on_insert")return {"launch-root-proxy-on-insert",{{"subdir",subdir}}};
     if(proxied(strategy))return {"launch-root-proxy",{{"subdir",subdir}}};
-    if(store=="steam")return {"launch-late",{{"subdir",subdir},{"option",steam_launch_option(root)}}};
+    if(store=="steam")return {"launch-late",{{"subdir",subdir},{"option",steam_launch_option(root,game_id)}}};
     return {"launch-late-watch",{{"subdir",subdir},{"command",watch_command(root)}}};}
 
 // ---------------------------------------------------------------- progress
@@ -633,7 +634,11 @@ json Preflight::to_json()const{json c=json::array();for(const auto& x:checks)c.p
     {"scope","read-only: nothing executed, loaded or written; module presence is navigation, not compatibility; absence of markers proves nothing; a check that could not run is ok:null, never ok:true"}};}
 std::vector<std::string> Preflight::risks()const{return risk_list(denuvo_suspected,!anticheat_markers.empty(),!other_loaders.empty());}
 std::string store_kind(const fs::path& dir,bool has_package_identity){return has_package_identity?std::string("gdk"):store_of(dir);}
-std::string steam_launch_option(const fs::path& root){return "\""+text((root/L"app"/L"overglaze_launch.exe").lexically_normal())+"\" %command%";}
+std::string steam_launch_option(const fs::path& root,const std::string& game_id){
+    auto option="\""+text((root/L"app"/L"overglaze_launch.exe").lexically_normal())+"\"";
+    if(!game_id.empty()){need(lab::launch::valid_game_id(wide(game_id)),"Invalid game id in Steam launch option");option+=" --game-id \""+game_id+"\" --";}
+    return option+" %command%";}
+
 std::string watch_command(const fs::path& root){return "\""+text((root/L"app"/L"overglaze_games.exe").lexically_normal())+"\" watch";}
 Preflight preflight(const fs::path& input){
     Preflight r;const auto exe=local(input);need(fs::is_regular_file(exe)&&winpath::same_spelling(exe.extension(),L".exe"),"请选择实际游戏 EXE");const auto dir=exe.parent_path();
@@ -797,7 +802,7 @@ Status Manager::inspect(const Entry& e)const{auto s=inspect_impl(e,true);
     // The risks, named as facts after whatever the state says: never a refusal.
     for(const auto& r:s.risks)s.reasons.push_back(r=="anti-tamper"?Reason{"risk-anti-tamper"}:r=="other-loaders"?Reason{"risk-other-loaders",{{"names",s.other_loaders}}}:Reason{"risk-anticheat",{{"names",s.anticheat}}});
     // How a late-loading game is started, built from this program's own root.
-    if(s.load_mode=="late_d3d12"){s.launch_via=s.store=="steam"?"steam":"watch";s.launch_command=s.launch_via=="steam"?steam_launch_option(root_):watch_command(root_);}
+    if(s.load_mode=="late_d3d12"){s.launch_via=s.store=="steam"?"steam":"watch";s.launch_command=s.launch_via=="steam"?steam_launch_option(root_,e.id):watch_command(root_);}
     return s;}
 namespace {
 // Lab-owned files of this package already in its game (by name only; the
@@ -958,7 +963,7 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         else s.reasons.push_back({"installed"});
         if(!newer.empty())s.reasons.push_back({"package-behind-published",{{"published",p->track=="controller"?"app/plugin":"app/research/host"}}});
         if(model_changed&&s.reasons.front().code!="model-update-available")s.reasons.push_back(model_reason);
-        s.reasons.push_back(launch_reason(strategy,sub,root_,s.store));
+        s.reasons.push_back(launch_reason(strategy,sub,root_,s.store,e.id));
         // An update that has to refresh the package re-runs the refresh gates
         // first; say now whether they would pass, rather than after an uninstall.
         // Another NR add-on placed beside an installed game, named first: the
@@ -1101,7 +1106,7 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         record(s,"published",Outcome::pass);}
     s.state="available";s.can_install=!s.running;
     s.reasons.push_back({"package-ready",{{"package",p->title},{"route",p->route}}});
-    s.reasons.push_back(launch_reason(p->loader.strategy,text(p->loader.subdir),root_,s.store));
+    s.reasons.push_back(launch_reason(p->loader.strategy,text(p->loader.subdir),root_,s.store,e.id));
 }catch(const Refusal& r){s.state="blocked";s.reasons.clear();s.reasons.push_back({r.code,r.params});
     s.can_install=s.can_uninstall=s.can_make_package=s.can_update=s.can_repin=false;s.health=s.installed?"unknown":"not-applicable";
     s.install_state=r.code=="installed-files-modified"?"modified":r.code=="installed-by-other-copy"?"other-copy":!s.installed&&conflict_code(r.code)?"not-installed":"unknown";}
@@ -1680,7 +1685,7 @@ json Manager::plan_install(const std::string& id)const{
     std::error_code ge,de;const auto game_space=fs::space(dir,ge);const auto data_space=fs::space(root_/L"data",de);
     json created=json::array();if(!p->loader.subdir.empty()){std::error_code ec;if(!fs::exists(lab_dir,ec))created.push_back(text(lab_dir));}
     out["package"]=p->name;out["load_mode"]=p->loader.strategy;out["track"]=p->track;
-    out["launch"]=reason_json(launch_reason(p->loader.strategy,text(p->loader.subdir),root_,store_kind(dir,is_package_token(p->pins.at(p->executable)))));
+    out["launch"]=reason_json(launch_reason(p->loader.strategy,text(p->loader.subdir),root_,store_kind(dir,is_package_token(p->pins.at(p->executable))),id));
     out["files"]=files;out["conflicts"]=conflict;out["directories_created"]=created;
     out["records"]={{"transaction",text(box/L"transaction.json")},{"receipt",text(own_receipt_file(box))},{"staging",text(box/L"package-{GUID}")},
         {"legacy_receipt_read_only",text(legacy_receipt_file(root_,p->name))}};

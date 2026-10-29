@@ -752,11 +752,12 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      {auto s=st(m,dz);need(s.load_mode=="late_d3d12"&&s.store=="unknown"&&s.launch_via=="watch"&&s.launch_command=="\""+lab::utf8((root/L"app"/L"overglaze_games.exe").wstring())+"\" watch","not a Steam game: started through watch");}
      put(root/L"game10/steam_api64.dll","steam");
      m.install(dz.id,true,"fixture consent: Denuvo risk acknowledged");
-     {auto s=st(m,dz);const auto option="\""+lab::utf8((root/L"app"/L"overglaze_launch.exe").wstring())+"\" %command%";
+     {auto s=st(m,dz);const auto option="\""+lab::utf8((root/L"app"/L"overglaze_launch.exe").wstring())+"\" --game-id \""+dz.id+"\" -- %command%";
       need(s.installed&&s.store=="steam"&&s.launch_via=="steam"&&s.launch_command==option,"a Steam game: the launch option, built from this program's own root");
       bool reason=false;for(const auto& r:s.reasons)if(r.code=="launch-late"&&r.params["option"]==option)reason=true;need(reason,"the status says the same");
       need(!fs::exists(root/L"game10/dxgi.dll")&&fs::exists(root/L"game10/overglaze/overglaze_controller.dll"),"nothing in the game's root");
-      const auto j=lab::games::status_json(s);need(j["launch"]["via"]=="steam"&&j["launch"]["command"]==option&&j["risks"]==json::array({"anti-tamper"}),"and so does the status JSON");}
+      const auto j=lab::games::status_json(s);need(j["launch"]["via"]=="steam"&&j["launch"]["command"]==option&&j["risks"]==json::array({"anti-tamper"}),"and so does the status JSON");
+      need(m.plan_install(dz.id)["launch"]["params"]["option"]==option,"the install plan carries the same per-game selector as the UI and status");}
      m.uninstall(dz.id,true);m.forget(dz.id);}
     // ---- another build of a reviewed game: the row's game facts, an id of its own
     fs::create_directory(root/L"game-aw2");

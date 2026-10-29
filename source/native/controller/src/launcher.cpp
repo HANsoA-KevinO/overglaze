@@ -60,10 +60,10 @@ fs::path image_of(DWORD pid){
 // The same target resolution `overglaze_games watch` uses: a registered entry,
 // installed, whose package loads late. Gates come from the package, never from us.
 struct Target {std::string id,package;fs::path exe,loader;lab::games::AttachGates gates;};
-std::optional<Target> resolve(const fs::path& root,const fs::path& exe,std::string& why){
+std::optional<Target> resolve(const fs::path& root,const lab::launch::SteamCommand& request,std::string& why){
     lab::games::Manager m(root);
     for(const auto& e:m.list()){
-        if(!same_file(e.exe,exe))continue;
+        if(!lab::launch::target_matches(request,lab::wide(e.id),e.exe.wstring()))continue;
         const auto s=m.inspect(e);
         if(!s.installed){why="registered but not installed";return std::nullopt;}
         const lab::games::Policy* policy=nullptr;
@@ -78,9 +78,11 @@ std::optional<Target> resolve(const fs::path& root,const fs::path& exe,std::stri
         t.gates.expected_loader_sha256=policy->payload.at(policy->loader.basename);
         return t;
     }
-    why="not a registered game";return std::nullopt;
+    why=request.explicit_target?"selected game id is not registered":"not a registered game";return std::nullopt;
 }
-// Any live process of this game: the one we started, or one it handed over to.
+// Lifecycle only: the started process may be a bootstrap. The foreground
+// process at attachment is independently checked against the registered EXE.
+// After the bootstrap exits, keep waiting for the real game if it is running.
 DWORD game_process(const Target& t,HANDLE started){
     DWORD code=0;if(started&&GetExitCodeProcess(started,&code)&&code==STILL_ACTIVE)return GetProcessId(started);
     return lab::games::find_process(t.exe);
@@ -96,18 +98,19 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int){
     // The panel hotkey, shared with the desktop program and every game. No
     // root: the default, Insert.
     lab::hotkey::Settings hotkeys(data);
-    const auto command=lab::launch::rest_of_command_line(GetCommandLineW());
+    const auto request=lab::launch::steam_command(lab::launch::rest_of_command_line(GetCommandLineW()));
+    const auto& command=request.command;
     if(command.empty()){
-        std::wstring usage=lab::brand::kLauncherUsage;
+        std::wstring usage=L"请复制游戏库中这款游戏的 Steam 启动选项，其中包含已登记的游戏标识。它会照常转交 Steam 的原始启动命令；进游戏后第一次按面板快捷键 {hotkey} 时加载 釉光 · Overglaze 并打开面板（快捷键可在设置里修改）。";
         const auto key=lab::wide(hotkeys.current_name());
         for(auto at=usage.find(L"{hotkey}");at!=std::wstring::npos;at=usage.find(L"{hotkey}",at+key.size()))usage.replace(at,8,key);
         MessageBoxW(nullptr,usage.c_str(),lab::brand::kLauncherTitle,MB_OK|MB_ICONINFORMATION);
         return 2;
     }
-    const fs::path exe=lab::launch::program_of(command);
     log.line("command: "+lab::utf8(command));
     std::optional<Target> target;std::string why=root_refused;
-    if(!root.empty())try{target=resolve(root,exe,why);}catch(const std::exception& e){why=e.what();}
+    if(!request.error.empty())why=lab::utf8(request.error);
+    else if(!root.empty())try{target=resolve(root,request,why);}catch(const std::exception& e){why=e.what();}
     // The game starts whatever Lab thinks of it.
     STARTUPINFOW si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};
     std::wstring line=command;
