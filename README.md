@@ -6,13 +6,11 @@ Overglaze is an experimental, third-party tool that runs NVIDIA's NR (Neural Ren
 
 > Overglaze is not an NVIDIA product and is not affiliated with or endorsed by NVIDIA or any game developer or publisher. It does not include the NR model; you supply it yourself.
 
-## 0.2.0-preview.14
+## 0.2.0-preview.15
 
-Includes the real-game discovery, Steam bootstrap and exact-build PBZ start-up loading changes from withdrawn Preview 13. A transient submission-metadata lock miss before NR records any commands now bypasses that frame and resets history for the next one, keeping ON intent. Real submission faults still stop with their specific reason.
+Fixes NR stops caused by contention during Reset, Close, Execute and GPU completion publication. PBZ passed a bounded check through a cutscene, menus and loading. The Game Library now checks for model conflicts at the actual installation destination, correcting a Cyberpunk 2077 re-adaptation failure caused by an older model elsewhere in the game directory.
 
-PBZ's candidate passed one user menu/scene-transition check: 5,344 NR evaluations, 5,343 GPU completions and one in flight; no skips, history gaps or errors. No busy skip occurred in that game check, so it does not establish the unique cause of the old untyped failure. Image quality, performance and long-duration stability remain unvalidated.
-
-**After upgrading, close the affected game and choose Update plugin. PBZ's validated build then starts normally without its old Overglaze Steam option or a DLSS quality change; other late-loading games should copy their complete new per-game option.** Preview 12's panel and Onimusha fixes carry forward. See [CHANGELOG.md](CHANGELOG.md) and the [Chinese announcement](https://github.com/HANsoA-KevinO/overglaze/blob/v0.2.0-preview.14/docs/releases/v0.2.0-preview.14.zh-CN.md).
+**After upgrading, close the affected game and select Update plugin. If the previous attempt already removed it, select Install plugin.** See [CHANGELOG.md](CHANGELOG.md) and the [Chinese announcement](https://github.com/HANsoA-KevinO/overglaze/blob/v0.2.0-preview.15/docs/releases/v0.2.0-preview.15.zh-CN.md).
 
 ## What it does
 

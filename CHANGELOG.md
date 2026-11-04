@@ -4,6 +4,20 @@ All notable changes to Overglaze are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.2.0-preview.15] - 2026-11-04
+
+### Fixed
+
+- **NR submission and retirement.** A busy completion timeline after Execute now retains the pending Signal and its queue/ticket for retry, and a successful pre-submit Reset retains its discard proof until it can be published. Reset, Close and Execute entry/return serialize the short metadata sections so a competing reader cannot turn a mandatory observation into a terminal fault. Queue identity and lease checks still apply. Submitted work needs real GPU completion before retirement; a discarded recording has separate proof.
+- **Game Library model checks.** Install and re-adapt check for a model at the adapter's actual write destination. A stale model beside the executable no longer blocks Cyberpunk 2077 and other subdirectory installations. Updates continue to back up and replace verified managed files. A different model that would remain at the real write destination is detected before uninstall, and the conflict names the path.
+
+### Validation and upgrade
+
+- Native non-GPU and Python regression suites passed. The NR candidate passed 22 hardware-GPU tests and two real-model synthetic host variants. In a bounded PBZ game check covering a cutscene, menus and loading, NR reached 4,004 evaluations and 4,003 retirements with one in flight and no new skips or errors. Extended game stability remains to be evaluated.
+- The affected Cyberpunk 2077 Steam installation passed the new install dry run and subsequently loaded its reinstalled host. A separate report of repeated `metadata-invalid` in an already loaded 2077 session is still under investigation.
+- After upgrading, close the affected game and choose **Update plugin** for the new in-game host and NR bridge. If the previous operation already removed the plugin, choose **Install plugin**. Preview 14's verified PBZ start-up loading and earlier shared panel fixes carry forward.
+- [Chinese announcement](https://github.com/HANsoA-KevinO/overglaze/blob/v0.2.0-preview.15/docs/releases/v0.2.0-preview.15.zh-CN.md).
+
 ## [0.2.0-preview.14] - 2026-10-28
 
 ### Fixed

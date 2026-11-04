@@ -21,6 +21,7 @@ public:
     struct Ticket {unsigned slot=UINT32_MAX;std::uint64_t generation=0,value=0,frame=0;};
     struct Stats {unsigned reserved=0,recorded=0,submitted=0;std::uint64_t signals=0,retired=0,discarded=0;bool failed=false;};
 private:
+    friend struct CompletionTimelineTestAccess; // Fixture-only definition; no runtime hook.
     struct Entry {Ticket ticket;State state=State::invalid;};
     std::array<Entry,8> entries_{};
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue_;
@@ -106,6 +107,11 @@ public:
     State inspect(Ticket t) noexcept {
         std::unique_lock lock(mutex_,std::try_to_lock);if(!lock.owns_lock())return State::busy;
         auto* e=find(t);return e?state(*e):State::invalid;
+    }
+    // Serial owner operations that cannot drop an already recorded lease.
+    // Never call while holding the submission router mutex; no GPU wait here.
+    State inspect_owned(Ticket t) noexcept {
+        std::lock_guard lock(mutex_);auto* e=find(t);return e?state(*e):State::invalid;
     }
     bool retire(Ticket t) noexcept {
         std::unique_lock lock(mutex_,std::try_to_lock);if(!lock.owns_lock())return false;

@@ -439,6 +439,7 @@
   "runtime/tests/hdr_fixture_tests.cpp": {
    "track": "runtime"
   },
+  "runtime/tests/lab_live_submission_fixture.hpp": {"track": "runtime"},
   "runtime/tests/live_submission_tests.cpp": {
    "track": "runtime"
   },

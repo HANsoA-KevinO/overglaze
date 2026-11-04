@@ -396,6 +396,19 @@ struct Live {
     // submit that list only several frames later and must not be blocked.
     bool retire(bool wait){
         if(!retirement||retirement->ready())return true;
+        // A native Execute may have returned while the timeline was busy.
+        // Retry its retained Signal before inspecting completion. In
+        // particular, do not retire the timeline/router acknowledgement gap.
+        // Busy stays pending across calls; the short grace only avoids a
+        // needless bypass and is not a fatal retry budget.
+        const auto signal_grace=GetTickCount64();bool signal_ready=submission->poll_signal();
+        while(!signal_ready&&wait&&!submission->first_failure()&&GetTickCount64()-signal_grace<submission_grace_ms){
+            SwitchToThread();signal_ready=submission->poll_signal();
+        }
+        if(!signal_ready){
+            if(submission->first_failure())fail_retirement("Live completion signal failed",retirement->ticket(),timeline->inspect(retirement->ticket()));
+            return false;
+        }
         if(!retirement->poll()){
             if(discard_abandoned_recording())return true;
             using S=lab::CompletionTimeline::State;const auto ticket=retirement->ticket();auto seen=timeline->inspect(ticket);

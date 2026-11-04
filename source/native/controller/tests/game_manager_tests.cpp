@@ -655,6 +655,19 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
     {std::string said;try{m.install(g.id,true,"c");}catch(const std::exception& x){said=x.what();}need(said.find("dxgi.dll")!=std::string::npos,"install refused, naming the file");}
     need(fs::file_size(root/L"game7/dxgi.dll")==23&&!fs::exists(root/L"game7/overglaze"),"the foreign file is untouched, nothing written");
     fs::remove(root/L"game7/dxgi.dll");
+    // Only the actual model destination participates in the install check.
+    const auto root_model=root/L"game7/nvngx_dlssnr.dll";
+    const auto plugin_model=root/L"game7/overglaze/nvngx_dlssnr.dll";
+    put(root_model,"leftover root model");
+    const auto root_model_hash=lab::sha256(root_model);
+    {auto s=st(m,g);const auto plan=m.plan_install(g.id);
+     need(s.can_install&&plan["can_install"]==true&&plan["conflicts"]==false,"a model outside the payload directory cannot block installation");}
+    fs::create_directory(plugin_model.parent_path());
+    put(plugin_model,"different model at the actual destination");
+    {auto s=st(m,g);const auto plan=m.plan_install(g.id);
+     need(!s.can_install&&has_reason(s,"model-mismatch")&&plan["conflicts"]==true,"a different model at the actual destination blocks installation");}
+    fs::remove(plugin_model);
+    fs::remove(plugin_model.parent_path());
     // ---- another injector beside the EXE (a frame-generation mod's version.dll):
     // installable; the notice is in the status, the dialog and the transaction.
     put(root/L"game7/version.dll","a frame-generation mod");
@@ -756,6 +769,8 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
      bool note=false;for(const auto& n:man["notes"])if(n.get<std::string>().rfind("repinned ",0)==0)note=true;need(note,"the repin is recorded in the package notes");
      need(read(seven/L"overglaze.install.json")["exception_diagnostics"]==false,"a repinned package carries exception_diagnostics=false too");}
     {auto s=st(m,g);need(s.state=="installed"&&s.install_state=="installed"&&s.health=="ok"&&fs::exists(root/L"game7/dxgi.dll"),"repinned and installed");}
+    need(lab::sha256(root_model)==root_model_hash&&lab::sha256(plugin_model)==model_hash,
+         "repin installs the configured model in the payload directory and preserves the root file");
     reject([&]{m.repin(g.id,true,"c",true);},"nothing to repin when nothing changed");
     // ---- uninstall with progress, then forget
     ev.clear();m.uninstall(g.id,true,cb);need(started(ev,"uninstall","")==lab::games::operation_stages("uninstall"),"uninstall reports every stage in order");
@@ -978,6 +993,16 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
            "the primary reason names both models and points to 更新插件: "+words);
       need(lab::games::present(s).label=="label.update-available"&&check_named(s.checks,"local-model")&&check_named(s.checks,"local-model")->reason=="model-update-available","有更新, with a named check");
       need(st(off,g).install_state=="installed","while off, the unrecognized model in place offers no update to it");
+      // An identical pre-existing model can be reused without claiming it.
+      // Simulate that receipt so we can check that a later update refuses
+      // the collision before removing the working plugin.
+      const auto tx_path=store/lab::wide(g.id)/L"transaction.json";
+      const auto owned=read(tx_path);
+      auto reused=owned;reused["files"].erase("nvngx_dlssnr.dll");put(tx_path,reused.dump(2));
+      reject([&]{on.update(g.id,true,"fixture consent: pre-existing model");},"a reused model at the actual destination would conflict");
+      need(read(tx_path)==reused&&fs::is_regular_file(root/L"game12/dxgi.dll")&&
+           lab::sha256(root/L"game12/overglaze/nvngx_dlssnr.dll")==model_hash,"a model conflict leaves the previous plugin and transaction intact");
+      put(tx_path,owned.dump(2));
       on.update(g.id,true,"fixture consent: the program's model changed");
       need(st(on,g).install_state=="installed"&&lab::sha256(root/L"game12/overglaze/nvngx_dlssnr.dll")==other_hash&&read(root/L"game12/overglaze/overglaze.install.json")["model_sha256"]==other_hash,
            "after 更新插件 the game uses the new model, pinned");

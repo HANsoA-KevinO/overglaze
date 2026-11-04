@@ -34,9 +34,14 @@ target_link_libraries(lab_indirect_observer PUBLIC lab_runtime_includes lab_core
 add_executable(lab_binding_heap_state_tests tests/binding_heap_state_tests.cpp)
 target_link_libraries(lab_binding_heap_state_tests PRIVATE lab_native_resume)
 add_test(NAME native_binding_heap_state COMMAND lab_binding_heap_state_tests)
-add_executable(lab_live_submission_tests tests/live_submission_tests.cpp)
+# Test-only access to the actual router metadata mutex. Shipping targets keep
+# the normal object from lab_native_resume, without test callbacks or symbols.
+add_library(lab_live_submission_fixture OBJECT src/live_submission.cpp)
+target_compile_definitions(lab_live_submission_fixture PRIVATE LAB_LIVE_SUBMISSION_FIXTURE=1)
+target_link_libraries(lab_live_submission_fixture PRIVATE lab_native_resume)
+add_executable(lab_live_submission_tests tests/live_submission_tests.cpp $<TARGET_OBJECTS:lab_live_submission_fixture>)
 target_link_libraries(lab_live_submission_tests PRIVATE lab_native_resume d3d12 dxgi)
-foreach(case normal wrong-queue duplicate reset reuse cross-thread probe-discard nr-discard enrollment-contention)
+foreach(case normal wrong-queue duplicate reset reuse cross-thread probe-discard nr-discard enrollment-contention signal-contention signal-contention-reuse signal-contention-pollers signal-contention-invalidated metadata-reset metadata-close metadata-execute-entry metadata-execute-return metadata-stale-reset lifecycle-readers nr-discard-contention)
   add_test(NAME live_submission_${case} COMMAND lab_live_submission_tests ${case})
   set_tests_properties(live_submission_${case} PROPERTIES TIMEOUT 15 LABELS gpu)
 endforeach()

@@ -191,7 +191,7 @@ const std::vector<CodeText> kTable{
     {"foreign-bridge","游戏目录内 NR 桥版本未识别；不覆盖、不删除。"},
     {"existing-config-unsupported","游戏目录里的安装配置不是受支持的契约。"},
     {"existing-config-mismatch","游戏目录里的安装配置与适配包不一致。"},
-    {"model-mismatch","游戏目录里已有一份身份不同的 NR 模型；不覆盖。"},
+    {"model-mismatch","插件要写入的位置已有一份身份不同的 NR 模型（{path}），已保留原文件。"},
     {"package-payload-mismatch","适配包里的插件文件与它的清单不一致；不安装。"},
     {"model-missing","缺少 nvngx_dlssnr.dll：{path}。NVIDIA 模型需自行提供，本项目不包含、也不分发。"},
     {"model-unknown-version","nvngx_dlssnr.dll 没有经过釉光验证，不使用：{classification}（文件版本 {version}，SHA-256 {hash}）。"},

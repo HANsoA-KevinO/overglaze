@@ -837,6 +837,23 @@ std::vector<std::string> behind_published(const Policy& p,const std::map<std::st
     return parts;}
 bool conflict_code(const std::string& c){return c=="loader-conflict"||c=="foreign-loader"||c=="model-mismatch"||c=="package-payload-mismatch"||c=="package-config-mismatch"||c=="published-host-missing"||
     c=="model-missing"||c=="model-unknown-version";}
+Reason model_conflict(const fs::path& destination,const std::string& expected){
+    if(fs::exists(destination)&&within("file-unreadable",[&]{return cached_digest(destination);})!=expected)
+        return {"model-mismatch",{{"path",text(destination)}}};
+    return {};
+}
+// An update may replace the model its uninstall will remove by hash. A model
+// reused by the old install, or one in a different layout, will be left in place.
+Reason replacement_model_conflict(const fs::path& tx,const Entry& e,const Policy& p,const std::string& expected){
+    const auto dir=e.exe.parent_path();
+    const auto destination=lab_directory(dir,p)/wide(kModelName);
+    if(fs::exists(tx)){
+        const auto j=receipt(tx,e);
+        const auto previous=(dir/wide(j.value("loader_subdirectory",""))).lexically_normal()/wide(kModelName);
+        if(j.at("state")!="removed"&&j.at("files").contains(kModelName)&&winpath::same_spelling(previous,destination))return {};
+    }
+    return model_conflict(destination,expected);
+}
 // A present model that is not a reviewed version (and not allowed), with what
 // the file says about itself: the code table renders the classification, the
 // file version and the hash.
@@ -992,6 +1009,10 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         if(full&&s.update.package_behind_published&&!s.refusals.contains("update")){
             if(!current.usable())s.refusals["update"]=current.present?unknown_model(current):Reason{"model-missing",{{"path",text(current.path)}}};
             else if(!current.known&&p->track!="controller")s.refusals["update"]=unknown_model(current);}
+        if(full&&s.update_available&&!s.refusals.contains("update")){
+            const auto& model=s.update.package_behind_published?current.sha256:p->payload.at(kModelName);
+            if(const auto why=replacement_model_conflict(tx,e,*p,model);!why.code.empty())s.refusals["update"]=why;
+        }
         s.can_update=s.update_available&&!s.running&&!s.refusals.contains("update");
         return s;}}
     if(!p){const auto pre=games::preflight(exe);s.preflight=pre.to_json();s.route=pre.route;s.checks=pre.checks;s.store=pre.store;
@@ -1093,7 +1114,6 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
         record(s,"published",Outcome::fail,nullptr,"legacy-package");
         s.state="package-stale";s.can_refresh_package=true;s.reasons.push_back({"legacy-package"});
         return s;}
-    if(fs::exists(dir/L"nvngx_dlssnr.dll"))gate(s,"model",within("file-unreadable",[&]{return cached_digest(dir/L"nvngx_dlssnr.dll");})==p->payload.at("nvngx_dlssnr.dll"),"model-mismatch","已有 NR 模型身份不同，不覆盖");
     if(full){
         bool payload_ok=true;for(const auto& n:{p->loader.basename,std::string("overglaze_nvngx.dll")})if(within("file-unreadable",[&]{return cached_digest(p->directory/wide(n));})!=p->payload.at(n))payload_ok=false;
         gate(s,"package-payload",payload_ok,"package-payload-mismatch","适配包载荷与清单不一致");
@@ -1118,6 +1138,9 @@ Status Manager::inspect_impl(const Entry& e,bool full)const{Status s;s.entry=e;t
             if(!model_changed.code.empty())s.reasons.push_back(model_changed);
             return s;}
         record(s,"published",Outcome::pass);}
+    // Check where activation actually writes, including the loader subdirectory.
+    const auto model_why=model_conflict(lab_dir/wide(kModelName),p->payload.at(kModelName));
+    if(!model_why.code.empty())gate(s,"model",false,"model-mismatch",render(model_why),model_why.params);
     s.state="available";s.can_install=!s.running;
     s.reasons.push_back({"package-ready",{{"package",p->title},{"route",p->route}}});
     s.reasons.push_back(launch_reason(p->loader.strategy,text(p->loader.subdir),root_,s.store,e.id));
@@ -1594,8 +1617,9 @@ void Manager::update(const std::string& id,bool risk_accepted,const std::string&
         const auto e=find(id);const auto s=inspect(e);
         // A pre-existing helper package must be refused before the uninstall,
         // even when a caller invokes update directly instead of using the UI.
-        if(const auto refusal=s.refusals.find("update");refusal!=s.refusals.end()&&refusal->second.code=="helper-executable")
-            throw Refusal(refusal->second.code,render(refusal->second));
+        if(const auto refusal=s.refusals.find("update");refusal!=s.refusals.end()&&
+           (refusal->second.code=="helper-executable"||refusal->second.code=="model-mismatch"))
+            throw Refusal(refusal->second.code,render(refusal->second),refusal->second.params);
         need(s.state=="installed"&&s.update_available&&!s.running,"没有可用更新，或游戏正在运行／文件身份不符");
         // Another NR add-on would refuse the install step; refuse before the uninstall.
         if(const auto addons=nr_addons(e.exe.parent_path());!addons.empty())
@@ -1653,6 +1677,14 @@ fs::path Manager::repin(const std::string& id,bool risk_accepted,const std::stri
         steps.enter("preflight");
         Preflight pre;
         if(const auto why=repin_refusal(old,exe,allow_unsigned_modules,&pre);!why.code.empty())throw Refusal(why.code,render(why),why.params);
+        const auto model=model_status();
+        if(!model.usable()){
+            const auto why=model.present?unknown_model(model):Reason{"model-missing",{{"path",text(model.path)}}};
+            throw Refusal(why.code,render(why),why.params);
+        }
+        const auto tx=store_/wide(id)/L"transaction.json";
+        if(const auto why=replacement_model_conflict(tx,e,old,model.sha256);!why.code.empty())
+            throw Refusal(why.code,render(why),why.params);
         if(s.installed||s.can_uninstall){steps.enter("uninstall");uninstall_impl(id,true,progress,"repin");uninstalled=true;recovery=recovery_of(store_/wide(id)/L"transaction.json");}
         else steps.skip("uninstall");
         {Writer lock(store_);
