@@ -471,6 +471,16 @@ bool helper_name(const std::string& name){
     for(const auto* helper:{"crashreport","crashpad","crashhandler","cefsubprocess","redist","dxsetup","unins","uninstall","setup",
                             "launchhelper","start_protected_game","easyanticheat","eac_","battleye","beservice"})if(name.find(helper)!=std::string::npos)return true;
     return false;}
+// PBZ ships the Steam launcher and renderer under the same filename.
+// Resolve the renderer only for this paired layout and through the normal path checks.
+fs::path pbz_steam_game(const fs::path& exe){
+    const auto dir=exe.parent_path();
+    if(!winpath::same_spelling(exe.filename(),L"PBZ.exe")||!winpath::same_spelling(dir.filename(),L"steam"))return {};
+    const auto game=dir.parent_path()/L"platform"/L"steam"/L"PBZ.exe";
+    std::error_code ec;
+    if(!fs::is_regular_file(game,ec))return {};
+    try{return local(game);}catch(const std::exception&){return {};}
+}
 // An EXE in <Project>\Binaries\Win64 (or WinGDK) that is not inside the engine's
 // or a plugin's tree: no folder between the scanned root (the drive when there
 // is none) and it, the project's own included, is named Engine or Plugins. That
@@ -545,6 +555,11 @@ std::vector<fs::path> dlss_modules_elsewhere(const fs::path& exe_dir){
 }
 
 Discovery discover(const fs::path& input){Discovery out;const auto path=local(input);if(fs::is_regular_file(path)){need(winpath::same_spelling(path.extension(),L".exe"),"请选择游戏目录或 EXE");
+        if(const auto game=pbz_steam_game(path);!game.empty()){
+            out.executables.push_back(game);
+            out.notice="已找到《影之刃零》的游戏本体，路径为 platform\\steam\\PBZ.exe。";
+            return out;
+        }
         // An Unreal bootstrap at the game root: offer the game itself first, keep
         // the chosen EXE as the last choice.
         if(!holds_dlss(path.parent_path())){auto games=unreal_games(path.parent_path());if(!games.empty()){out.executables=std::move(games);out.executables.push_back(path);
@@ -563,7 +578,11 @@ Discovery discover(const fs::path& input){Discovery out;const auto path=local(in
     const auto start=GetTickCount64();unsigned count=0;std::error_code ec;for(fs::recursive_directory_iterator it(path,fs::directory_options::none,ec),end;it!=end;it.increment(ec)){if(ec){out.complete=false;break;}
         if(++count>8192||GetTickCount64()-start>15000||out.executables.size()>=128){out.complete=false;break;}const auto attr=GetFileAttributesW(it->path().c_str());if(attr==INVALID_FILE_ATTRIBUTES){out.complete=false;continue;}
         if(attr&FILE_ATTRIBUTE_REPARSE_POINT){it.disable_recursion_pending();out.complete=false;continue;}if((attr&FILE_ATTRIBUTE_DIRECTORY)&&data_folder(it->path())){it.disable_recursion_pending();continue;}if(it.depth()>=7&&it->is_directory()){it.disable_recursion_pending();out.complete=false;}
-        if(it->is_regular_file()&&winpath::same_spelling(it->path().extension(),L".exe"))out.executables.push_back(it->path());}if(ec)out.complete=false;
+        if(it->is_regular_file()&&winpath::same_spelling(it->path().extension(),L".exe")){
+            const auto game=pbz_steam_game(it->path());
+            if(game.empty())out.executables.push_back(it->path());
+            else if(winpath::same_spelling(path,it->path().parent_path()))out.executables.push_back(game);
+        }}if(ec)out.complete=false;
     // Ranked once per EXE (the rank reads the disk; a comparator must not), then
     // within a rank shipping builds first, then path order.
     {struct Ranked{int rank;bool shipping;fs::path exe;};std::vector<Ranked> ranked;ranked.reserve(out.executables.size());
@@ -720,7 +739,9 @@ Preflight preflight(const fs::path& input){
     // game too, but its identity and PE sections do not describe that game.
     // In particular, selecting it can miss the game's anti-tamper risk and the
     // viewer's corresponding late-load choice.
-    const bool helper=helper_name(lower_ascii(r.executable));
+    const auto pbz_game=pbz_steam_game(exe);
+    const bool helper=!pbz_game.empty()||helper_name(lower_ascii(r.executable));
+    if(!pbz_game.empty())r.notes.push_back("请选择《影之刃零》的游戏本体："+text(pbz_game));
     if(helper)r.notes.push_back("所选 EXE 是辅助程序（崩溃上报、安装、启动或反作弊启动器），不是游戏本体：不生成适配包");
     if(!r.executable_readable&&r.package_identity.is_null())r.verdict="unsupported-store";
     else if(helper)r.verdict="helper-executable";
@@ -778,7 +799,11 @@ const Policy* Manager::match(const fs::path& exe)const{const Policy* rooted=null
     for(const auto& p:policies_){if(!winpath::same_spelling(exe.filename(),wide(p.executable)))continue;
         if(!p.game_root.empty()){if(winpath::same_spelling(p.game_root,exe.parent_path())){need(!rooted,"多个适配包指向同一游戏目录");rooted=&p;}}else named.push_back(&p);}
     if(rooted)return rooted;if(named.size()==1)return named.front();need(named.empty(),"多个适配包命中同一 EXE 名而无目录绑定");return nullptr;}
-Entry Manager::add(const fs::path& exe){const auto path=local(exe);need(fs::is_regular_file(path)&&winpath::same_spelling(path.extension(),L".exe"),"请选择实际游戏 EXE");Writer lock(store_);auto j=registry(store_);for(auto& v:j["entries"]){auto e=entry(v);if(winpath::same_spelling(e.exe,path))return e;}need(j["entries"].size()<128,"游戏清单已达 128 项上限");
+Entry Manager::add(const fs::path& exe){
+    auto path=local(exe);
+    need(fs::is_regular_file(path)&&winpath::same_spelling(path.extension(),L".exe"),"请选择实际游戏 EXE");
+    if(const auto game=pbz_steam_game(path);!game.empty())path=game;
+    Writer lock(store_);auto j=registry(store_);for(auto& v:j["entries"]){auto e=entry(v);if(winpath::same_spelling(e.exe,path))return e;}need(j["entries"].size()<128,"游戏清单已达 128 项上限");
     const auto* p=match(path);Entry e{uuid(),p?p->title:text(path.stem()),path};j["entries"].push_back({{"id",e.id},{"title",e.title},{"exe",text(e.exe)}});save(store_/L"games.json",j);return e;}
 Preflight Manager::preflight(const Entry& e)const{return games::preflight(e.exe);}
 std::map<std::string,std::string> Manager::published_host(const std::string& track)const{std::map<std::string,std::string> out;
@@ -796,7 +821,7 @@ std::map<std::string,std::string> Manager::published_host(const std::string& tra
 Status Manager::inspect(const Entry& e)const{auto s=inspect_impl(e,true);
     // Old versions could package a helper. Keep the measured installation and
     // its identity-checked uninstall, but never offer to install or update it.
-    if(helper_name(lower_ascii(text(e.exe.filename())))){
+    if(!pbz_steam_game(e.exe).empty()||helper_name(lower_ascii(text(e.exe.filename())))){
         s.compatibility="unsupported";s.can_make_package=false;s.can_install=false;s.can_refresh_package=false;s.can_update=false;s.can_repin=false;
         for(const auto* action:{"make-package","install","refresh-package","update","repin"})s.refusals[action]={"helper-executable"};
         if(s.state=="installed"||s.state=="available"||s.state=="package-stale"||s.state=="changed")s.reasons.insert(s.reasons.begin(),Reason{"helper-executable"});}
@@ -1291,6 +1316,19 @@ Policy Manager::make_package(const std::string& id,const PackageOptions& opt){
     const auto* row=profiles::executable(text(exe.filename()),pre.executable_sha256);
     const auto* same_game=row?nullptr:reviewed_game(text(exe.filename()));
     std::string name=!opt.name.empty()?opt.name:row?package_from_settings(row->settings_file):derive_package_name(exe);
+    if(opt.name.empty()&&!row){
+        // Another installation can use the same EXE name. Its adapter may
+        // also outlive its library entry. Allocate under the writer lock,
+        // preserving every occupied directory and the exact reviewed names.
+        package_notes_.clear();
+        policies_=load_packages(root_,&package_notes_);
+        need(!match(exe),
+            "此游戏路径已有适配包（刷新载荷请用 refresh-package）");
+        const auto adapters=root_/L"app"/L"adapters";
+        const auto base=name;
+        for(unsigned suffix=2;fs::exists(fs::symlink_status(adapters/wide(name)));++suffix)
+            name=base+"-"+std::to_string(suffix);
+    }
     profiles::Facts facts;json notes=json::array();
     if(pre.verdict=="ngx-rr-ready"||pre.verdict=="ngx-sr-ready"){
         notes.push_back("NGX 直连准入：有光线重构时接 RR，没有时接 DLSS 超分；每次 Evaluate 返回后，"

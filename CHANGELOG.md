@@ -4,6 +4,13 @@ All notable changes to Overglaze are listed here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.2.0-preview.16] - 2026-11-15
+
+### Fixed
+
+- **Phantom Blade Zero (Steam).** Checking or adding `steam\PBZ.exe` now selects the rendering executable at `platform\steam\PBZ.exe`. Old launcher entries still support uninstalling their plugin and removing the entry. The launcher cannot be used for a new plugin installation.
+- **Adapter names.** For an automatically named adapter, an existing folder with the same name can belong to a different installation directory or remain after removal of a Library entry. New adapters now choose a free name and preserve those folders.
+
 ## [0.2.0-preview.15] - 2026-11-04
 
 ### Fixed

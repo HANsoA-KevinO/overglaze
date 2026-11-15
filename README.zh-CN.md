@@ -10,11 +10,11 @@
 
 > 釉光不是 NVIDIA 的产品，与 NVIDIA 及任何游戏开发商、发行商都没有关联，也未获其认可。本项目不附带 NR 模型，需要你自行准备。
 
-## 0.2.0-preview.15
+## 0.2.0-preview.16
 
-修复 Reset、Close、Execute 和 GPU 完成登记的锁竞争导致 NR 停止的问题。《影之刃零》已通过一次过场、菜单和读档切换检查。游戏库按实际写入位置检查模型冲突，修复《赛博朋克 2077》重新适配时被游戏根目录旧模型挡住的问题。
+游戏库现在会将《影之刃零》的 Steam 启动器路径定位到游戏本体 `platform\steam\PBZ.exe`。如果旧适配包占用了默认名称，釉光会为新的游戏路径生成可用名称并保留旧包。
 
-**升级后退出受影响的游戏，在游戏库点「更新插件」。如果上次已经卸载旧插件，就点「安装插件」。** 见[中文公告](https://github.com/HANsoA-KevinO/overglaze/blob/v0.2.0-preview.15/docs/releases/v0.2.0-preview.15.zh-CN.md)和[完整更新日志](CHANGELOG.md)。
+如果先前把插件装到了启动器，请先在旧条目「卸载插件」，再移除旧条目。重新添加游戏并为本体安装插件。见[中文公告](https://github.com/HANsoA-KevinO/overglaze/blob/v0.2.0-preview.16/docs/releases/v0.2.0-preview.16.zh-CN.md)和[完整更新日志](CHANGELOG.md)。
 
 ## 它做什么
 

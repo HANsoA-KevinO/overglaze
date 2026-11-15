@@ -608,6 +608,58 @@ int wmain(int argc,wchar_t** argv){fs::path root;try{
          need(lab::games::preflight(split/L"platform/steam"/name).verdict!="helper-executable","a game merely sharing a tool prefix is not refused");
      }
      fs::remove_all(split);}
+    // A legacy PBZ installation can leave a package with the launcher basename.
+    {
+        const auto dir=root/L"pbz-steam";
+        const auto launcher=dir/L"steam/PBZ.exe", game=dir/L"platform/steam/PBZ.exe";
+        fs::create_directories(launcher.parent_path());
+        put(launcher,pe64(standard,"Steam bootstrap"));
+        put(launcher.parent_path()/L"nvngx_dlss.dll","DLSS");
+        put(launcher.parent_path()/L"nvngx_dlssd.dll","DLSS RR");
+        auto options=lab::games::PackageOptions::controller_root_proxy();
+        options.allow_unsigned_modules=true;
+        const auto fixture_loader=root/L"app/plugin/overglaze_controller.dll";
+        put(fixture_loader,"synthetic CONTROLLER loader");
+        const auto old_entry=m.add(launcher);
+        const auto old=m.make_package(old_entry.id,options);
+        need(old.name=="pbz","legacy launcher package uses the shared basename");
+        const auto old_manifest=lab::sha256(old.directory/L"package.json");
+
+        fs::create_directories(game.parent_path());
+        put(game,pe64(standard,"game renderer"));
+        put(game.parent_path()/L"nvngx_dlss.dll","DLSS");
+        put(game.parent_path()/L"nvngx_dlssd.dll","DLSS RR");
+        const auto selected=lab::games::discover(launcher), scanned=lab::games::discover(dir);
+        const std::vector<fs::path> only_game{fs::canonical(game)};
+        need(selected.executables==only_game&&!selected.notice.empty()&&scanned.executables==only_game&&
+             lab::games::discover(launcher.parent_path()).executables==only_game,
+             "PBZ discovery selects the renderer for a launcher path or the game directory");
+        need(lab::games::preflight(launcher).verdict=="helper-executable"&&lab::games::preflight(game).verdict=="ngx-rr-ready",
+             "only the PBZ renderer passes preflight");
+        const auto status=st(m,old_entry);
+        need(!status.can_install&&!status.can_refresh_package&&!status.can_make_package&&has_reason(status,"helper-executable"),
+             "an old launcher package cannot be installed or refreshed");
+        reject([&]{m.make_package(old_entry.id,options);},"legacy entry cannot package the launcher again");
+        m.forget(old_entry.id);
+        const auto real=m.add(launcher);
+        need(real.exe==fs::canonical(game)&&real.id==m.add(game).id,"direct add resolves PBZ and deduplicates the renderer");
+
+        options.name="pbz";
+        reject([&]{m.make_package(real.id,options);},"explicit names still refuse a collision");
+        options.name.clear();
+        fs::create_directory(root/L"app/adapters/pbz-2");
+        put(root/L"app/adapters/pbz-2/keep.txt","orphan");
+        const auto pkg=m.make_package(real.id,options);
+        need(pkg.name=="pbz-3"&&pkg.game_root==fs::canonical(game.parent_path())&&st(m,real).package==pkg.name,
+             "default name skips the old package and the orphan and binds to the renderer");
+        need(lab::sha256(old.directory/L"package.json")==old_manifest&&fs::exists(root/L"app/adapters/pbz-2/keep.txt"),
+             "both occupied package directories are preserved");
+        reject([&]{m.make_package(real.id,options);},"no second default package for the same renderer");
+        m.forget(real.id);
+        fs::remove(fixture_loader);
+        for(const auto* name:{L"pbz",L"pbz-2",L"pbz-3"})fs::remove_all(root/L"app"/L"adapters"/name);
+        fs::remove_all(dir);
+    }
     reject([&]{lab::games::discover(root/L"game2/../game");},"noncanonical input rejected");reject([&]{lab::games::discover(root.root_path());},"whole drive rejected");
     m.forget(plain.id);need(m.list().size()==4&&fs::exists(root/L"game5/Plain.exe"),"forget registry only");
     // ---- hardlinks can alias a protected file even without a reparse point
